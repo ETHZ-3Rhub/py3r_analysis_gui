@@ -687,6 +687,7 @@ class MainWindow(QWidget):
         self._out_edit.setEnabled(True)
         self._comp_list.setEnabled(True)
         self._skip_tracking_cb.setEnabled(True)
+        self._progress.setRange(0, 100)  # un-spin indeterminate bar if active
         self._refresh_run_button()
 
     # ── Runner signal handlers ─────────────────────────────────────────────────
@@ -701,6 +702,7 @@ class MainWindow(QWidget):
             self._progress.setValue(pct)
 
     def _on_finished(self, output_path: str) -> None:
+        self._runner.wait()  # ensure Qt thread machinery has fully stopped before GC
         self._runner = None
         self._last_output = output_path
         self._log_line(f"✅  Complete — results in {output_path}", colour=_COL_SUCCESS)
@@ -709,6 +711,7 @@ class MainWindow(QWidget):
         self._reset_controls()
 
     def _on_error(self, tb: str) -> None:
+        self._runner.wait()  # ensure Qt thread machinery has fully stopped before GC
         self._runner = None
         self._log_line("❌  Pipeline error:", colour=_COL_ERROR)
         for line in tb.splitlines():
@@ -716,8 +719,19 @@ class MainWindow(QWidget):
         self._reset_controls()
 
     def _open_results(self) -> None:
-        if self._last_output:
-            os.startfile(self._last_output)
+        if not self._last_output:
+            return
+        import platform
+        import subprocess
+
+        path = self._last_output
+        system = platform.system()
+        if system == "Windows":
+            os.startfile(path)
+        elif system == "Darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _list_index(self, list_widget: QListWidget, widget: QWidget) -> int | None:

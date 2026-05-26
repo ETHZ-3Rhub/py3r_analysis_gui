@@ -1,9 +1,14 @@
-"""Open Field Test — py3r_behaviour analysis pipeline.
+"""Open Field Test — DLC format pipeline.  TESTING ONLY.
 
-Receives per-group folders of YOLO3R tracking CSVs and runs:
-    load → preprocess → QC plots → features → clustering → summary → export
+Identical to oft_pipeline, except data is loaded with
+``TrackingCollection.from_dlc_folder()`` instead of ``from_yolo3r_folder()``,
+and ``strip_column_names()`` is omitted (DLC columns are already clean).
 
-Nothing in this file knows about the GUI, the tracker, or any other arena.
+⚠ Keypoint names in your DLC project must match the names expected by the
+  pipeline (tl, tr, br, bl, bodycentre, nose, neck, …).  If they differ,
+  either rename the labels in your DLC project or adjust the constants below.
+
+TO REMOVE: delete this file and app/arenas/oft_dlc.py.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ import numpy as np
 import pandas as pd
 import py3r.behaviour as p3b
 
-# ── Constants (proprietary hardware — do not expose to GUI) ───────────────────
+# ── Constants — mirror oft_pipeline exactly ───────────────────────────────────
 _FPS = 30
 _ARENA_SIZE_M = 0.64
 _LIKELIHOOD_THRESHOLD = 0.9
@@ -28,30 +33,16 @@ _CLUSTER_COL = f"kmeans_{_N_CLUSTERS}"
 _GROUP_TAG = "group"
 _BFA_RANDOM_STATE = 42
 
-# Keypoint names as output by the OFT YOLO3R model (after strip_column_names)
 _CORNERS = ["tl", "tr", "br", "bl"]
 _CORNER_LINES = [("tl", "tr"), ("tr", "br"), ("br", "bl"), ("bl", "tl")]
 _BODY_CENTRE = "bodycentre"
 
-# Zone scale factors
 _CENTRE_SCALE = 0.5
 _PERIPHERY_SCALE = 0.8
 _CORNER_SCALE = 0.2
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 def _sanitize_group_name(name: str) -> str:
-    """Convert a group name to a safe suffix for animal handles.
-
-    Replaces any run of non-alphanumeric characters with a single underscore
-    and strips leading/trailing underscores.  Falls back to ``"group"`` if the
-    result would be empty (e.g. the name was entirely punctuation).
-
-    Examples
-    --------
-    ``"Control Group"``  →  ``"Control_Group"``
-    ``"KO (n=5)"``       →  ``"KO_n_5"``
-    """
     sanitized = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_")
     return sanitized or "group"
 
@@ -63,23 +54,9 @@ def run(
     progress_cb: Callable[[str, float | None], None],
     comparisons: list[tuple[str, str]],
 ) -> None:
-    """Full OFT pipeline across all groups.
-
-    Parameters
-    ----------
-    group_csv_dirs:
-        ``{group_name: Path}`` — each Path is a folder of per-animal YOLO3R CSVs.
-    output_dir:
-        Root output folder.  Sub-folders are created automatically.
-    progress_cb:
-        ``progress_cb(message, pct_or_None)`` forwarded from the GUI runner.
-    comparisons:
-        List of ``(group_a, group_b)`` pairs for statistical annotations and BFA plots.
-        Empty list → pipeline runs without pairwise stats.
-    """
     import matplotlib
 
-    matplotlib.use("Agg")  # non-interactive backend — safe in QThread
+    matplotlib.use("Agg")
 
     qc_dir = output_dir / "qc" / "trajectories"
     features_dir = output_dir / "features"
@@ -91,29 +68,27 @@ def run(
 
     group_names = list(group_csv_dirs.keys())
 
-    # ── Load ──────────────────────────────────────────────────────────────────
-    progress_cb("Loading tracking data…", 42)
+    # ── Load (DLC format) ─────────────────────────────────────────────────────
+    progress_cb("Loading DLC tracking data…", 42)
     group_tcs: dict[str, p3b.TrackingCollection] = {}
     for group_name, csv_dir in group_csv_dirs.items():
         progress_cb(f"  Loading {group_name}…", None)
-
-        # Build {handle: path} with group suffix baked in at load time —
-        # from_yolo3r sets obj.handle = key, so no post-hoc mutation needed.
+        # Build {handle: path} with group suffix baked in at load time.
+        # No strip_column_names() — DLC columns are already in clean form.
         safe = _sanitize_group_name(group_name)
         handles_and_paths = {
             f"{p.stem}_{safe}": str(p)
             for p in sorted(csv_dir.iterdir())
             if p.is_file() and p.suffix.lower() == ".csv" and not p.name.startswith(".")
         }
-        tc = p3b.TrackingCollection.from_yolo3r(handles_and_paths, fps=_FPS)
-        tc.each.strip_column_names()
+        tc = p3b.TrackingCollection.from_dlc(handles_and_paths, fps=_FPS)
 
         for t in tc.values():
             t.tags[_GROUP_TAG] = group_name
 
         group_tcs[group_name] = tc
 
-    # ── Merge into one collection ─────────────────────────────────────────────
+    # ── Merge ─────────────────────────────────────────────────────────────────
     progress_cb("Merging groups…", 46)
     tc_all = p3b.TrackingCollection.merge(list(group_tcs.values()))
 
@@ -171,7 +146,7 @@ def run(
     progress_cb("Pipeline complete.", 95)
 
 
-# ── Feature computation ───────────────────────────────────────────────────────
+# ── Feature computation (identical to oft_pipeline) ───────────────────────────
 def _compute_features(
     fc: p3b.FeaturesCollection,
     progress_cb: Callable[[str, float | None], None],
@@ -253,7 +228,6 @@ def _compute_features(
         fc.each.distance_to_boundary(pt, "oft").store()
 
 
-# ── Clustering ────────────────────────────────────────────────────────────────
 def _cluster(
     fc: p3b.FeaturesCollection,
     progress_cb: Callable[[str, float | None], None],
@@ -275,7 +249,6 @@ def _cluster(
     cluster_labels.store(_CLUSTER_COL, overwrite=True)
 
 
-# ── Summary computation ───────────────────────────────────────────────────────
 def _compute_summaries(sc: p3b.SummaryCollection) -> None:
     sc.each.total_distance(_BODY_CENTRE).store()
     sc.each.time_true("within_boundary_static_bodycentre_in_centre").store("time_in_centre")
@@ -286,7 +259,6 @@ def _compute_summaries(sc: p3b.SummaryCollection) -> None:
     sc.each.time_in_state(_CLUSTER_COL).store("time_in_cluster")
 
 
-# ── Table export ──────────────────────────────────────────────────────────────
 def _export_tables(
     sc: p3b.SummaryCollection,
     summaries_dir: Path,
@@ -304,7 +276,6 @@ def _export_tables(
         progress_cb("  Note: openpyxl not installed — CSV saved, Excel skipped.", None)
 
 
-# ── Figure export ─────────────────────────────────────────────────────────────
 def _export_figures(
     sc_grouped: p3b.SummaryCollection,
     group_names: list[str],
@@ -347,7 +318,6 @@ def _export_figures(
             progress_cb(f"  Warning: could not plot {metric}: {exc}", None)
 
 
-# ── BFA export ────────────────────────────────────────────────────────────────
 def _export_bfa(
     sc_grouped: p3b.SummaryCollection,
     group_names: list[str],
@@ -382,7 +352,6 @@ def _export_bfa(
         )
         plt.close("all")
 
-        # Chord diagrams (requires pycirclize)
         try:
             progress_cb("  Plotting chord diagrams…", None)
             sc_grouped.plot_chord(
@@ -395,7 +364,6 @@ def _export_bfa(
         except ImportError:
             progress_cb("  Note: pycirclize not installed — chord diagrams skipped.", None)
 
-        # Transition UMAP (requires umap-learn)
         try:
             progress_cb("  Plotting transition UMAP…", None)
             sc_grouped.plot_transition_umap(
