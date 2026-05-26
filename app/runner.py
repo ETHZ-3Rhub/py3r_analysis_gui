@@ -10,10 +10,10 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 
 class PipelineRunner(QThread):
-    log      = pyqtSignal(str)
+    log = pyqtSignal(str)
     progress = pyqtSignal(int)
     finished = pyqtSignal(str)
-    error    = pyqtSignal(str)
+    error = pyqtSignal(str)
 
     def __init__(
         self,
@@ -25,10 +25,10 @@ class PipelineRunner(QThread):
         skip_tracking: bool = False,
     ) -> None:
         super().__init__()
-        self._arena         = arena
-        self._groups        = groups
-        self._output_dir    = output_dir
-        self._comparisons   = comparisons
+        self._arena = arena
+        self._groups = groups
+        self._output_dir = output_dir
+        self._comparisons = comparisons
         self._skip_tracking = skip_tracking
 
     def run(self) -> None:

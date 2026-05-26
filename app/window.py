@@ -38,24 +38,24 @@ from app import arenas as arena_pkg
 from app.runner import PipelineRunner
 
 # ── Colour tokens ─────────────────────────────────────────────────────────────
-_COL_BG      = "#1e1e2e"
-_COL_PANEL   = "#2a2a3e"
-_COL_ACCENT  = "#7c6af7"
-_COL_TEXT    = "#cdd6f4"
-_COL_MUTED   = "#6c7086"
-_COL_SEP     = "#3a3a4e"
-_COL_ERROR   = "#f38ba8"
-_COL_WARN    = "#fab387"
+_COL_BG = "#1e1e2e"
+_COL_PANEL = "#2a2a3e"
+_COL_ACCENT = "#7c6af7"
+_COL_TEXT = "#cdd6f4"
+_COL_MUTED = "#6c7086"
+_COL_SEP = "#3a3a4e"
+_COL_ERROR = "#f38ba8"
+_COL_WARN = "#fab387"
 _COL_SUCCESS = "#a6e3a1"
 
-_NAME_EDIT_WIDTH  = 130
-_BADGE_WIDTH      = 44
+_NAME_EDIT_WIDTH = 130
+_BADGE_WIDTH = 44
 _REMOVE_BTN_WIDTH = 28
 _COMP_PLACEHOLDER = "— select —"
 
 # ── File extensions counted per mode ──────────────────────────────────────────
 _VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
-_CSV_EXTS   = {".csv"}
+_CSV_EXTS = {".csv"}
 
 
 def _count_files(path: Path, skip_tracking: bool) -> tuple[int, bool]:
@@ -79,11 +79,7 @@ class _TooltipOnDisabled(QObject):
     """
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
-        if (
-            isinstance(obj, QWidget)
-            and not obj.isEnabled()
-            and event.type() == QEvent.Type.ToolTip
-        ):
+        if isinstance(obj, QWidget) and not obj.isEnabled() and event.type() == QEvent.Type.ToolTip:
             tip = obj.toolTip()
             if tip:
                 QToolTip.showText(event.globalPos(), tip, obj)  # type: ignore[attr-defined]
@@ -135,10 +131,10 @@ class MainWindow(QWidget):
         hdr_row.setContentsMargins(6, 0, 4, 0)
         hdr_row.setSpacing(6)
         for text, width, stretch, align in [
-            ("Name",  _NAME_EDIT_WIDTH, 0, Qt.AlignmentFlag.AlignLeft),
-            ("Path",  0,                1, Qt.AlignmentFlag.AlignLeft),
-            ("Files", _BADGE_WIDTH,     0, Qt.AlignmentFlag.AlignCenter),
-            ("",      _REMOVE_BTN_WIDTH,0, Qt.AlignmentFlag.AlignLeft),   # remove-btn column
+            ("Name", _NAME_EDIT_WIDTH, 0, Qt.AlignmentFlag.AlignLeft),
+            ("Path", 0, 1, Qt.AlignmentFlag.AlignLeft),
+            ("Files", _BADGE_WIDTH, 0, Qt.AlignmentFlag.AlignCenter),
+            ("", _REMOVE_BTN_WIDTH, 0, Qt.AlignmentFlag.AlignLeft),  # remove-btn column
         ]:
             lbl = QLabel(text)
             lbl.setObjectName("colHeader")
@@ -177,9 +173,9 @@ class MainWindow(QWidget):
         comp_btns = QHBoxLayout()
         comp_btns.setSpacing(6)
         for label, slot in [
-            ("All pairs",   self._all_pairs),
-            ("Clear",       self._remove_all_comparisons),
-            ("+ Add",       self._add_blank_comparison),
+            ("All pairs", self._all_pairs),
+            ("Clear", self._remove_all_comparisons),
+            ("+ Add", self._add_blank_comparison),
         ]:
             btn = QPushButton(label)
             btn.setObjectName("secondaryButton")
@@ -272,8 +268,9 @@ class MainWindow(QWidget):
         path = Path(folder)
 
         if path in [p for _, p in self._groups]:
-            QMessageBox.warning(self, "Duplicate folder",
-                                f"The folder\n{path}\nis already in the list.")
+            QMessageBox.warning(
+                self, "Duplicate folder", f"The folder\n{path}\nis already in the list."
+            )
             return
 
         # Unique name: append _2, _3, … until no collision
@@ -349,8 +346,9 @@ class MainWindow(QWidget):
             return
         existing = {n for i, (n, _) in enumerate(self._groups) if i != idx}
         if new_name in existing:
-            QMessageBox.warning(self, "Duplicate name",
-                                f'A group named "{new_name}" already exists.')
+            QMessageBox.warning(
+                self, "Duplicate name", f'A group named "{new_name}" already exists.'
+            )
             name_edit.setText(old_name)
             return
         self._groups[idx] = (new_name, path)
@@ -380,7 +378,7 @@ class MainWindow(QWidget):
     def _add_blank_comparison(self) -> None:
         if not self._groups:
             return
-        self._add_comp_row()   # both combos start on placeholder
+        self._add_comp_row()  # both combos start on placeholder
 
     def _add_comp_row(self, name_a: str | None = None, name_b: str | None = None) -> None:
         group_names = [n for n, _ in self._groups]
@@ -451,7 +449,8 @@ class MainWindow(QWidget):
 
     def _sync_comp_remove(self, name: str) -> None:
         to_remove = [
-            i for i in range(self._comp_list.count())
+            i
+            for i in range(self._comp_list.count())
             if (w := self._comp_list.itemWidget(self._comp_list.item(i))) is not None
             and (w._combo_a.currentText() == name or w._combo_b.currentText() == name)
         ]
@@ -476,7 +475,8 @@ class MainWindow(QWidget):
 
     def _comp_rows(self) -> list[QWidget]:
         return [
-            w for i in range(self._comp_list.count())
+            w
+            for i in range(self._comp_list.count())
             if (w := self._comp_list.itemWidget(self._comp_list.item(i))) is not None
         ]
 
@@ -493,7 +493,8 @@ class MainWindow(QWidget):
             eb = w._combo_b.currentText()
             if (a == ea and b == eb) or (a == eb and b == ea):
                 QMessageBox.warning(
-                    self, "Duplicate comparison",
+                    self,
+                    "Duplicate comparison",
                     f'"{a} vs {b}" is already in the list.',
                 )
                 changed_combo.setCurrentText(_COMP_PLACEHOLDER)
@@ -505,8 +506,10 @@ class MainWindow(QWidget):
         for w in self._comp_rows():
             a, b = w._combo_a.currentText(), w._combo_b.currentText()
             if (
-                a and b
-                and a != _COMP_PLACEHOLDER and b != _COMP_PLACEHOLDER
+                a
+                and b
+                and a != _COMP_PLACEHOLDER
+                and b != _COMP_PLACEHOLDER
                 and a != b
                 and (a, b) not in seen
             ):
@@ -545,9 +548,7 @@ class MainWindow(QWidget):
             tip_parts.append("Subfolders detected — only top-level files are counted.")
 
         row_widget._badge_lbl.setText(text)
-        row_widget._badge_lbl.setStyleSheet(
-            f"color: {colour}; font-size: 11px; font-weight: bold;"
-        )
+        row_widget._badge_lbl.setStyleSheet(f"color: {colour}; font-size: 11px; font-weight: bold;")
         row_widget._badge_lbl.setToolTip("\n".join(tip_parts))
 
     def _refresh_group_file_counts(self) -> None:
@@ -624,9 +625,7 @@ class MainWindow(QWidget):
         self._run_btn.setEnabled(can_run)
 
         if reasons:
-            self._run_btn.setToolTip(
-                "Cannot run:\n" + "\n".join(f"  •  {r}" for r in reasons)
-            )
+            self._run_btn.setToolTip("Cannot run:\n" + "\n".join(f"  •  {r}" for r in reasons))
         else:
             self._run_btn.setToolTip("Run the analysis pipeline.")
 

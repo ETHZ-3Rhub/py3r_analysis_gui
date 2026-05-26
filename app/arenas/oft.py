@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
-
-NAME  = "Open Field Test"
+NAME = "Open Field Test"
 MODEL = "oft"
 
 
@@ -30,14 +29,10 @@ def run(
 
     for i, (group_name, video_dir) in enumerate(groups.items()):
         if skip:
-            progress_cb(
-                f"[Skipping tracking] {group_name} — treating folder as CSV dir", None
-            )
+            progress_cb(f"[Skipping tracking] {group_name} — treating folder as CSV dir", None)
             csv_dirs[group_name] = video_dir
         else:
-            progress_cb(
-                f"Tracking: {group_name} ({i + 1}/{n_groups})", 10 + (i / n_groups) * 30
-            )
+            progress_cb(f"Tracking: {group_name} ({i + 1}/{n_groups})", 10 + (i / n_groups) * 30)
             csv_out = output_dir / "tracking" / group_name
             csv_out.mkdir(parents=True, exist_ok=True)
             _track(video_dir, csv_out, progress_cb)

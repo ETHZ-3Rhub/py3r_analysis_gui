@@ -21,6 +21,12 @@ py3r-gui = "app.main:main"
 where = ["."]
 include = ["app*"]
 
+[project.optional-dependencies]
+dev = [
+    "pre-commit>=4.0,<5.0",
+    "ruff==0.8.4",   # must match rev: in .pre-commit-config.yaml
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

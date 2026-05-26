@@ -9,33 +9,33 @@ Nothing in this file knows about the GUI, the tracker, or any other arena.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 import pandas as pd
 import py3r.behaviour as p3b
 
 # ── Constants (proprietary hardware — do not expose to GUI) ───────────────────
-_FPS                  = 30
-_ARENA_SIZE_M         = 0.64
+_FPS = 30
+_ARENA_SIZE_M = 0.64
 _LIKELIHOOD_THRESHOLD = 0.9
-_INTERPOLATION_LIMIT  = 5
-_SMOOTH_WINDOW        = 3
-_N_CLUSTERS           = 10
-_CLUSTER_COL          = f"kmeans_{_N_CLUSTERS}"
-_GROUP_TAG            = "group"
-_BFA_RANDOM_STATE     = 42
+_INTERPOLATION_LIMIT = 5
+_SMOOTH_WINDOW = 3
+_N_CLUSTERS = 10
+_CLUSTER_COL = f"kmeans_{_N_CLUSTERS}"
+_GROUP_TAG = "group"
+_BFA_RANDOM_STATE = 42
 
 # Keypoint names as output by the OFT YOLO3R model (after strip_column_names)
-_CORNERS      = ["tl", "tr", "br", "bl"]
+_CORNERS = ["tl", "tr", "br", "bl"]
 _CORNER_LINES = [("tl", "tr"), ("tr", "br"), ("br", "bl"), ("bl", "tl")]
-_BODY_CENTRE  = "bodycentre"
+_BODY_CENTRE = "bodycentre"
 
 # Zone scale factors
-_CENTRE_SCALE    = 0.5
+_CENTRE_SCALE = 0.5
 _PERIPHERY_SCALE = 0.8
-_CORNER_SCALE    = 0.2
+_CORNER_SCALE = 0.2
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -60,13 +60,14 @@ def run(
         Empty list → pipeline runs without pairwise stats.
     """
     import matplotlib
+
     matplotlib.use("Agg")  # non-interactive backend — safe in QThread
 
-    qc_dir       = output_dir / "qc" / "trajectories"
+    qc_dir = output_dir / "qc" / "trajectories"
     features_dir = output_dir / "features"
     summaries_dir = output_dir / "summaries"
-    figures_dir  = output_dir / "figures"
-    bfa_dir      = output_dir / "bfa"
+    figures_dir = output_dir / "figures"
+    bfa_dir = output_dir / "bfa"
     for d in [qc_dir, features_dir, summaries_dir, figures_dir, bfa_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
@@ -169,8 +170,11 @@ def _compute_features(
     )
     for c in _CORNERS:
         fc.each.define_static_boundary(
-            _CORNERS, scale_dim1=_CORNER_SCALE, scale_dim2=_CORNER_SCALE,
-            name=f"{c}_corner", anchor=c,
+            _CORNERS,
+            scale_dim1=_CORNER_SCALE,
+            scale_dim2=_CORNER_SCALE,
+            name=f"{c}_corner",
+            anchor=c,
         )
 
     in_centre = fc.each.within_boundary(_BODY_CENTRE, "centre")
@@ -202,19 +206,28 @@ def _compute_features(
         fc.each.azimuth_deviation(base, p1, p2).store()
 
     for p1, p2 in [
-        ("nose", "headcentre"), ("neck", "headcentre"), ("neck", _BODY_CENTRE),
-        ("bcr", _BODY_CENTRE), ("bcl", _BODY_CENTRE),
-        ("tailbase", _BODY_CENTRE), ("tailbase", "hipr"), ("tailbase", "hipl"),
-        ("bcr", "hipr"), ("bcl", "hipl"), ("bcl", "earl"), ("bcr", "earr"),
-        ("nose", "earr"), ("nose", "earl"),
+        ("nose", "headcentre"),
+        ("neck", "headcentre"),
+        ("neck", _BODY_CENTRE),
+        ("bcr", _BODY_CENTRE),
+        ("bcl", _BODY_CENTRE),
+        ("tailbase", _BODY_CENTRE),
+        ("tailbase", "hipr"),
+        ("tailbase", "hipl"),
+        ("bcr", "hipr"),
+        ("bcl", "hipl"),
+        ("bcl", "earl"),
+        ("bcr", "earr"),
+        ("nose", "earr"),
+        ("nose", "earl"),
     ]:
         fc.each.distance_between(p1, p2).store()
 
     for boundary_name, pts in [
-        ("mouse_rear",  ["tailbase", "hipr", "hipl"]),
-        ("mouse_mid",   ["hipr", "hipl", "bcl", "bcr"]),
+        ("mouse_rear", ["tailbase", "hipr", "hipl"]),
+        ("mouse_mid", ["hipr", "hipl", "bcl", "bcr"]),
         ("mouse_front", ["bcr", "earr", "earl", "bcl"]),
-        ("mouse_face",  ["earr", "nose", "earl"]),
+        ("mouse_face", ["earr", "nose", "earl"]),
     ]:
         fc.each.define_dynamic_boundary(pts, name=boundary_name)
         fc.each.area_of_boundary(boundary_name).store()
@@ -229,13 +242,13 @@ def _cluster(
     progress_cb: Callable[[str, float | None], None],
 ) -> None:
     bfa_prefixes = (
-        "speed_of_", "azimuth_deviation_", "distance_between_",
-        "area_of_boundary_", "distance_to_boundary_",
+        "speed_of_",
+        "azimuth_deviation_",
+        "distance_between_",
+        "area_of_boundary_",
+        "distance_to_boundary_",
     )
-    bfa_cols = [
-        c for c in fc[0].data.columns
-        if any(c.startswith(p) for p in bfa_prefixes)
-    ]
+    bfa_cols = [c for c in fc[0].data.columns if any(c.startswith(p) for p in bfa_prefixes)]
     offset = list(np.arange(-15, 16, 1))
     embedding_dict = {f: offset for f in bfa_cols}
     progress_cb(f"  Fitting k={_N_CLUSTERS} on {len(bfa_cols)} features…", None)

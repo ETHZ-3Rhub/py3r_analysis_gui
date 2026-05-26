@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
-NAME  = "Elevated Plus Maze"
+NAME = "Elevated Plus Maze"
 MODEL = "epm"
 
 
@@ -18,6 +18,5 @@ def run(
     skip_tracking: bool = False,
 ) -> None:
     raise NotImplementedError(
-        "EPM pipeline not yet implemented. "
-        "Add tracking + pipeline calls in app/arenas/epm.py."
+        "EPM pipeline not yet implemented. " "Add tracking + pipeline calls in app/arenas/epm.py."
     )
