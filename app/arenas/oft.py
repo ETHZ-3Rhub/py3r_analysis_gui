@@ -16,18 +16,22 @@ def run(
     output_dir: Path,
     progress_cb: Callable[[str, float | None], None],
     comparisons: list[tuple[str, str]],
+    *,
+    skip_tracking: bool = False,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    skip_tracking = os.environ.get("DEV_SKIP_TRACKING", "").lower() in ("1", "true", "yes")
+    # UI checkbox OR dev env-var both skip the tracking step
+    dev_skip = os.environ.get("DEV_SKIP_TRACKING", "").lower() in ("1", "true", "yes")
+    skip = skip_tracking or dev_skip
 
     csv_dirs: dict[str, Path] = {}
     n_groups = len(groups)
 
     for i, (group_name, video_dir) in enumerate(groups.items()):
-        if skip_tracking:
+        if skip:
             progress_cb(
-                f"[DEV] Skipping tracking for {group_name} — treating folder as CSV dir", None
+                f"[Skipping tracking] {group_name} — treating folder as CSV dir", None
             )
             csv_dirs[group_name] = video_dir
         else:

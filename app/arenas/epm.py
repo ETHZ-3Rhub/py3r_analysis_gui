@@ -14,6 +14,8 @@ def run(
     output_dir: Path,
     progress_cb: Callable[[str, float | None], None],
     comparisons: list[tuple[str, str]],
+    *,
+    skip_tracking: bool = False,
 ) -> None:
     raise NotImplementedError(
         "EPM pipeline not yet implemented. "

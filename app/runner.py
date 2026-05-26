@@ -21,12 +21,15 @@ class PipelineRunner(QThread):
         groups: dict[str, Path],
         output_dir: Path,
         comparisons: list[tuple[str, str]],
+        *,
+        skip_tracking: bool = False,
     ) -> None:
         super().__init__()
-        self._arena       = arena
-        self._groups      = groups
-        self._output_dir  = output_dir
-        self._comparisons = comparisons
+        self._arena         = arena
+        self._groups        = groups
+        self._output_dir    = output_dir
+        self._comparisons   = comparisons
+        self._skip_tracking = skip_tracking
 
     def run(self) -> None:
         try:
@@ -35,6 +38,7 @@ class PipelineRunner(QThread):
                 output_dir=self._output_dir,
                 progress_cb=self._progress_cb,
                 comparisons=self._comparisons,
+                skip_tracking=self._skip_tracking,
             )
             self.finished.emit(str(self._output_dir))
         except Exception:
