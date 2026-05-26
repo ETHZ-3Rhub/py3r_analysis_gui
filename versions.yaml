@@ -1,0 +1,18 @@
+# Pinned dependency versions for the packaging build.
+#
+# When cutting a release, update these hashes to the desired commits,
+# then run the build workflow.  The CI script clones each repo at the
+# pinned commit and assembles the final installer.
+
+dependencies:
+
+  py3r_pose:
+    repo: https://github.com/ETHZ-INS/Py3R-Pose.git
+    commit: 9c69c6442be40e7e95ac0effa861e3f9ad7cd159
+
+  bohacek_lab_pose_models:
+    repo: https://github.com/ETHZ-INS/BohacekLabPoseModels.git
+    commit: 92942ee5c71f4b2661cd38a94fcab8437525e431
+    # Contains large model weights stored in git-lfs.
+    # The build script must run `git lfs pull` after cloning.
+    lfs: true
