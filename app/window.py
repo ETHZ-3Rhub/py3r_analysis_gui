@@ -1,6 +1,6 @@
 """Main application window.
 
-Three-region layout:
+Two-panel layout:
   Left   — group management (add / remove / rename groups)
   Right  — arena selector, output folder, run controls, log
 
@@ -15,8 +15,9 @@ import os
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -27,39 +28,39 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
-    QComboBox,
 )
 
 from app import arenas as arena_pkg
 from app.runner import PipelineRunner
 
-
-# Colour tokens — tweak here for a different palette
-_COL_BG = "#1e1e2e"
-_COL_PANEL = "#2a2a3e"
-_COL_ACCENT = "#7c6af7"
-_COL_TEXT = "#cdd6f4"
-_COL_MUTED = "#6c7086"
-_COL_ERROR = "#f38ba8"
+# ── Colour tokens ─────────────────────────────────────────────────────────────
+_COL_BG      = "#1e1e2e"
+_COL_PANEL   = "#2a2a3e"
+_COL_ACCENT  = "#7c6af7"
+_COL_TEXT    = "#cdd6f4"
+_COL_MUTED   = "#6c7086"
+_COL_ERROR   = "#f38ba8"
 _COL_SUCCESS = "#a6e3a1"
 _GROUP_COLOURS = ["#7c6af7", "#f38ba8", "#a6e3a1", "#fab387", "#89dceb", "#f9e2af"]
+
+# Fixed pixel width for the group-name inline editor
+_NAME_EDIT_WIDTH = 130
 
 
 class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("py3r Analysis")
-        self.setMinimumSize(820, 560)
+        self.setMinimumSize(1020, 700)
         self._apply_stylesheet()
 
         self._arenas = arena_pkg.discover()
         self._runner: PipelineRunner | None = None
-        self._groups: list[tuple[str, Path]] = []   # [(name, path), ...]
+        self._groups: list[tuple[str, Path]] = []   # [(name, path), …]
 
         root = QHBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -104,8 +105,10 @@ class MainWindow(QWidget):
         layout.addWidget(arena_label)
 
         self._arena_combo = QComboBox()
+        self._arena_combo.addItem("— select arena —", userData=None)
         for mod in self._arenas:
             self._arena_combo.addItem(mod.NAME, userData=mod)
+        self._arena_combo.currentIndexChanged.connect(self._refresh_run_button)
         layout.addWidget(self._arena_combo)
 
         layout.addSpacing(6)
@@ -118,6 +121,7 @@ class MainWindow(QWidget):
         out_row = QHBoxLayout()
         self._out_edit = QLineEdit()
         self._out_edit.setPlaceholderText("Choose output folder…")
+        self._out_edit.textChanged.connect(self._refresh_run_button)
         out_row.addWidget(self._out_edit)
         out_browse = QPushButton("📁")
         out_browse.setFixedWidth(36)
@@ -147,7 +151,7 @@ class MainWindow(QWidget):
         self._log.setObjectName("logBox")
         layout.addWidget(self._log, stretch=1)
 
-        # Open results folder button (hidden until run completes)
+        # Open results folder (hidden until a run completes successfully)
         self._open_btn = QPushButton("Open Results Folder")
         self._open_btn.setObjectName("secondaryButton")
         self._open_btn.setVisible(False)
@@ -163,6 +167,17 @@ class MainWindow(QWidget):
         if not folder:
             return
         path = Path(folder)
+
+        # Warn if this folder is already in the list
+        existing_paths = [p for _, p in self._groups]
+        if path in existing_paths:
+            QMessageBox.warning(
+                self,
+                "Duplicate group",
+                f"The folder\n{path}\nis already in the group list.",
+            )
+            return
+
         name = path.name
         colour = _GROUP_COLOURS[len(self._groups) % len(_GROUP_COLOURS)]
         self._groups.append((name, path))
@@ -173,22 +188,36 @@ class MainWindow(QWidget):
         item_widget = QWidget()
         row = QHBoxLayout(item_widget)
         row.setContentsMargins(4, 2, 4, 2)
+        row.setSpacing(6)
 
+        # Colour dot
         dot = QLabel("●")
         dot.setStyleSheet(f"color: {colour}; font-size: 14px;")
+        dot.setFixedWidth(16)
         row.addWidget(dot)
 
+        # Group name — fixed width so it doesn't get squeezed by long paths
         name_edit = QLineEdit(name)
         name_edit.setFrame(False)
-        name_edit.setStyleSheet(f"background: transparent; color: {_COL_TEXT};")
-        name_edit.editingFinished.connect(lambda: self._rename_group(item_widget, name_edit.text()))
-        row.addWidget(name_edit, stretch=1)
+        name_edit.setFixedWidth(_NAME_EDIT_WIDTH)
+        # Explicit padding restores descender room lost when overriding the global stylesheet
+        name_edit.setStyleSheet(
+            f"background: transparent; color: {_COL_TEXT}; padding: 3px 4px; border: none;"
+        )
+        name_edit.editingFinished.connect(
+            lambda: self._rename_group(item_widget, name_edit.text())
+        )
+        row.addWidget(name_edit)
 
-        path_lbl = QLabel(str(path))
+        # Path label — elided with full path as tooltip
+        path_str = str(path)
+        path_lbl = QLabel(path_str)
         path_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px;")
         path_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        row.addWidget(path_lbl, stretch=2)
+        path_lbl.setToolTip(path_str)   # full path on hover
+        row.addWidget(path_lbl, stretch=1)
 
+        # Remove button
         remove_btn = QPushButton("✕")
         remove_btn.setFixedWidth(28)
         remove_btn.setObjectName("removeButton")
@@ -219,14 +248,18 @@ class MainWindow(QWidget):
                 return i
         return None
 
-    # ── Run controls ─────────────────────────────────────────────────────────
+    # ── Run controls ──────────────────────────────────────────────────────────
     def _browse_output(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Select output folder")
         if folder:
             self._out_edit.setText(folder)
 
     def _refresh_run_button(self) -> None:
-        self._run_btn.setEnabled(len(self._groups) > 0 and self._runner is None)
+        has_arena = self._arena_combo.currentData() is not None
+        has_groups = len(self._groups) > 0
+        has_output = bool(self._out_edit.text().strip())
+        not_running = self._runner is None
+        self._run_btn.setEnabled(has_arena and has_groups and has_output and not_running)
 
     def _toggle_run(self) -> None:
         if self._runner is not None:
@@ -240,14 +273,7 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, "No arena", "Please select an arena.")
             return
 
-        out_text = self._out_edit.text().strip()
-        if out_text:
-            output_dir = Path(out_text)
-        else:
-            # Default: timestamped folder on the Desktop
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_dir = Path.home() / "Desktop" / f"{arena_mod.NAME.replace(' ', '_')}_{ts}"
-
+        output_dir = Path(self._out_edit.text().strip())
         groups = {name: path for name, path in self._groups}
 
         self._log.clear()
@@ -255,6 +281,7 @@ class MainWindow(QWidget):
         self._open_btn.setVisible(False)
         self._run_btn.setText("■  Cancel")
         self._arena_combo.setEnabled(False)
+        self._out_edit.setEnabled(False)
 
         self._runner = PipelineRunner(arena_mod, groups, output_dir)
         self._runner.log.connect(self._on_log)
@@ -274,15 +301,16 @@ class MainWindow(QWidget):
     def _reset_controls(self) -> None:
         self._run_btn.setText("▶  Analyse")
         self._arena_combo.setEnabled(True)
+        self._out_edit.setEnabled(True)
         self._refresh_run_button()
 
-    # ── Runner signal handlers ────────────────────────────────────────────────
+    # ── Runner signal handlers ─────────────────────────────────────────────────
     def _on_log(self, message: str) -> None:
         self._log_line(message)
 
     def _on_progress(self, pct: int) -> None:
         if pct < 0:
-            self._progress.setRange(0, 0)   # indeterminate
+            self._progress.setRange(0, 0)   # indeterminate spinner
         else:
             self._progress.setRange(0, 100)
             self._progress.setValue(pct)
@@ -304,7 +332,7 @@ class MainWindow(QWidget):
 
     def _open_results(self) -> None:
         if self._last_output:
-            os.startfile(self._last_output)   # Windows only — fine for target OS
+            os.startfile(self._last_output)   # Windows only — correct for target OS
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _log_line(self, message: str, colour: str = _COL_TEXT) -> None:
@@ -404,5 +432,11 @@ class MainWindow(QWidget):
             QScrollBar::handle:vertical {{
                 background: {_COL_MUTED};
                 border-radius: 4px;
+            }}
+            QToolTip {{
+                background-color: {_COL_PANEL};
+                color: {_COL_TEXT};
+                border: 1px solid {_COL_MUTED};
+                padding: 4px;
             }}
         """)

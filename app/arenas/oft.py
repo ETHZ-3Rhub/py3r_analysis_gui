@@ -14,8 +14,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from app.pipelines import oft_pipeline
-
 # ── Arena identity ────────────────────────────────────────────────────────────
 NAME = "Open Field Test"
 MODEL = "oft"  # YOLO3R model key — passed to the tracker subprocess
@@ -55,6 +53,10 @@ def run(
         csv_dirs[group_name] = csv_out
 
     # ── Stage 2: analysis pipeline ────────────────────────────────────────────
+    # Import deferred to here so py3r_behaviour (numpy/pandas/opencv) is not
+    # loaded at app startup — keeps the GUI launch fast.
+    from app.pipelines import oft_pipeline  # noqa: PLC0415
+
     progress_cb("Running analysis pipeline…", 40)
     oft_pipeline.run(
         group_csv_dirs=csv_dirs,
