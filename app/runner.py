@@ -33,6 +33,7 @@ class PipelineRunner(QThread):
 
     def run(self) -> None:
         try:
+            self.log.emit(f"Starting {self._arena.NAME}…")
             self._arena.run(
                 groups=self._groups,
                 output_dir=self._output_dir,

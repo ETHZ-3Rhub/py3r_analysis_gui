@@ -214,7 +214,13 @@ class MainWindow(QWidget):
         self._out_edit = QLineEdit()
         self._out_edit.setPlaceholderText("Choose output folder…")
         self._out_edit.textChanged.connect(self._refresh_run_button)
+        self._out_edit.textChanged.connect(self._update_output_warning)
         out_row.addWidget(self._out_edit)
+        self._out_warn_lbl = QLabel("")
+        self._out_warn_lbl.setFixedWidth(_BADGE_WIDTH)
+        self._out_warn_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._out_warn_lbl.setStyleSheet(f"color: {_COL_WARN}; font-size: 11px; font-weight: bold;")
+        out_row.addWidget(self._out_warn_lbl)
         out_browse = QPushButton("📁")
         out_browse.setFixedWidth(36)
         out_browse.clicked.connect(self._browse_output)
@@ -551,6 +557,23 @@ class MainWindow(QWidget):
         row_widget._badge_lbl.setStyleSheet(f"color: {colour}; font-size: 11px; font-weight: bold;")
         row_widget._badge_lbl.setToolTip("\n".join(tip_parts))
 
+    def _update_output_warning(self) -> None:
+        """Show an orange ⚠ badge next to the output folder if it is non-empty."""
+        out_text = self._out_edit.text().strip()
+        if out_text:
+            try:
+                p = Path(out_text)
+                if p.is_dir() and any(p.iterdir()):
+                    self._out_warn_lbl.setText("⚠")
+                    self._out_warn_lbl.setToolTip(
+                        "Output folder is not empty.\nExisting files may be overwritten."
+                    )
+                    return
+            except (PermissionError, OSError):
+                pass
+        self._out_warn_lbl.setText("")
+        self._out_warn_lbl.setToolTip("")
+
     def _refresh_group_file_counts(self) -> None:
         """Re-evaluate badges for every group row (called when skip_tracking changes)."""
         for i in range(self._group_list.count()):
@@ -568,6 +591,19 @@ class MainWindow(QWidget):
         never included here — by the time this is called those groups are fixed.
         """
         warnings: list[str] = []
+
+        # Warn if the output folder already contains files
+        out_text = self._out_edit.text().strip()
+        if out_text:
+            out_path = Path(out_text)
+            try:
+                if out_path.is_dir() and any(out_path.iterdir()):
+                    warnings.append(
+                        "Output folder is not empty — existing files may be overwritten."
+                    )
+            except (PermissionError, OSError):
+                pass  # can't read the folder; ignore silently
+
         skip = self._skip_tracking_cb.isChecked()
         ext_label = "CSV" if skip else "video"
 
@@ -621,8 +657,12 @@ class MainWindow(QWidget):
                 if count == 0:
                     reasons.append(f'Group "{name}" contains no {ext_label} files.')
 
-        can_run = not reasons and self._runner is None
-        self._run_btn.setEnabled(can_run)
+        if self._runner is not None:
+            # Pipeline is running — keep Cancel button enabled regardless of validation
+            self._run_btn.setEnabled(True)
+        else:
+            can_run = not reasons
+            self._run_btn.setEnabled(can_run)
 
         if reasons:
             self._run_btn.setToolTip("Cannot run:\n" + "\n".join(f"  •  {r}" for r in reasons))
@@ -675,8 +715,16 @@ class MainWindow(QWidget):
 
     def _cancel_run(self) -> None:
         if self._runner:
+            # Disconnect our handlers so stray signals from the dying thread
+            # don't affect the UI after we've already reset it.
+            self._runner.log.disconnect(self._on_log)
+            self._runner.progress.disconnect(self._on_progress)
+            self._runner.finished.disconnect(self._on_finished)
+            self._runner.error.disconnect(self._on_error)
+            # Schedule Qt-side cleanup once the thread actually finishes,
+            # without blocking the GUI thread via wait().
+            self._runner.finished.connect(self._runner.deleteLater)
             self._runner.terminate()
-            self._runner.wait()
             self._runner = None
         self._log_line("Cancelled.", colour=_COL_ERROR)
         self._reset_controls()
