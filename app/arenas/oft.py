@@ -56,11 +56,6 @@ def _track(
     csv_out_dir: Path,
     progress_cb: Callable[[str, float | None], None],
 ) -> None:
-    """Invoke YOLO3R on *video_dir*, writing CSVs to *csv_out_dir*.
+    from app.tracking import track_group  # noqa: PLC0415
 
-    TODO: implement once the YOLO3R CLI call signature is confirmed.
-    """
-    raise NotImplementedError(
-        "YOLO3R tracking not yet wired up. "
-        "Implement _track() in app/arenas/oft.py once the CLI interface is confirmed."
-    )
+    track_group(video_dir, csv_out_dir, progress_cb)

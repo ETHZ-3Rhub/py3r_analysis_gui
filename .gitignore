@@ -1,5 +1,8 @@
 dev/
 
+# Tracking environment (created by dev/setup_tracking_env.py)
+tracking_env/
+
 # Python
 __pycache__/
 *.py[cod]
