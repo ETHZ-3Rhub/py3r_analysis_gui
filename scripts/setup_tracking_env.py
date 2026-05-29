@@ -94,9 +94,13 @@ def main() -> None:
     )
 
     # Install py3r_pose and py3r_media from pre-built local wheels.
-    # --find-links tells uv to prefer local wheels; --no-build-isolation
-    # is not needed since we're installing pre-built wheels, not source.
-    # Remaining deps (ultralytics, numpy, opencv, etc.) come from PyPI.
+    # py3r_media must be passed as a direct file:// URL because py3r_pose's
+    # metadata declares it as a git URL dependency — uv won't resolve that
+    # transitively, but a direct file URL takes precedence over the upstream
+    # specifier. Remaining deps (ultralytics, numpy, etc.) come from PyPI.
+    py3r_media_wheel = next(WHEELS_DIR.glob("py3r_media-*.whl"), None)
+    if py3r_media_wheel is None:
+        sys.exit("py3r_media wheel not found in wheels/. Run scripts/build_wheels.py first.")
     _run(
         "uv",
         "pip",
@@ -105,7 +109,7 @@ def main() -> None:
         python,
         "--find-links",
         str(WHEELS_DIR),
-        "py3r_media",
+        f"py3r_media @ {py3r_media_wheel.as_uri()}",
         "py3r_pose[yolo]",
         "--extra-index-url",
         torch_index,
