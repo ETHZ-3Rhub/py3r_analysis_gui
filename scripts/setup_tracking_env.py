@@ -1,11 +1,13 @@
 """Set up a local tracking environment for development and testing.
 
 Creates <repo_root>/tracking_env/ using uv, installs PyTorch (CUDA if an
-NVIDIA GPU is detected, CPU otherwise), then installs py3r_pose at the commit
-pinned in versions.yaml.
+NVIDIA GPU is detected, CPU otherwise), then installs py3r_pose and its
+dependencies from pre-built wheels in wheels/.
+
+Run scripts/build_wheels.py first if wheels/ is missing or out of date.
 
 Usage:
-    python dev/setup_tracking_env.py
+    python scripts/setup_tracking_env.py
 
 The app will automatically find tracking_env/ when run from the repo root —
 no environment variables needed.
@@ -18,10 +20,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-import yaml
-
 REPO_ROOT = Path(__file__).parent.parent
 TRACKING_ENV = REPO_ROOT / "tracking_env"
+WHEELS_DIR = REPO_ROOT / "wheels"
 VERSIONS_FILE = REPO_ROOT / "versions.yaml"
 
 TORCH_INDEX_CUDA = "https://download.pytorch.org/whl/cu124"
@@ -35,23 +36,19 @@ def _check_uv() -> None:
         )
 
 
+def _check_wheels() -> None:
+    if not WHEELS_DIR.exists() or not list(WHEELS_DIR.glob("*.whl")):
+        sys.exit(
+            "wheels/ directory is missing or empty.\n"
+            "Run scripts/build_wheels.py first, then commit the result."
+        )
+
+
 def _has_nvidia_gpu() -> bool:
     return (
         shutil.which("nvidia-smi") is not None
         and subprocess.run(["nvidia-smi"], capture_output=True).returncode == 0
     )
-
-
-def _pinned_commit() -> str:
-    with open(VERSIONS_FILE) as f:
-        data = yaml.safe_load(f)
-    return data["dependencies"]["py3r_pose"]["commit"]
-
-
-def _repo_url() -> str:
-    with open(VERSIONS_FILE) as f:
-        data = yaml.safe_load(f)
-    return data["dependencies"]["py3r_pose"]["repo"]
 
 
 def _python_exe() -> Path:
@@ -67,15 +64,12 @@ def _run(*cmd: str) -> None:
 
 def main() -> None:
     _check_uv()
+    _check_wheels()
 
     cuda = _has_nvidia_gpu()
     torch_index = TORCH_INDEX_CUDA if cuda else TORCH_INDEX_CPU
     print(f"GPU detected: {'yes (CUDA)' if cuda else 'no (CPU-only)'}")
     print(f"PyTorch index: {torch_index}")
-
-    commit = _pinned_commit()
-    repo_url = _repo_url()
-    print(f"py3r_pose commit: {commit}")
 
     # Create venv
     if TRACKING_ENV.exists():
@@ -85,7 +79,8 @@ def main() -> None:
 
     python = str(_python_exe())
 
-    # Install PyTorch first so it comes from the right index
+    # Install PyTorch first — machine-specific CUDA version, must come from the
+    # official PyTorch index rather than being bundled
     _run(
         "uv",
         "pip",
@@ -98,14 +93,19 @@ def main() -> None:
         torch_index,
     )
 
-    # Install py3r_pose with yolo extras (torch already present, uv won't reinstall)
+    # Install py3r_pose and py3r_media from pre-built local wheels.
+    # --find-links tells uv to prefer local wheels; --no-build-isolation
+    # is not needed since we're installing pre-built wheels, not source.
+    # Remaining deps (ultralytics, numpy, opencv, etc.) come from PyPI.
     _run(
         "uv",
         "pip",
         "install",
         "--python",
         python,
-        f"py3r_pose[yolo] @ git+{repo_url}@{commit}",
+        "--find-links",
+        str(WHEELS_DIR),
+        "py3r_pose[yolo]",
         "--extra-index-url",
         torch_index,
     )
