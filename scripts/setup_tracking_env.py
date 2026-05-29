@@ -94,13 +94,15 @@ def main() -> None:
     )
 
     # Install py3r_pose and py3r_media from pre-built local wheels.
-    # py3r_media must be passed as a direct file:// URL because py3r_pose's
-    # metadata declares it as a git URL dependency — uv won't resolve that
-    # transitively, but a direct file URL takes precedence over the upstream
-    # specifier. Remaining deps (ultralytics, numpy, etc.) come from PyPI.
+    # py3r_pose declares py3r_media as a git URL dependency, which uv refuses
+    # to resolve transitively — and also refuses to override with another URL.
+    # The only escape hatch is --override, which bypasses the conflict entirely.
     py3r_media_wheel = next(WHEELS_DIR.glob("py3r_media-*.whl"), None)
     if py3r_media_wheel is None:
         sys.exit("py3r_media wheel not found in wheels/. Run scripts/build_wheels.py first.")
+    overrides_file = REPO_ROOT / "build" / "uv_overrides.txt"
+    overrides_file.parent.mkdir(exist_ok=True)
+    overrides_file.write_text(f"py3r_media @ {py3r_media_wheel.as_uri()}\n")
     _run(
         "uv",
         "pip",
@@ -109,7 +111,8 @@ def main() -> None:
         python,
         "--find-links",
         str(WHEELS_DIR),
-        f"py3r_media @ {py3r_media_wheel.as_uri()}",
+        "--override",
+        str(overrides_file),
         "py3r_pose[yolo]",
         "--extra-index-url",
         torch_index,
