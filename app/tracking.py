@@ -134,7 +134,6 @@ def track_group(
             "--output-folder",
             str(csv_out_dir),
             "--no-vis",
-            "--quiet",
         ]
         result = subprocess.run(cmd, text=True)
         if result.returncode != 0:
