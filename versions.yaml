@@ -12,7 +12,7 @@ dependencies:
 
   py3r_media:
     repo: https://github.com/ETHZ-INS/Py3R-Media.git
-    commit: 03d2b7c23db49d5e306ed040b46859574b3d8511
+    commit: 13c23cd68bb8798de3508400c6ceb0b63b91987b
 
   bohacek_lab_pose_models:
     repo: https://github.com/ETHZ-INS/BohacekLabPoseModels.git

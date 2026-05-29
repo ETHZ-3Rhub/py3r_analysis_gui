@@ -11,7 +11,7 @@ distributed as pre-built wheels by their maintainers.
 Usage:
     python scripts/build_wheels.py
 
-Requires: uv
+Requires: pip (standard)
 """
 
 from __future__ import annotations
@@ -28,13 +28,6 @@ WHEELS_DIR = REPO_ROOT / "wheels"
 VERSIONS_FILE = REPO_ROOT / "versions.yaml"
 
 
-def _check_uv() -> None:
-    if not shutil.which("uv"):
-        sys.exit(
-            "uv not found. Install it from https://docs.astral.sh/uv/getting-started/installation/"
-        )
-
-
 def _load_versions() -> dict:
     with open(VERSIONS_FILE) as f:
         return yaml.safe_load(f)
@@ -45,9 +38,20 @@ def _run(*cmd: str) -> None:
     subprocess.run(list(cmd), check=True)
 
 
-def main() -> None:
-    _check_uv()
+def _build_wheel(package_url: str) -> None:
+    _run(
+        sys.executable,
+        "-m",
+        "pip",
+        "wheel",
+        "--no-deps",
+        package_url,
+        "--wheel-dir",
+        str(WHEELS_DIR),
+    )
 
+
+def main() -> None:
     versions = _load_versions()
     pose = versions["dependencies"]["py3r_pose"]
     media = versions["dependencies"]["py3r_media"]
@@ -60,26 +64,10 @@ def main() -> None:
     WHEELS_DIR.mkdir()
 
     print(f"Building wheel: py3r_media @ {media['commit'][:8]}")
-    _run(
-        "uv",
-        "pip",
-        "wheel",
-        "--no-deps",
-        f"py3r_media @ git+{media_ref}",
-        "--wheel-dir",
-        str(WHEELS_DIR),
-    )
+    _build_wheel(f"py3r_media @ git+{media_ref}")
 
     print(f"Building wheel: py3r_pose @ {pose['commit'][:8]}")
-    _run(
-        "uv",
-        "pip",
-        "wheel",
-        "--no-deps",
-        f"py3r_pose @ git+{pose_ref}",
-        "--wheel-dir",
-        str(WHEELS_DIR),
-    )
+    _build_wheel(f"py3r_pose @ git+{pose_ref}")
 
     wheels = list(WHEELS_DIR.glob("*.whl"))
     print(f"\nBuilt {len(wheels)} wheel(s) in {WHEELS_DIR}/:")
