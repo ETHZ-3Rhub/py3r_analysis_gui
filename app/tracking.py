@@ -136,7 +136,7 @@ def track_group(
             "--no-vis",
             "--quiet",
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, text=True)
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(
