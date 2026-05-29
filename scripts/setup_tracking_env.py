@@ -105,6 +105,7 @@ def main() -> None:
         python,
         "--find-links",
         str(WHEELS_DIR),
+        "py3r_media",
         "py3r_pose[yolo]",
         "--extra-index-url",
         torch_index,
