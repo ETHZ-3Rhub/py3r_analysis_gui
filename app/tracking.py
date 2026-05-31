@@ -80,14 +80,20 @@ def _find_models_dir() -> Path:
             f"Bundled model weights not found at: {candidate}\n" "The installer may be incomplete."
         )
 
-    # Development: sibling BohacekLabPoseModels repo
-    dev_candidate = Path(__file__).parent.parent.parent / "BohacekLabPoseModels" / "pose_estimation"
-    if dev_candidate.is_dir():
-        return dev_candidate
+    # Development: sibling BohacekLabPoseModels repo (standard layout)
+    repo_root = Path(__file__).parent.parent
+    sibling_candidate = repo_root.parent / "BohacekLabPoseModels" / "pose_estimation"
+    if sibling_candidate.is_dir():
+        return sibling_candidate
+
+    # Development: BohacekLabPoseModels cloned inside the repo root (Windows student machine)
+    nested_candidate = repo_root / "BohacekLabPoseModels" / "pose_estimation"
+    if nested_candidate.is_dir():
+        return nested_candidate
 
     raise RuntimeError(
         "Model weights directory not found.\n"
-        "Expected sibling repo at ../BohacekLabPoseModels/pose_estimation, "
+        "Expected BohacekLabPoseModels/pose_estimation as a sibling repo or inside the repo root, "
         "or set PY3R_POSE_MODELS to the directory containing the model folders."
     )
 
