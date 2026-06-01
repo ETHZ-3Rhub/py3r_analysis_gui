@@ -128,22 +128,13 @@ def track_group(
 
     for i, video in enumerate(video_files):
         progress_cb(f"Tracking {video.name} ({i + 1}/{n})…", None)
-        cmd = [
-            str(py3r_pose),
-            "track",
-            str(video),
-            "--model",
-            str(env_model),
-            str(mouse_model),
-            "--tracker",
-            "fixed-instances",
-            "--instances",
-            "oft",
-            "mouse_top",
-            "--output-folder",
-            str(csv_out_dir),
-        ]
-        result = subprocess.run(cmd, text=True)
+        cmd = (
+            f'"{py3r_pose}" track "{video}"'
+            f' --model "{env_model}" "{mouse_model}"'
+            f" --tracker fixed-instances --instances oft mouse_top"
+            f' --output-folder "{csv_out_dir}"'
+        )
+        result = subprocess.run(cmd, shell=True, text=True)
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(
