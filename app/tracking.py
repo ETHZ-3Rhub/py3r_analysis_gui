@@ -107,6 +107,10 @@ def track_group(
     py3r_pose = _find_py3r_pose_exe()
     models_dir = _find_models_dir()
 
+    print(f"DEBUG models_dir: {models_dir}", flush=True)
+    print(f"DEBUG env_model: {models_dir / _ENV_MODEL_REL}", flush=True)
+    print(f"DEBUG mouse_model: {models_dir / _MOUSE_MODEL_REL}", flush=True)
+
     env_model = models_dir / _ENV_MODEL_REL
     mouse_model = models_dir / _MOUSE_MODEL_REL
     for model in (env_model, mouse_model):
