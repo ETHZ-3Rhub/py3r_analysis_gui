@@ -797,7 +797,7 @@ class MainWindow(QWidget):
             # Schedule Qt-side cleanup once the thread actually finishes,
             # without blocking the GUI thread via wait().
             self._runner.finished.connect(self._runner.deleteLater)
-            self._runner.terminate()
+            self._runner.cancel()
             self._runner = None
         self._log_line("Cancelled.", colour=_COL_ERROR)
         self._reset_controls()

@@ -52,10 +52,19 @@ class PipelineRunner(QThread):
         self._stall_event: threading.Event = threading.Event()
         self._stall_result: str = "skip"
         self._warnings: list[str] = []
+        self._current_proc: subprocess.Popen | None = None
 
     def resolve_stall(self, result: str) -> None:
         self._stall_result = result
         self._stall_event.set()
+
+    def cancel(self) -> None:
+        if self._current_proc is not None:
+            try:
+                self._current_proc.kill()
+            except Exception:
+                pass
+        self.terminate()
 
     def run(self) -> None:
         try:
@@ -130,6 +139,7 @@ class PipelineRunner(QThread):
 
     def _watchdog(self, proc: subprocess.Popen, video_name: str) -> bool:
         """Monitor proc output. Returns True if skipped, False if completed OK."""
+        self._current_proc = proc
         last_output = [time.monotonic()]
 
         def _read() -> None:
@@ -156,6 +166,7 @@ class PipelineRunner(QThread):
                     proc.wait()
                     return True
 
+        self._current_proc = None
         if proc.returncode != 0:
             raise RuntimeError(f"exit code {proc.returncode}")
         return False
