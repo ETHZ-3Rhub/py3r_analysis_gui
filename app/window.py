@@ -619,6 +619,10 @@ class MainWindow(QWidget):
 
         if has_subdirs:
             tip_parts.append("Subfolders detected — only top-level files are counted.")
+            if colour != _COL_ERROR:
+                colour = _COL_WARN
+                if "⚠" not in text:
+                    text = f"{text} ⚠"
 
         row_widget._badge_lbl.setText(text)
         row_widget._badge_lbl.setStyleSheet(f"color: {colour}; font-size: 11px; font-weight: bold;")

@@ -340,8 +340,12 @@ def _export_figures(
                 group_order=group_order,
                 annotate=annotate,
                 show=False,
-                savedir=str(figures_dir),
             )
+            ax.tick_params(axis="x", rotation=45)
+            for lbl in ax.get_xticklabels():
+                lbl.set_ha("right")
+            slug = re.sub(r"[^a-zA-Z0-9]+", "_", metric).strip("_").lower()
+            fig.savefig(figures_dir / f"{slug}_boxplot.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
         except Exception as exc:
             progress_cb(f"  Warning: could not plot {metric}: {exc}", None)
