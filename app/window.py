@@ -957,7 +957,7 @@ class MainWindow(QWidget):
                 border-radius: 5px;
                 padding: 6px 10px;
             }}
-            QPushButton#secondaryButton:hover {{ background-color: {_COL_ACCENT}22; }}
+            QPushButton#secondaryButton:hover {{ background-color: {_COL_ACCENT}; color: white; }}
             QPushButton#removeButton {{
                 background: transparent;
                 color: {_COL_MUTED};
