@@ -134,6 +134,7 @@ def track_group(
             f" --tracker fixed-instances --instances oft mouse_top"
             f' --output-folder "{csv_out_dir}"'
         )
+        print(f"CMD: {cmd}", flush=True)
         result = subprocess.run(cmd, shell=True, text=True)
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip()
