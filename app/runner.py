@@ -156,27 +156,13 @@ class PipelineRunner(QThread):
         last_output = [time.monotonic()]
 
         def _read() -> None:
-            buf = b""
             try:
                 while True:
                     chunk = proc.stdout.read(256)
                     if not chunk:
-                        if buf:
-                            self.subprocess_output.emit(buf.decode("utf-8", errors="replace"))
                         break
                     last_output[0] = time.monotonic()
-                    buf += chunk
-                    while True:
-                        cr, nl = buf.find(b"\r"), buf.find(b"\n")
-                        if cr == -1 and nl == -1:
-                            break
-                        # pick the earliest terminator; treat \r\n as one unit
-                        if cr != -1 and (nl == -1 or cr <= nl):
-                            end = cr + 2 if cr + 1 == nl else cr + 1
-                        else:
-                            end = nl + 1
-                        self.subprocess_output.emit(buf[:end].decode("utf-8", errors="replace"))
-                        buf = buf[end:]
+                    self.subprocess_output.emit(chunk.decode("utf-8", errors="replace"))
             except Exception:
                 pass
 

@@ -843,18 +843,12 @@ class MainWindow(QWidget):
         while i < len(chunk):
             c = chunk[i]
             if c == "\r":
-                if i + 1 < len(chunk) and chunk[i + 1] == "\n":
-                    # \r\n — proper line ending, keep content and move to next line
-                    cursor.insertText("\n", fmt)
-                    i += 2
-                else:
-                    # bare \r — overwrite current line
-                    cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    cursor.movePosition(
-                        QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
-                    )
-                    cursor.removeSelectedText()
-                    i += 1
+                cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                cursor.movePosition(
+                    QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
+                )
+                cursor.removeSelectedText()
+                i += 1
             else:
                 j = i
                 while j < len(chunk) and chunk[j] != "\r":
