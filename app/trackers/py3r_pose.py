@@ -120,7 +120,6 @@ def track(video: Path, output_dir: Path, **kwargs) -> subprocess.Popen:
     return subprocess.Popen(
         cmd,
         shell=True,
-        text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )

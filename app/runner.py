@@ -139,7 +139,7 @@ class PipelineRunner(QThread):
                     if not chunk:
                         break
                     last_output[0] = time.monotonic()
-                    self.subprocess_output.emit(chunk)
+                    self.subprocess_output.emit(chunk.decode("utf-8", errors="replace"))
             except Exception:
                 pass
 

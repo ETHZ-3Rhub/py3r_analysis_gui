@@ -900,6 +900,10 @@ class MainWindow(QWidget):
 
     def _log_line(self, message: str, colour: str = _COL_TEXT) -> None:
         ts = datetime.datetime.now().strftime("%H:%M:%S")
+        cursor = self._log.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if cursor.columnNumber() > 0:
+            self._log.insertPlainText("\n")
         self._log.setTextColor(QColor(_COL_MUTED))
         self._log.insertPlainText(f"[{ts}] ")
         self._log.setTextColor(QColor(colour))
