@@ -22,6 +22,7 @@ echo --- Running tracking on all videos in %VIDEO_DIR% ---
 for %%F in ("%VIDEO_DIR%\*.mp4" "%VIDEO_DIR%\*.avi" "%VIDEO_DIR%\*.mov" "%VIDEO_DIR%\*.mkv") do (
     echo.
     echo Tracking: %%F
+    echo CMD: "%EXE%" track "%%F" --model "%ENV_MODEL%" "%MOUSE_MODEL%" --tracker fixed-instances --instances oft mouse_top --output-folder "%OUT_DIR%"
     "%EXE%" track "%%F" --model "%ENV_MODEL%" "%MOUSE_MODEL%" --tracker fixed-instances --instances oft mouse_top --output-folder "%OUT_DIR%"
     echo Exit code: %ERRORLEVEL%
 )
