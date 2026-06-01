@@ -843,9 +843,9 @@ class MainWindow(QWidget):
         while i < len(chunk):
             c = chunk[i]
             if c == "\r":
-                cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
+                cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
                 cursor.movePosition(
-                    QTextCursor.MoveOperation.EndOfLine, QTextCursor.MoveMode.KeepAnchor
+                    QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
                 )
                 cursor.removeSelectedText()
                 i += 1
