@@ -103,6 +103,7 @@ def track(video: Path, output_dir: Path, **kwargs) -> subprocess.Popen:
 
     instances: list[str] = kwargs["instances"]
     tracker_type: str = kwargs.get("tracker_type", "fixed-instances")
+    grayscale: bool = kwargs.get("grayscale", False)
 
     env_model = models_dir / _ENV_MODEL_REL
     mouse_model = models_dir / _MOUSE_MODEL_REL
@@ -115,7 +116,7 @@ def track(video: Path, output_dir: Path, **kwargs) -> subprocess.Popen:
         f' --model "{env_model}" "{mouse_model}"'
         f" --tracker {tracker_type}"
         f' --instances {" ".join(instances)}'
-        f' --output-folder "{output_dir}"'
+        f' --output-folder "{output_dir}"' + (" --grayscale" if grayscale else "")
     )
     return subprocess.Popen(
         cmd,
