@@ -142,7 +142,6 @@ def track_group(
             "mouse_top",
             "--output-folder",
             str(csv_out_dir),
-            "--no-vis",
         ]
         result = subprocess.run(cmd, text=True)
         if result.returncode != 0:
