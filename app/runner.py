@@ -21,6 +21,22 @@ _VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
 _WATCHDOG_SECONDS = 60
 
 
+def _kill_tree(pid: int) -> None:
+    """Kill a process and all its children (Windows: taskkill /F /T, Unix: SIGKILL pgid)."""
+    import platform
+
+    try:
+        if platform.system() == "Windows":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+        else:
+            import os
+            import signal
+
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except Exception:
+        pass
+
+
 class PipelineRunner(QThread):
     log = pyqtSignal(str)
     progress = pyqtSignal(int)
@@ -60,10 +76,7 @@ class PipelineRunner(QThread):
 
     def cancel(self) -> None:
         if self._current_proc is not None:
-            try:
-                self._current_proc.kill()
-            except Exception:
-                pass
+            _kill_tree(self._current_proc.pid)
         self.terminate()
 
     def run(self) -> None:
@@ -162,7 +175,7 @@ class PipelineRunner(QThread):
                 if decision == "wait":
                     last_output[0] = time.monotonic()
                 else:
-                    proc.kill()
+                    _kill_tree(proc.pid)
                     proc.wait()
                     return True
 
