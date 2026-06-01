@@ -25,6 +25,7 @@ class PipelineRunner(QThread):
     log = pyqtSignal(str)
     progress = pyqtSignal(int)
     warning = pyqtSignal(str)
+    subprocess_output = pyqtSignal(str)  # raw chunks from tracked subprocess
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
     stall = pyqtSignal(str)  # emits video_name; main thread must call resolve_stall()
@@ -138,9 +139,7 @@ class PipelineRunner(QThread):
                     if not chunk:
                         break
                     last_output[0] = time.monotonic()
-                    line = chunk.strip()
-                    if line:
-                        self._progress_cb(line, None)
+                    self.subprocess_output.emit(chunk)
             except Exception:
                 pass
 

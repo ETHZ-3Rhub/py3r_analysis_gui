@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -777,6 +777,7 @@ class MainWindow(QWidget):
         self._runner.log.connect(self._on_log)
         self._runner.progress.connect(self._on_progress)
         self._runner.warning.connect(self._on_warning)
+        self._runner.subprocess_output.connect(self._on_subprocess_output)
         self._runner.finished.connect(self._on_finished)
         self._runner.error.connect(self._on_error)
         self._runner.stall.connect(self._on_stall)
@@ -789,6 +790,7 @@ class MainWindow(QWidget):
             self._runner.log.disconnect(self._on_log)
             self._runner.progress.disconnect(self._on_progress)
             self._runner.warning.disconnect(self._on_warning)
+            self._runner.subprocess_output.disconnect(self._on_subprocess_output)
             self._runner.finished.disconnect(self._on_finished)
             self._runner.error.disconnect(self._on_error)
             self._runner.stall.disconnect(self._on_stall)
@@ -828,6 +830,34 @@ class MainWindow(QWidget):
         self._progress.setValue(100)
         self._open_btn.setVisible(True)
         self._reset_controls()
+
+    def _on_subprocess_output(self, chunk: str) -> None:
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(_COL_MUTED))
+        fmt.setFontFamilies(["Courier New", "Courier", "monospace"])
+
+        cursor = self._log.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+
+        i = 0
+        while i < len(chunk):
+            c = chunk[i]
+            if c == "\r":
+                cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
+                cursor.movePosition(
+                    QTextCursor.MoveOperation.EndOfLine, QTextCursor.MoveMode.KeepAnchor
+                )
+                cursor.removeSelectedText()
+                i += 1
+            else:
+                j = i
+                while j < len(chunk) and chunk[j] not in ("\r",):
+                    j += 1
+                cursor.insertText(chunk[i:j], fmt)
+                i = j
+
+        self._log.setTextCursor(cursor)
+        self._log.ensureCursorVisible()
 
     def _on_warning(self, msg: str) -> None:
         self._log_line(f"⚠  {msg}", colour=_COL_WARN)
