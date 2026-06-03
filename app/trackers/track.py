@@ -150,6 +150,8 @@ def track(
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
+    _CHUNK = 500
+
     temp_paths: list[Path] = []
     try:
         # One pass per model — weights stay hot for the full video
@@ -172,25 +174,28 @@ def track(
             with open(tmp, "w", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=tmp_cols, extrasaction="ignore")
                 writer.writeheader()
-                for frame_index, result in enumerate(
-                    spec.model.track(
-                        str(video),
-                        stream=True,
-                        persist=True,
-                        verbose=False,
-                        device=device,
-                        half=half,
-                    )
+                chunk: list = []
+                frame_index = 0
+                for result in spec.model.track(
+                    str(video),
+                    stream=True,
+                    persist=True,
+                    verbose=False,
+                    device=device,
+                    half=half,
                 ):
-                    row: dict[str, object] = {"frame_index": frame_index}
-                    _fill_top_detection(row, result, spec)
-                    writer.writerow(row)
-
-                    if progress_cb is not None:
-                        progress_cb(frame_index)
-                    elif frame_index % 100 == 0:
-                        progress = f"{frame_index}/{total}" if total else str(frame_index)
-                        print(f"{spec.name} frame {progress}")
+                    chunk.append((frame_index, result))
+                    frame_index += 1
+                    if len(chunk) == _CHUNK:
+                        _flush_chunk(writer, chunk, spec)
+                        chunk.clear()
+                        if progress_cb is not None:
+                            progress_cb(frame_index)
+                        else:
+                            progress = f"{frame_index}/{total}" if total else str(frame_index)
+                            print(f"{spec.name} frame {progress}")
+                if chunk:
+                    _flush_chunk(writer, chunk, spec)
 
         # Merge temp CSVs row-by-row — constant memory regardless of video length
         fieldnames = _make_fieldnames(specs)
@@ -221,6 +226,13 @@ def track(
 
     if progress_cb is None:
         print(f"Done — {frame_index} frames → {output_csv}")
+
+
+def _flush_chunk(writer: csv.DictWriter, chunk: list, spec: ModelSpec) -> None:
+    for frame_index, result in chunk:
+        row: dict[str, object] = {"frame_index": frame_index}
+        _fill_top_detection(row, result, spec)
+        writer.writerow(row)
 
 
 def _make_fieldnames(specs: list[ModelSpec]) -> list[str]:
