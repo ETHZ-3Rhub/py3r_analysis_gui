@@ -2,27 +2,25 @@
 
 ## Sibling repositories
 
-The tracking stack lives in two repos that should be cloned **alongside** this
-one (i.e. as siblings in the same parent directory):
+The model weights live in a repo that should be cloned **alongside** this
+one (i.e. as a sibling in the same parent directory):
 
 ```
 parent/
 ├── py3r_analysis_gui/      ← this repo
-├── Py3R-Pose/              ← pose estimation library
 └── BohacekLabPoseModels/   ← model weights (git-lfs)
 ```
 
 ```bash
 # From the parent directory:
-git clone https://github.com/ETHZ-INS/Py3R-Pose.git
 git clone https://github.com/ETHZ-INS/BohacekLabPoseModels.git
 cd BohacekLabPoseModels && git lfs pull && cd ..
 ```
 
-The pinned commits used for each release are recorded in
+The pinned commit used for each release is recorded in
 [`versions.yaml`](versions.yaml).  During development you work
-against your local clones directly; the build workflow clones the pinned
-commits into a clean CI workspace.
+against your local clone directly; the build workflow clones the pinned
+commit into a clean CI workspace.
 
 ## Python environments
 
@@ -31,15 +29,16 @@ Two separate environments are needed:
 | Environment | Purpose | Key dependencies |
 |---|---|---|
 | `py3r_gui` | GUI + analysis | PyQt6, py3r_behaviour, py3r_analysis_gui |
-| `py3r_pose` (or `unifiedpointtracking`) | Tracking | py3r_pose[yolo], PyTorch, ultralytics |
+| `tracking_env` | Tracking | PyTorch, ultralytics |
 
-Install the tracking library into its environment:
+Create the tracking environment with:
 ```bash
-pip install -e ../Py3R-Pose[yolo]
+python scripts/setup_tracking_env.py
 ```
 
-The GUI calls the tracking environment's `py3r_pose` executable as a
-subprocess — the two environments never share a process.
+The GUI calls `tracking_env/Scripts/python.exe` (Windows) or
+`tracking_env/bin/python` (Unix) as a subprocess to run
+`app/trackers/track.py` — the two environments never share a process.
 
 ## Running the GUI
 

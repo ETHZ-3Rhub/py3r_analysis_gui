@@ -1,11 +1,12 @@
 from app.pipelines import oft_pipeline as pipeline
-from app.trackers import py3r_pose
+from app.trackers import yolo_tracker
 
 NAME = "Open Field Test"
-TRACKER = py3r_pose
+TRACKER = yolo_tracker
 TRACKER_ARGS = {
-    "instances": ["oft", "mouse_top"],
-    "tracker_type": "fixed-instances",
-    "grayscale": True,
+    "models": [
+        ("environment/environment_main", "oft"),
+        ("mouse/mouse_top_main", "mouse_top"),
+    ],
 }
 PIPELINE = pipeline

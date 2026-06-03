@@ -1,18 +1,9 @@
 # Pinned dependency versions for the packaging build.
 #
-# When cutting a release, update these hashes to the desired commits,
-# then run scripts/build_wheels.py to rebuild the bundled wheels,
+# When cutting a release, update the commit hash to the desired version,
 # then run the build workflow.  The CI script assembles the final installer.
 
 dependencies:
-
-  py3r_pose:
-    repo: https://github.com/ETHZ-INS/Py3R-Pose.git
-    commit: 9c69c6442be40e7e95ac0effa861e3f9ad7cd159
-
-  py3r_media:
-    repo: https://github.com/ETHZ-INS/Py3R-Media.git
-    commit: 13c23cd68bb8798de3508400c6ceb0b63b91987b
 
   bohacek_lab_pose_models:
     repo: https://github.com/ETHZ-INS/BohacekLabPoseModels.git

@@ -72,7 +72,7 @@ def _count_files(path: Path, skip_tracking: bool) -> tuple[int, bool]:
 
 
 class StallDialog(QDialog):
-    """Shown when py3r_pose produces no output for a minute.
+    """Shown when the tracker produces no output for a minute.
 
     Returns "skip" (default / countdown expired) or "wait" (user asked for more time).
     """

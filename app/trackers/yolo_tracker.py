@@ -1,0 +1,109 @@
+"""Subprocess wrapper for app/trackers/track.py.
+
+Launches track.py inside the tracking_env Python interpreter and returns
+the Popen handle for the runner to manage (watchdog, cancel, output).
+
+Resolution order for the tracking Python:
+  1. PY3R_TRACKER_PYTHON env var
+  2. <exe_dir>/tracking_env/Scripts/python.exe  (packaged app, Windows)
+  3. <exe_dir>/tracking_env/bin/python          (packaged app, non-Windows)
+  4. <repo_root>/tracking_env/...               (development)
+
+Resolution order for model weights:
+  1. PY3R_POSE_MODELS env var
+  2. <exe_dir>/models/                          (packaged app)
+  3. ../BohacekLabPoseModels/pose_estimation/   (sibling repo, standard layout)
+  4. <repo_root>/BohacekLabPoseModels/pose_estimation/
+"""
+
+from __future__ import annotations
+
+import os
+import platform
+import subprocess
+import sys
+from pathlib import Path
+
+_TRACK_SCRIPT = Path(__file__).parent / "track.py"
+
+
+def _find_python() -> Path:
+    if override := os.environ.get("PY3R_TRACKER_PYTHON"):
+        return Path(override)
+
+    subdir = "Scripts" if platform.system() == "Windows" else "bin"
+    exe = "python.exe" if platform.system() == "Windows" else "python"
+
+    if getattr(sys, "frozen", False):
+        candidate = Path(sys.executable).parent / "tracking_env" / subdir / exe
+        if candidate.exists():
+            return candidate
+        raise RuntimeError(
+            f"Tracking Python not found at {candidate}\n"
+            "The tracking environment may not have been installed correctly."
+        )
+
+    repo_root = Path(__file__).parent.parent.parent
+    local = repo_root / "tracking_env" / subdir / exe
+    if local.exists():
+        return local
+
+    raise RuntimeError(
+        "tracking_env not found.\n" "Run python scripts/setup_tracking_env.py to create it."
+    )
+
+
+def _find_models_dir() -> Path:
+    if override := os.environ.get("PY3R_POSE_MODELS"):
+        return Path(override)
+
+    if getattr(sys, "frozen", False):
+        candidate = Path(sys.executable).parent / "models"
+        if candidate.is_dir():
+            return candidate
+        raise RuntimeError(f"Bundled model weights not found at {candidate}")
+
+    repo_root = Path(__file__).parent.parent.parent
+    sibling = repo_root.parent / "BohacekLabPoseModels" / "pose_estimation"
+    if sibling.is_dir():
+        return sibling
+
+    nested = repo_root / "BohacekLabPoseModels" / "pose_estimation"
+    if nested.is_dir():
+        return nested
+
+    raise RuntimeError(
+        "Model weights not found.\n"
+        "Expected BohacekLabPoseModels/pose_estimation as a sibling repo, "
+        "or set PY3R_POSE_MODELS."
+    )
+
+
+def track(video: Path, output_dir: Path, **kwargs) -> subprocess.Popen:
+    """Launch track.py for a single video. Returns the Popen handle.
+
+    kwargs (from arena TRACKER_ARGS):
+        models:  list of (rel_path, instance_type) — paths relative to
+                 BohacekLabPoseModels/pose_estimation/
+                 e.g. [("environment/environment_main", "oft"),
+                        ("mouse/mouse_top_main", "mouse_top")]
+        device:  str — "auto", "cpu", "cuda", "cuda:0" (default: "auto")
+    """
+    python = _find_python()
+    models_dir = _find_models_dir()
+
+    model_specs: list[tuple[str, str]] = kwargs["models"]
+    device: str = kwargs.get("device", "auto")
+
+    for rel_path, _ in model_specs:
+        folder = models_dir / rel_path
+        if not folder.is_dir():
+            raise RuntimeError(f"Model folder not found: {folder}")
+
+    output_csv = output_dir / f"{video.stem}.csv"
+
+    cmd = [str(python), str(_TRACK_SCRIPT), str(video), str(output_csv), "--device", device]
+    for rel_path, instance_type in model_specs:
+        cmd.append(f"{models_dir / rel_path}:{instance_type}")
+
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

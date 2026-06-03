@@ -1,10 +1,7 @@
 """Set up a local tracking environment for development and testing.
 
 Creates <repo_root>/tracking_env/ using uv, installs PyTorch (CUDA if an
-NVIDIA GPU is detected, CPU otherwise), then installs py3r_pose and its
-dependencies from pre-built wheels in wheels/.
-
-Run scripts/build_wheels.py first if wheels/ is missing or out of date.
+NVIDIA GPU is detected, CPU otherwise), then installs ultralytics.
 
 Usage:
     python scripts/setup_tracking_env.py
@@ -22,8 +19,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
 TRACKING_ENV = REPO_ROOT / "tracking_env"
-WHEELS_DIR = REPO_ROOT / "wheels"
-VERSIONS_FILE = REPO_ROOT / "versions.yaml"
 
 TORCH_INDEX_CUDA = "https://download.pytorch.org/whl/cu124"
 TORCH_INDEX_CPU = "https://download.pytorch.org/whl/cpu"
@@ -33,14 +28,6 @@ def _check_uv() -> None:
     if not shutil.which("uv"):
         sys.exit(
             "uv not found. Install it from https://docs.astral.sh/uv/getting-started/installation/"
-        )
-
-
-def _check_wheels() -> None:
-    if not WHEELS_DIR.exists() or not list(WHEELS_DIR.glob("*.whl")):
-        sys.exit(
-            "wheels/ directory is missing or empty.\n"
-            "Run scripts/build_wheels.py first, then commit the result."
         )
 
 
@@ -64,14 +51,12 @@ def _run(*cmd: str) -> None:
 
 def main() -> None:
     _check_uv()
-    _check_wheels()
 
     cuda = _has_nvidia_gpu()
     torch_index = TORCH_INDEX_CUDA if cuda else TORCH_INDEX_CPU
     print(f"GPU detected: {'yes (CUDA)' if cuda else 'no (CPU-only)'}")
     print(f"PyTorch index: {torch_index}")
 
-    # Create venv
     if TRACKING_ENV.exists():
         print(f"\nRemoving existing {TRACKING_ENV.name}/")
         shutil.rmtree(TRACKING_ENV)
@@ -79,8 +64,8 @@ def main() -> None:
 
     python = str(_python_exe())
 
-    # Install PyTorch first — machine-specific CUDA version, must come from the
-    # official PyTorch index rather than being bundled
+    # Install PyTorch first from the machine-specific index so we get the right
+    # CUDA build. ultralytics will see torch already satisfied and won't replace it.
     _run(
         "uv",
         "pip",
@@ -93,30 +78,8 @@ def main() -> None:
         torch_index,
     )
 
-    # Install py3r_pose and py3r_media from pre-built local wheels.
-    # py3r_pose declares py3r_media as a git URL dependency, which uv refuses
-    # to resolve transitively — and also refuses to override with another URL.
-    # The only escape hatch is --override, which bypasses the conflict entirely.
-    py3r_media_wheel = next(WHEELS_DIR.glob("py3r_media-*.whl"), None)
-    if py3r_media_wheel is None:
-        sys.exit("py3r_media wheel not found in wheels/. Run scripts/build_wheels.py first.")
-    overrides_file = REPO_ROOT / "build" / "uv_overrides.txt"
-    overrides_file.parent.mkdir(exist_ok=True)
-    overrides_file.write_text(f"py3r_media @ {py3r_media_wheel.as_uri()}\n")
-    _run(
-        "uv",
-        "pip",
-        "install",
-        "--python",
-        python,
-        "--find-links",
-        str(WHEELS_DIR),
-        "--override",
-        str(overrides_file),
-        "py3r_pose[yolo]",
-        "--extra-index-url",
-        torch_index,
-    )
+    # ultralytics pulls in all remaining deps (opencv, numpy, etc.) from PyPI.
+    _run("uv", "pip", "install", "--python", python, "ultralytics")
 
     print(f"\nDone. Tracking environment created at: {TRACKING_ENV}")
     print("Run the app normally — it will find tracking_env/ automatically.")
