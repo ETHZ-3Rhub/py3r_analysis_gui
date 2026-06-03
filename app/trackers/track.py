@@ -171,7 +171,7 @@ def track(
             verbose=False,
             device=device,
             half=half,
-            batch=8,
+            batch=32,
         ):
             boxes = result.boxes
             if boxes is not None and len(boxes) > 0:
