@@ -131,6 +131,7 @@ def track(
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    half = device != "cpu"
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = _make_fieldnames(specs)
 
@@ -158,7 +159,9 @@ def track(
             }
 
             for spec in specs:
-                results = spec.model.track(frame, persist=True, verbose=False, device=device)
+                results = spec.model.track(
+                    frame, persist=True, verbose=False, device=device, half=half
+                )
                 _fill_top_detection(row, results[0], spec)
 
             writer.writerow(row)
@@ -166,13 +169,13 @@ def track(
 
             if progress_cb is not None:
                 progress_cb(frame_index)
-            elif frame_index % 100 == 0:
+            elif frame_index % 10 == 0:
                 pct = f" ({frame_index/total:.0%})" if total else ""
-                print(f"\rFrame {frame_index}{pct}", end="", flush=True)
+                print(f"Frame {frame_index}{pct}")
 
     cap.release()
     if progress_cb is None:
-        print(f"\rDone: {frame_index} frames → {output_csv}")
+        print(f"Done: {frame_index} frames → {output_csv}")
 
 
 def _make_fieldnames(specs: list[ModelSpec]) -> list[str]:

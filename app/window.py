@@ -12,12 +12,11 @@ import itertools
 import os
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
-from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PyQt6.QtCore import QEvent, QObject, Qt
+from PyQt6.QtGui import QColor, QTextCursor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -69,72 +68,6 @@ def _count_files(path: Path, skip_tracking: bool) -> tuple[int, bool]:
         return count, has_subdirs
     except (PermissionError, OSError):
         return 0, False
-
-
-class StallDialog(QDialog):
-    """Shown when the tracker produces no output for a minute.
-
-    Returns "skip" (default / countdown expired) or "wait" (user asked for more time).
-    """
-
-    _COUNTDOWN = 60
-
-    def __init__(self, video_name: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Tracking stalled")
-        self.setModal(True)
-        self._result = "skip"
-        self._remaining = self._COUNTDOWN
-        self._video_name = video_name
-
-        self._label = QLabel()
-        self._label.setWordWrap(True)
-        self._update_label()
-
-        skip_btn = QPushButton("Skip now")
-        wait_btn = QPushButton("Wait another minute")
-        skip_btn.clicked.connect(self._do_skip)
-        wait_btn.clicked.connect(self._do_wait)
-
-        btn_row = QHBoxLayout()
-        btn_row.addWidget(skip_btn)
-        btn_row.addWidget(wait_btn)
-
-        layout = QVBoxLayout()
-        layout.addWidget(self._label)
-        layout.addLayout(btn_row)
-        self.setLayout(layout)
-        self.setMinimumWidth(420)
-
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._tick)
-        self._timer.start(1000)
-
-    def _update_label(self) -> None:
-        self._label.setText(
-            f"Tracking for <b>{self._video_name}</b> has produced no output for "
-            f"{StallDialog._COUNTDOWN} seconds and may have stalled.<br><br>"
-            f"Skipping automatically in <b>{self._remaining}s</b>."
-        )
-
-    def _tick(self) -> None:
-        self._remaining -= 1
-        self._update_label()
-        if self._remaining <= 0:
-            self._do_skip()
-
-    def _do_skip(self) -> None:
-        self._timer.stop()
-        self._result = "skip"
-        self.accept()
-
-    def _do_wait(self) -> None:
-        self._timer.stop()
-        self._result = "wait"
-        self.accept()
-
-    def result_action(self) -> str:
-        return self._result
 
 
 class _TooltipOnDisabled(QObject):
@@ -784,7 +717,6 @@ class MainWindow(QWidget):
         self._runner.subprocess_output.connect(self._on_subprocess_output)
         self._runner.finished.connect(self._on_finished)
         self._runner.error.connect(self._on_error)
-        self._runner.stall.connect(self._on_stall)
         self._runner.start()
 
     def _cancel_run(self) -> None:
@@ -797,7 +729,6 @@ class MainWindow(QWidget):
             self._runner.subprocess_output.disconnect(self._on_subprocess_output)
             self._runner.finished.disconnect(self._on_finished)
             self._runner.error.disconnect(self._on_error)
-            self._runner.stall.disconnect(self._on_stall)
             # Schedule Qt-side cleanup once the thread actually finishes,
             # without blocking the GUI thread via wait().
             self._runner.finished.connect(self._runner.deleteLater)
@@ -836,41 +767,12 @@ class MainWindow(QWidget):
         self._reset_controls()
 
     def _on_subprocess_output(self, chunk: str) -> None:
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(_COL_MUTED))
-        fmt.setFontFamilies(["Courier New", "Courier", "monospace"])
-
-        cursor = self._log.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-
-        i = 0
-        while i < len(chunk):
-            c = chunk[i]
-            if c == "\r":
-                cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                cursor.movePosition(
-                    QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
-                )
-                cursor.removeSelectedText()
-                i += 1
-            else:
-                j = i
-                while j < len(chunk) and chunk[j] != "\r":
-                    j += 1
-                cursor.insertText(chunk[i:j], fmt)
-                i = j
-
-        self._log.setTextCursor(cursor)
-        self._log.ensureCursorVisible()
+        for line in chunk.splitlines():
+            if line.strip():
+                self._log_line(line, colour=_COL_MUTED)
 
     def _on_warning(self, msg: str) -> None:
         self._log_line(f"⚠  {msg}", colour=_COL_WARN)
-
-    def _on_stall(self, video_name: str) -> None:
-        dlg = StallDialog(video_name, parent=self)
-        dlg.exec()
-        if self._runner:
-            self._runner.resolve_stall(dlg.result_action())
 
     def _on_error(self, tb: str) -> None:
         self._runner.wait()  # ensure Qt thread machinery has fully stopped before GC

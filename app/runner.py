@@ -1,6 +1,6 @@
 """Arena orchestrator — runs in a background QThread.
 
-Owns the full run lifecycle: per-group tracking, per-video watchdog,
+Owns the full run lifecycle: per-group tracking,
 error collection, pipeline execution, and warning file output.
 Arena modules are pure config; all logic lives here.
 """
@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import threading
-import time
 import traceback
 from pathlib import Path
 from types import ModuleType
@@ -18,7 +16,6 @@ from types import ModuleType
 from PyQt6.QtCore import QThread, pyqtSignal
 
 _VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
-_WATCHDOG_SECONDS = 60
 
 
 def _kill_tree(pid: int) -> None:
@@ -44,7 +41,6 @@ class PipelineRunner(QThread):
     subprocess_output = pyqtSignal(str)  # raw chunks from tracked subprocess
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
-    stall = pyqtSignal(str)  # emits video_name; main thread must call resolve_stall()
 
     def __init__(
         self,
@@ -65,14 +61,8 @@ class PipelineRunner(QThread):
             "true",
             "yes",
         )
-        self._stall_event: threading.Event = threading.Event()
-        self._stall_result: str = "skip"
         self._warnings: list[str] = []
         self._current_proc: subprocess.Popen | None = None
-
-    def resolve_stall(self, result: str) -> None:
-        self._stall_result = result
-        self._stall_event.set()
 
     def cancel(self) -> None:
         if self._current_proc is not None:
@@ -116,11 +106,12 @@ class PipelineRunner(QThread):
                 self._progress_cb(f"  Tracking {video.name} ({j + 1}/{n_videos})…", None)
                 try:
                     proc = arena.TRACKER.track(video, csv_out, **arena.TRACKER_ARGS)
-                    skipped = self._watchdog(proc, video.name)
-                    if skipped:
-                        self._warn(f"{group_name} / {video.name}: stalled, skipped")
-                    else:
-                        tracked_any = True
+                    self._current_proc = proc
+                    self._drain_proc(proc)
+                    self._current_proc = None
+                    if proc.returncode != 0:
+                        raise RuntimeError(f"exit code {proc.returncode}")
+                    tracked_any = True
                 except Exception as exc:
                     self._warn(f"{group_name} / {video.name}: tracking failed — {exc}")
 
@@ -148,49 +139,15 @@ class PipelineRunner(QThread):
 
         self._progress_cb("Done.", 100)
 
-    # ── Watchdog ───────────────────────────────────────────────────────────────
-
-    def _watchdog(self, proc: subprocess.Popen, video_name: str) -> bool:
-        """Monitor proc output. Returns True if skipped, False if completed OK."""
-        self._current_proc = proc
-        last_output = [time.monotonic()]
-
-        def _read() -> None:
-            try:
-                while True:
-                    chunk = proc.stdout.read(256)
-                    if not chunk:
-                        break
-                    last_output[0] = time.monotonic()
-                    self.subprocess_output.emit(chunk.decode("utf-8", errors="replace"))
-            except Exception:
-                pass
-
-        threading.Thread(target=_read, daemon=True).start()
-
-        while proc.poll() is None:
-            time.sleep(1)
-            if time.monotonic() - last_output[0] > _WATCHDOG_SECONDS:
-                decision = self._stall_cb(video_name)
-                if decision == "wait":
-                    last_output[0] = time.monotonic()
-                else:
-                    _kill_tree(proc.pid)
-                    proc.wait()
-                    return True
-
-        self._current_proc = None
-        if proc.returncode != 0:
-            raise RuntimeError(f"exit code {proc.returncode}")
-        return False
-
-    def _stall_cb(self, video_name: str) -> str:
-        self._stall_event.clear()
-        self.stall.emit(video_name)
-        self._stall_event.wait()
-        return self._stall_result
-
     # ── Helpers ────────────────────────────────────────────────────────────────
+
+    def _drain_proc(self, proc: subprocess.Popen) -> None:
+        while True:
+            chunk = proc.stdout.read(256)
+            if not chunk:
+                break
+            self.subprocess_output.emit(chunk.decode("utf-8", errors="replace"))
+        proc.wait()
 
     def _progress_cb(self, message: str, pct: float | None) -> None:
         self.log.emit(message)
