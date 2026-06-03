@@ -771,9 +771,9 @@ class MainWindow(QWidget):
         self._reset_controls()
 
     def _on_subprocess_output(self, chunk: str) -> None:
-        for line in chunk.splitlines():
-            if line.strip():
-                self._log_line(line, colour=_COL_MUTED)
+        self._log.setTextColor(QColor(_COL_MUTED))
+        self._log.insertPlainText(chunk)
+        self._log.ensureCursorVisible()
 
     def _on_warning(self, msg: str) -> None:
         self._log_line(f"⚠  {msg}", colour=_COL_WARN)

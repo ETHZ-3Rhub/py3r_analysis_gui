@@ -102,7 +102,7 @@ def track(video: Path, output_dir: Path, **kwargs) -> subprocess.Popen:
 
     output_csv = output_dir / f"{video.stem}.csv"
 
-    cmd = [str(python), str(_TRACK_SCRIPT), str(video), str(output_csv), "--device", device]
+    cmd = [str(python), "-u", str(_TRACK_SCRIPT), str(video), str(output_csv), "--device", device]
     for rel_path, instance_type in model_specs:
         cmd.append(f"{models_dir / rel_path}:{instance_type}")
 

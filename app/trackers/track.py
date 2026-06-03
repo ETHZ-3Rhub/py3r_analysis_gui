@@ -49,6 +49,7 @@ class ModelSpec:
     """
 
     model: YOLO
+    name: str  # human-readable model name, e.g. "mouse_top_main"
     instance_type: str  # e.g. "mouse_top", "oft" — becomes the CSV column prefix
     keypoint_names: list[str]  # names indexed by YOLO keypoint index
 
@@ -94,7 +95,10 @@ def load_bohacek_spec(model_folder: Path, instance_type: str) -> ModelSpec:
     keypoint_names = [entries.get(i, f"kp_{i}") for i in range(max_idx + 1)]
 
     return ModelSpec(
-        model=YOLO(str(weights)), instance_type=instance_type, keypoint_names=keypoint_names
+        model=YOLO(str(weights)),
+        name=model_folder.name,
+        instance_type=instance_type,
+        keypoint_names=keypoint_names,
     )
 
 
@@ -123,6 +127,10 @@ def track(
 ) -> None:
     """Run tracking on a single video and write yolo3r-format CSV.
 
+    Each model streams through the full video sequentially (better GPU cache
+    utilisation than interleaving models per frame), writing a temp CSV.
+    A final merge pass combines the temp CSVs row-by-row into the output CSV.
+
     device: "auto" (use CUDA if available), "cpu", "cuda", "cuda:0", "mps", etc.
     progress_cb: optional callable(frame_index: int) called after each frame.
     """
@@ -133,49 +141,86 @@ def track(
 
     half = device != "cpu"
     output_csv.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = _make_fieldnames(specs)
 
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video}")
-
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or None
-
-    with open(output_csv, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-
-        frame_index = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            h, w = frame.shape[:2]
-            row: dict[str, object] = {
-                "frame_index": frame_index,
-                "max_dim.x": w,
-                "max_dim.y": h,
-            }
-
-            for spec in specs:
-                results = spec.model.track(
-                    frame, persist=True, verbose=False, device=device, half=half
-                )
-                _fill_top_detection(row, results[0], spec)
-
-            writer.writerow(row)
-            frame_index += 1
-
-            if progress_cb is not None:
-                progress_cb(frame_index)
-            elif frame_index % 10 == 0:
-                pct = f" ({frame_index/total:.0%})" if total else ""
-                print(f"Frame {frame_index}{pct}")
-
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
+
+    temp_paths: list[Path] = []
+    try:
+        # One pass per model — weights stay hot for the full video
+        for spec_idx, spec in enumerate(specs):
+            tmp = output_csv.with_suffix(f".tmp{spec_idx}.csv")
+            temp_paths.append(tmp)
+            prefix = f"{spec.instance_type}.{spec.instance_type}_0"
+            tmp_cols = [
+                "frame_index",
+                f"{prefix}.x1",
+                f"{prefix}.y1",
+                f"{prefix}.x2",
+                f"{prefix}.y2",
+                f"{prefix}.conf",
+            ] + [
+                c
+                for kp in spec.keypoint_names
+                for c in (f"{prefix}.{kp}.x", f"{prefix}.{kp}.y", f"{prefix}.{kp}.conf")
+            ]
+            with open(tmp, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=tmp_cols, extrasaction="ignore")
+                writer.writeheader()
+                for frame_index, result in enumerate(
+                    spec.model.track(
+                        str(video),
+                        stream=True,
+                        persist=True,
+                        verbose=False,
+                        device=device,
+                        half=half,
+                    )
+                ):
+                    row: dict[str, object] = {"frame_index": frame_index}
+                    _fill_top_detection(row, result, spec)
+                    writer.writerow(row)
+
+                    if progress_cb is not None:
+                        progress_cb(frame_index)
+                    elif frame_index % 100 == 0:
+                        progress = f"{frame_index}/{total}" if total else str(frame_index)
+                        print(f"{spec.name} frame {progress}")
+
+        # Merge temp CSVs row-by-row — constant memory regardless of video length
+        fieldnames = _make_fieldnames(specs)
+        frame_index = 0
+        tmp_files = [open(p, newline="") for p in temp_paths]
+        try:
+            readers = [csv.DictReader(f) for f in tmp_files]
+            with open(output_csv, "w", newline="") as out:
+                writer = csv.DictWriter(out, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                for rows in zip(*readers, strict=False):
+                    merged: dict[str, object] = {
+                        "frame_index": frame_index,
+                        "max_dim.x": w,
+                        "max_dim.y": h,
+                    }
+                    for r in rows:
+                        merged.update(r)
+                    writer.writerow(merged)
+                    frame_index += 1
+        finally:
+            for f in tmp_files:
+                f.close()
+
+    finally:
+        for p in temp_paths:
+            p.unlink(missing_ok=True)
+
     if progress_cb is None:
-        print(f"Done: {frame_index} frames → {output_csv}")
+        print(f"Done — {frame_index} frames → {output_csv}")
 
 
 def _make_fieldnames(specs: list[ModelSpec]) -> list[str]:
