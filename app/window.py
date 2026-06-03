@@ -63,7 +63,11 @@ def _count_files(path: Path, skip_tracking: bool) -> tuple[int, bool]:
     exts = _CSV_EXTS if skip_tracking else _VIDEO_EXTS
     try:
         entries = list(path.iterdir())
-        count = sum(1 for e in entries if e.is_file() and e.suffix.lower() in exts)
+        count = sum(
+            1
+            for e in entries
+            if e.is_file() and not e.name.startswith(".") and e.suffix.lower() in exts
+        )
         has_subdirs = any(e.is_dir() for e in entries)
         return count, has_subdirs
     except (PermissionError, OSError):

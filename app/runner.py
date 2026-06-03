@@ -94,7 +94,9 @@ class PipelineRunner(QThread):
             csv_out.mkdir(parents=True, exist_ok=True)
 
             video_files = sorted(
-                f for f in video_dir.iterdir() if f.is_file() and f.suffix.lower() in _VIDEO_EXTS
+                f
+                for f in video_dir.iterdir()
+                if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in _VIDEO_EXTS
             )
             if not video_files:
                 self._warn(f"{group_name}: no video files found in {video_dir}")
