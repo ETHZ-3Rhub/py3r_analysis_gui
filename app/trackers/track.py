@@ -20,8 +20,8 @@ and bbox columns
 To swap in a different model repository format, replace load_bohacek_spec()
 with a function that returns a ModelSpec.  Everything else stays the same.
 
-To support temporal models (multi-frame context), replace the per-frame
-inference call in _fill_top_detection() — the CSV writing logic is unchanged.
+To support temporal models (multi-frame context), replace the array-filling
+logic in track() — the CSV conversion pass is unchanged.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
+import numpy as np
 from ultralytics import YOLO
 
 # ---------------------------------------------------------------------------
@@ -116,6 +117,8 @@ def _available_instance_types(mapping_csv: Path) -> list[str]:
 # Core tracking logic
 # ---------------------------------------------------------------------------
 
+_REPORT_INTERVAL = 500
+
 
 def track(
     video: Path,
@@ -127,12 +130,13 @@ def track(
 ) -> None:
     """Run tracking on a single video and write yolo3r-format CSV.
 
-    Each model streams through the full video sequentially (better GPU cache
-    utilisation than interleaving models per frame), writing a temp CSV.
-    A final merge pass combines the temp CSVs row-by-row into the output CSV.
+    Each model makes one sequential pass, collecting detections into
+    pre-allocated numpy arrays (GIL released during tensor copies so the
+    GPU pipeline stays uninterrupted).  A final pass converts the arrays
+    to yolo3r CSV — no temp files, no threading.
 
     device: "auto" (use CUDA if available), "cpu", "cuda", "cuda:0", "mps", etc.
-    progress_cb: optional callable(frame_index: int) called after each frame.
+    progress_cb: optional callable(frame_index: int) called every REPORT_INTERVAL frames.
     """
     import torch
 
@@ -146,93 +150,85 @@ def track(
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video}")
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or None
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    vid_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    vid_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
-    _CHUNK = 500
+    n_alloc = total or 200_000
 
-    temp_paths: list[Path] = []
-    try:
-        # One pass per model — weights stay hot for the full video
-        for spec_idx, spec in enumerate(specs):
-            tmp = output_csv.with_suffix(f".tmp{spec_idx}.csv")
-            temp_paths.append(tmp)
-            prefix = f"{spec.instance_type}.{spec.instance_type}_0"
-            tmp_cols = [
-                "frame_index",
-                f"{prefix}.x1",
-                f"{prefix}.y1",
-                f"{prefix}.x2",
-                f"{prefix}.y2",
-                f"{prefix}.conf",
-            ] + [
-                c
-                for kp in spec.keypoint_names
-                for c in (f"{prefix}.{kp}.x", f"{prefix}.{kp}.y", f"{prefix}.{kp}.conf")
-            ]
-            with open(tmp, "w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=tmp_cols, extrasaction="ignore")
-                writer.writeheader()
-                chunk: list = []
-                frame_index = 0
-                for result in spec.model.track(
-                    str(video),
-                    stream=True,
-                    persist=True,
-                    verbose=False,
-                    device=device,
-                    half=half,
-                ):
-                    chunk.append((frame_index, result))
-                    frame_index += 1
-                    if len(chunk) == _CHUNK:
-                        _flush_chunk(writer, chunk, spec)
-                        chunk.clear()
-                        if progress_cb is not None:
-                            progress_cb(frame_index)
-                        else:
-                            progress = f"{frame_index}/{total}" if total else str(frame_index)
-                            print(f"{spec.name} frame {progress}")
-                if chunk:
-                    _flush_chunk(writer, chunk, spec)
+    # One pass per model — weights stay hot, hot loop does only array assignments
+    spec_arrays: list[tuple[ModelSpec, np.ndarray, np.ndarray, np.ndarray]] = []
+    for spec in specs:
+        n_kp = len(spec.keypoint_names)
+        bboxes = np.full((n_alloc, 4), np.nan, dtype=np.float32)  # x1 y1 x2 y2
+        bbox_conf = np.full(n_alloc, np.nan, dtype=np.float32)
+        kps = np.full((n_alloc, n_kp, 3), np.nan, dtype=np.float32)  # x y conf
 
-        # Merge temp CSVs row-by-row — constant memory regardless of video length
-        fieldnames = _make_fieldnames(specs)
-        frame_index = 0
-        tmp_files = [open(p, newline="") for p in temp_paths]
-        try:
-            readers = [csv.DictReader(f) for f in tmp_files]
-            with open(output_csv, "w", newline="") as out:
-                writer = csv.DictWriter(out, fieldnames=fieldnames, extrasaction="ignore")
-                writer.writeheader()
-                for rows in zip(*readers, strict=False):
-                    merged: dict[str, object] = {
-                        "frame_index": frame_index,
-                        "max_dim.x": w,
-                        "max_dim.y": h,
-                    }
-                    for r in rows:
-                        merged.update(r)
-                    writer.writerow(merged)
-                    frame_index += 1
-        finally:
-            for f in tmp_files:
-                f.close()
+        frame_count = 0
+        for result in spec.model.track(
+            str(video),
+            stream=True,
+            persist=True,
+            verbose=False,
+            device=device,
+            half=half,
+        ):
+            boxes = result.boxes
+            if boxes is not None and len(boxes) > 0:
+                best = int(boxes.conf.argmax())
+                bboxes[frame_count] = boxes.xyxy[best].cpu()
+                bbox_conf[frame_count] = boxes.conf[best].cpu()
+                if result.keypoints is not None and best < len(result.keypoints.data):
+                    kps[frame_count] = result.keypoints.data[best].cpu()
 
-    finally:
-        for p in temp_paths:
-            p.unlink(missing_ok=True)
+            frame_count += 1
+            if frame_count % _REPORT_INTERVAL == 0:
+                if progress_cb is not None:
+                    progress_cb(frame_count)
+                else:
+                    progress = f"{frame_count}/{total}" if total else str(frame_count)
+                    print(f"{spec.name} frame {progress}")
+
+        spec_arrays.append(
+            (
+                spec,
+                bboxes[:frame_count],
+                bbox_conf[:frame_count],
+                kps[:frame_count],
+            )
+        )
+
+    # Single conversion pass → yolo3r CSV
+    frame_count = spec_arrays[0][1].shape[0]
+    fieldnames = _make_fieldnames(specs)
+
+    with open(output_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for i in range(frame_count):
+            row: dict[str, object] = {
+                "frame_index": i,
+                "max_dim.x": vid_w,
+                "max_dim.y": vid_h,
+            }
+            for spec, bboxes, bbox_conf, kps in spec_arrays:
+                if np.isnan(bbox_conf[i]):
+                    continue
+                prefix = f"{spec.instance_type}.{spec.instance_type}_0"
+                row[f"{prefix}.x1"] = float(bboxes[i, 0])
+                row[f"{prefix}.y1"] = float(bboxes[i, 1])
+                row[f"{prefix}.x2"] = float(bboxes[i, 2])
+                row[f"{prefix}.y2"] = float(bboxes[i, 3])
+                row[f"{prefix}.conf"] = float(bbox_conf[i])
+                for ki, kp_name in enumerate(spec.keypoint_names):
+                    if not np.isnan(kps[i, ki, 0]):
+                        row[f"{prefix}.{kp_name}.x"] = float(kps[i, ki, 0])
+                        row[f"{prefix}.{kp_name}.y"] = float(kps[i, ki, 1])
+                        row[f"{prefix}.{kp_name}.conf"] = float(kps[i, ki, 2])
+            writer.writerow(row)
 
     if progress_cb is None:
-        print(f"Done — {frame_index} frames → {output_csv}")
-
-
-def _flush_chunk(writer: csv.DictWriter, chunk: list, spec: ModelSpec) -> None:
-    for frame_index, result in chunk:
-        row: dict[str, object] = {"frame_index": frame_index}
-        _fill_top_detection(row, result, spec)
-        writer.writerow(row)
+        print(f"Done — {frame_count} frames → {output_csv}")
 
 
 def _make_fieldnames(specs: list[ModelSpec]) -> list[str]:
@@ -243,40 +239,6 @@ def _make_fieldnames(specs: list[ModelSpec]) -> list[str]:
         for kp_name in spec.keypoint_names:
             names += [f"{prefix}.{kp_name}.x", f"{prefix}.{kp_name}.y", f"{prefix}.{kp_name}.conf"]
     return names
-
-
-def _fill_top_detection(row: dict, result, spec: ModelSpec) -> None:
-    """Write the highest-confidence detection for spec into row as instance _0.
-
-    Missing detections leave those columns absent (empty in CSV).
-    """
-    boxes = result.boxes
-    if boxes is None or len(boxes) == 0:
-        return
-
-    best = int(boxes.conf.argmax())
-    prefix = f"{spec.instance_type}.{spec.instance_type}_0"
-
-    x1, y1, x2, y2 = boxes.xyxy[best].tolist()
-    row[f"{prefix}.x1"] = x1
-    row[f"{prefix}.y1"] = y1
-    row[f"{prefix}.x2"] = x2
-    row[f"{prefix}.y2"] = y2
-    row[f"{prefix}.conf"] = float(boxes.conf[best])
-
-    kps = result.keypoints
-    if kps is None or best >= len(kps.xy):
-        return
-
-    kp_xy = kps.xy[best].tolist()
-    kp_conf = kps.conf[best].tolist() if kps.conf is not None else []
-
-    for idx, name in enumerate(spec.keypoint_names):
-        if idx < len(kp_xy):
-            x, y = kp_xy[idx]
-            row[f"{prefix}.{name}.x"] = x
-            row[f"{prefix}.{name}.y"] = y
-            row[f"{prefix}.{name}.conf"] = kp_conf[idx] if idx < len(kp_conf) else ""
 
 
 # ---------------------------------------------------------------------------
