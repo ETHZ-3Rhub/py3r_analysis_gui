@@ -159,10 +159,9 @@ def track(
     # One pass per model — weights stay hot, hot loop does only array assignments
     spec_arrays: list[tuple[ModelSpec, np.ndarray, np.ndarray, np.ndarray]] = []
     for spec in specs:
-        n_kp = len(spec.keypoint_names)
         bboxes = np.full((n_alloc, 4), np.nan, dtype=np.float32)  # x1 y1 x2 y2
         bbox_conf = np.full(n_alloc, np.nan, dtype=np.float32)
-        kps = np.full((n_alloc, n_kp, 3), np.nan, dtype=np.float32)  # x y conf
+        kps: np.ndarray | None = None  # allocated from first result: (n_alloc, n_kp_model, 3)
 
         frame_count = 0
         for result in spec.model.track(
@@ -179,7 +178,10 @@ def track(
                 bboxes[frame_count] = boxes.xyxy[best].cpu()
                 bbox_conf[frame_count] = boxes.conf[best].cpu()
                 if result.keypoints is not None and best < len(result.keypoints.data):
-                    kps[frame_count] = result.keypoints.data[best].cpu()
+                    kp_data = result.keypoints.data[best]
+                    if kps is None:
+                        kps = np.full((n_alloc, kp_data.shape[0], 3), np.nan, dtype=np.float32)
+                    kps[frame_count] = kp_data.cpu()
 
             frame_count += 1
             if frame_count % _REPORT_INTERVAL == 0:
@@ -189,14 +191,9 @@ def track(
                     progress = f"{frame_count}/{total}" if total else str(frame_count)
                     print(f"{spec.name} frame {progress}")
 
-        spec_arrays.append(
-            (
-                spec,
-                bboxes[:frame_count],
-                bbox_conf[:frame_count],
-                kps[:frame_count],
-            )
-        )
+        if kps is None:
+            kps = np.full((frame_count, 0, 3), np.nan, dtype=np.float32)
+        spec_arrays.append((spec, bboxes[:frame_count], bbox_conf[:frame_count], kps[:frame_count]))
 
     # Single conversion pass → yolo3r CSV
     frame_count = spec_arrays[0][1].shape[0]
