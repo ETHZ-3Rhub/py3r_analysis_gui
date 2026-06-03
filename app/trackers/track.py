@@ -195,6 +195,8 @@ def track(
         if kps is None:
             kps = np.full((frame_count, 0, 3), np.nan, dtype=np.float32)
         spec_arrays.append((spec, bboxes[:frame_count], bbox_conf[:frame_count], kps[:frame_count]))
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # Single conversion pass → yolo3r CSV
     frame_count = spec_arrays[0][1].shape[0]
