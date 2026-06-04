@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 
 from app import arenas as arena_pkg
 from app.runner import PipelineRunner
+from app.settings_dialog import SettingsDialog, get_version
 
 # ── Colour tokens ─────────────────────────────────────────────────────────────
 _COL_BG = "#1e1e2e"
@@ -94,7 +95,7 @@ class _TooltipOnDisabled(QObject):
 class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("py3r Analysis")
+        self.setWindowTitle(f"py3r Analysis  v{get_version()}")
         self.setMinimumSize(1020, 700)
         self._apply_stylesheet()
 
@@ -267,6 +268,11 @@ class MainWindow(QWidget):
         self._open_btn.clicked.connect(self._open_results)
         layout.addWidget(self._open_btn)
         self._last_output: str | None = None
+
+        settings_btn = QPushButton("⚙  Settings")
+        settings_btn.setObjectName("settingsButton")
+        settings_btn.clicked.connect(self._open_settings)
+        layout.addWidget(settings_btn)
 
         return panel
 
@@ -786,6 +792,9 @@ class MainWindow(QWidget):
             self._log_line(line, colour=_COL_ERROR)
         self._reset_controls()
 
+    def _open_settings(self) -> None:
+        SettingsDialog(self).exec()
+
     def _open_results(self) -> None:
         if not self._last_output:
             return
@@ -920,6 +929,15 @@ class MainWindow(QWidget):
                 background: {_COL_MUTED};
                 border-radius: 4px;
             }}
+            QPushButton#settingsButton {{
+                background: transparent;
+                color: {_COL_MUTED};
+                border: none;
+                font-size: 11px;
+                padding: 2px 0;
+                text-align: right;
+            }}
+            QPushButton#settingsButton:hover {{ color: {_COL_TEXT}; }}
             QToolTip {{
                 background-color: {_COL_PANEL};
                 color: {_COL_TEXT};
