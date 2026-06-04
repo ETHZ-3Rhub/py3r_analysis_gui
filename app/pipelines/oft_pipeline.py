@@ -33,6 +33,64 @@ _CORNERS = ["tl", "tr", "br", "bl"]
 _CORNER_LINES = [("tl", "tr"), ("tr", "br"), ("br", "bl"), ("bl", "tl")]
 _BODY_CENTRE = "bodycentre"
 
+_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
+
+_ANIM_MOUSE_POINTS = [
+    "nose",
+    "headcentre",
+    "earr",
+    "earl",
+    "neck",
+    "bcr",
+    "bcl",
+    "bodycentre",
+    "hipr",
+    "hipl",
+    "tailbase",
+]
+_ANIM_BODY_LINES = [
+    ("nose", "headcentre"),
+    ("headcentre", "earr"),
+    ("headcentre", "earl"),
+    ("headcentre", "neck"),
+    ("neck", "bcr"),
+    ("neck", "bcl"),
+    ("bcr", "bodycentre"),
+    ("bcl", "bodycentre"),
+    ("bodycentre", "hipr"),
+    ("bodycentre", "hipl"),
+    ("hipr", "hipl"),
+    ("bodycentre", "tailbase"),
+]
+_ANIM_STYLE = {
+    "points": {
+        "default": {"color": (0, 255, 255), "radius": 3},
+        "bodycentre": {
+            "radius": 5,
+            "color": {
+                "from": f"speed_of_{_BODY_CENTRE}_in_xy",
+                "cmap": "plasma",
+                "vmin": 0.0,
+                "vmax": 0.5,
+                "nan_color": (80, 80, 80),
+            },
+        },
+        "tl": {"color": (0, 255, 0), "radius": 5},
+        "tr": {"color": (0, 255, 0), "radius": 5},
+        "br": {"color": (0, 255, 0), "radius": 5},
+        "bl": {"color": (0, 255, 0), "radius": 5},
+    },
+    "boundaries": {
+        "oft": {"edge_color": (0, 200, 0), "edge_width": 1},
+        "centre": {
+            "edge_color": (0, 150, 255),
+            "edge_width": 1,
+            "fill_color": (0, 100, 200),
+            "fill_alpha": 0.15,
+        },
+    },
+}
+
 # Zone scale factors
 _CENTRE_SCALE = 0.5
 _PERIPHERY_SCALE = 0.8
@@ -62,6 +120,7 @@ def run(
     output_dir: Path,
     progress_cb: Callable[[str, float | None], None],
     comparisons: list[tuple[str, str]],
+    group_video_dirs: dict[str, Path] | None = None,
 ) -> None:
     """Full OFT pipeline across all groups.
 
@@ -148,6 +207,9 @@ def run(
     # ── Clustering ────────────────────────────────────────────────────────────
     progress_cb(f"Clustering (k={_N_CLUSTERS})…", 73)
     _cluster(fc, progress_cb)
+
+    progress_cb("Rendering QC animations…", 76)
+    _export_animations(fc, group_names, group_video_dirs or {}, output_dir, progress_cb)
 
     progress_cb("Saving features…", 78)
     fc.save(str(features_dir), data_format="parquet", overwrite=True)
@@ -251,6 +313,69 @@ def _compute_features(
 
     for pt in ["nose", "neck", _BODY_CENTRE, "tailbase"]:
         fc.each.distance_to_boundary(pt, "oft").store()
+
+
+# ── QC animations ────────────────────────────────────────────────────────────
+
+
+def _export_animations(
+    fc: p3b.FeaturesCollection,
+    group_names: list[str],
+    group_video_dirs: dict[str, Path],
+    output_dir: Path,
+    progress_cb: Callable[[str, float | None], None],
+) -> None:
+    anim_dir = output_dir / "qc" / "animations"
+    anim_dir.mkdir(parents=True, exist_ok=True)
+
+    fc_grouped = fc.groupby(tags=[_GROUP_TAG])
+
+    for group_name in group_names:
+        group_fc = fc_grouped.get((group_name,))
+        if not group_fc:
+            continue
+
+        # Pick first animal in this group as the representative sample
+        feat = next(iter(group_fc.values()))
+
+        # Try to find the source video for overlay
+        video_path = None
+        if group_name in group_video_dirs:
+            safe = _sanitize_group_name(group_name)
+            video_stem = feat.handle.removesuffix(f"_{safe}")
+            video_dir = group_video_dirs[group_name]
+            video_path = next(
+                (
+                    video_dir / f"{video_stem}{ext}"
+                    for ext in _VIDEO_EXTS
+                    if (video_dir / f"{video_stem}{ext}").exists()
+                ),
+                None,
+            )
+
+        out_path = anim_dir / f"{group_name}.mp4"
+        progress_cb(f"  {group_name} ({'with video' if video_path else 'no video'})…", None)
+
+        try:
+            stream = feat.animation_stream(
+                points=_ANIM_MOUSE_POINTS + _CORNERS,
+                lines=_ANIM_BODY_LINES + _CORNER_LINES,
+                boundaries=["oft", "centre"],
+                features={
+                    "Speed (m/s)": f"speed_of_{_BODY_CENTRE}_in_xy",
+                    "In centre": "within_boundary_static_bodycentre_in_centre",
+                    "Cluster": _CLUSTER_COL,
+                },
+                pixel_coords=True,
+                undo_meta_scaling=True,
+                style=_ANIM_STYLE,
+            )
+            save_kwargs = {"out_path": str(out_path)}
+            if video_path is not None:
+                save_kwargs["video_path"] = str(video_path)
+            stream.save(**save_kwargs)
+        except Exception as exc:
+            progress_cb(f"  Warning: animation failed for {group_name}: {exc}", None)
 
 
 # ── Clustering ────────────────────────────────────────────────────────────────

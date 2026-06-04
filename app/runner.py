@@ -132,6 +132,7 @@ class PipelineRunner(QThread):
                 output_dir=self._output_dir,
                 progress_cb=self._progress_cb,
                 comparisons=self._comparisons,
+                group_video_dirs=self._groups,
             )
         except Exception as exc:
             self._warn(f"Pipeline error: {exc}")
