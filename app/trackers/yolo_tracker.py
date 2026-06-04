@@ -18,6 +18,7 @@ Resolution order for model weights:
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import subprocess
@@ -83,27 +84,36 @@ def track(video: Path, output_dir: Path, **kwargs) -> subprocess.Popen:
     """Launch track.py for a single video. Returns the Popen handle.
 
     kwargs (from arena TRACKER_ARGS):
-        models:  list of (rel_path, instance_type) — paths relative to
-                 BohacekLabPoseModels/pose_estimation/
-                 e.g. [("environment/environment_main", "oft"),
-                        ("mouse/mouse_top_main", "mouse_top")]
+        models:  list of model config dicts, each with keys:
+                   model      — path relative to BohacekLabPoseModels/pose_estimation/
+                   instances  — list of {"type": str, "max": int}
+                   stride     — optional (interval, fill_mode)
+                   batch      — optional int
         device:  str — "auto", "cpu", "cuda", "cuda:0" (default: "auto")
     """
     python = _find_python()
     models_dir = _find_models_dir()
 
-    model_specs: list[tuple[str, str]] = kwargs["models"]
+    model_configs: list[dict] = kwargs["models"]
     device: str = kwargs.get("device", "auto")
-
-    for rel_path, _ in model_specs:
-        folder = models_dir / rel_path
-        if not folder.is_dir():
-            raise RuntimeError(f"Model folder not found: {folder}")
 
     output_csv = output_dir / f"{video.stem}.csv"
 
-    cmd = [str(python), "-u", str(_TRACK_SCRIPT), str(video), str(output_csv), "--device", device]
-    for rel_path, instance_type in model_specs:
-        cmd.append(f"{models_dir / rel_path}:{instance_type}")
+    cmd = [
+        str(python),
+        "-u",
+        str(_TRACK_SCRIPT),
+        str(video),
+        str(output_csv),
+        "--device",
+        device,
+    ]
+
+    for mc in model_configs:
+        folder = models_dir / mc["model"]
+        if not folder.is_dir():
+            raise RuntimeError(f"Model folder not found: {folder}")
+        resolved = {**mc, "model": str(folder)}
+        cmd += ["--model", json.dumps(resolved)]
 
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

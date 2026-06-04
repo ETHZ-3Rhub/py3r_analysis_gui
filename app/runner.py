@@ -90,7 +90,7 @@ class PipelineRunner(QThread):
                 continue
 
             self._progress_cb(f"Group {i + 1}/{n_groups}: {group_name}", None)
-            csv_out = self._output_dir / group_name
+            csv_out = self._output_dir / "tracking" / group_name
             csv_out.mkdir(parents=True, exist_ok=True)
 
             video_files = sorted(
