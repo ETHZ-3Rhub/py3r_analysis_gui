@@ -25,7 +25,6 @@ _COL_PANEL = "#2a2a3e"
 _COL_ACCENT = "#7c6af7"
 _COL_TEXT = "#cdd6f4"
 _COL_MUTED = "#6c7086"
-_COL_SEP = "#3a3a4e"
 _COL_ERROR = "#f38ba8"
 _COL_WARN = "#fab387"
 _COL_SUCCESS = "#a6e3a1"
@@ -53,13 +52,42 @@ def _find_tracking_python() -> Path | None:
     return local if local.exists() else None
 
 
+def parse_env_result(result: str) -> tuple[str, str, str]:
+    """Return (colour, short_label, tooltip) for a raw EnvCheckWorker result."""
+    if result.startswith("cuda:"):
+        cuda_ver = result[5:]
+        return (
+            _COL_SUCCESS,
+            f"GPU (CUDA {cuda_ver})",
+            f"Tracking is running on your GPU using CUDA {cuda_ver} — optimal performance.",
+        )
+    if result == "cpu":
+        return (
+            _COL_WARN,
+            "CPU only",
+            "Tracking is running on CPU, which is slower.\n"
+            "If you have an NVIDIA GPU, go to Settings → Reinstall tracking environment\n"
+            "to enable CUDA acceleration.",
+        )
+    if result == "not_installed":
+        return (
+            _COL_ERROR,
+            "Not installed",
+            "The tracking environment has not been set up yet.\n"
+            "Open Settings and click Reinstall tracking environment.",
+        )
+    return (_COL_ERROR, "Status unknown", "Could not determine tracking environment status.")
+
+
 # ---------------------------------------------------------------------------
 # Background workers
 # ---------------------------------------------------------------------------
 
 
-class _EnvCheckWorker(QThread):
-    done = pyqtSignal(str)  # "cuda", "cpu", "not_installed", "error"
+class EnvCheckWorker(QThread):
+    """Emits one of: "cuda:<version>", "cpu", "not_installed", "error"."""
+
+    done = pyqtSignal(str)
 
     def run(self) -> None:
         python = _find_tracking_python()
@@ -71,7 +99,9 @@ class _EnvCheckWorker(QThread):
                 [
                     str(python),
                     "-c",
-                    "import torch; print('cuda' if torch.cuda.is_available() else 'cpu')",
+                    "import torch; "
+                    "print(('cuda:' + (torch.version.cuda or 'unknown')) "
+                    "if torch.cuda.is_available() else 'cpu')",
                 ],
                 capture_output=True,
                 text=True,
@@ -113,7 +143,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setMinimumWidth(480)
-        self._check_worker: _EnvCheckWorker | None = None
+        self._check_worker: EnvCheckWorker | None = None
         self._reinstall_worker: _ReinstallWorker | None = None
         self._build_ui()
         self._apply_stylesheet()
@@ -124,7 +154,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
-        # ── Version ──────────────────────────────────────────────────────────
+        # ── Version ───────────────────────────────────────────────────────────
         version_lbl = QLabel(f"py3r Analysis  v{get_version()}")
         version_lbl.setObjectName("versionLabel")
         layout.addWidget(version_lbl)
@@ -171,33 +201,20 @@ class SettingsDialog(QDialog):
     # ── Env check ─────────────────────────────────────────────────────────────
 
     def _start_env_check(self) -> None:
-        self._set_status("checking")
-        self._check_worker = _EnvCheckWorker()
+        self._apply_status(_COL_MUTED, "Checking…", "")
+        self._check_worker = EnvCheckWorker()
         self._check_worker.done.connect(self._on_env_check_done)
         self._check_worker.start()
 
     def _on_env_check_done(self, result: str) -> None:
-        if result == "cuda":
-            self._set_status("gpu")
-        elif result == "cpu":
-            self._set_status("cpu")
-        elif result == "not_installed":
-            self._set_status("not_installed")
-        else:
-            self._set_status("error")
+        colour, label, tooltip = parse_env_result(result)
+        self._apply_status(colour, label, tooltip)
 
-    def _set_status(self, state: str) -> None:
-        configs = {
-            "checking": (_COL_MUTED, "Checking…"),
-            "gpu": (_COL_SUCCESS, "GPU (CUDA) — fast inference enabled"),
-            "cpu": (_COL_WARN, "CPU only — tracking will be slower"),
-            "not_installed": (_COL_ERROR, "Not installed — click Reinstall to set up"),
-            "error": (_COL_ERROR, "Could not determine status"),
-        }
-        colour, text = configs.get(state, (_COL_MUTED, state))
+    def _apply_status(self, colour: str, text: str, tooltip: str) -> None:
         self._status_dot.setStyleSheet(f"color: {colour}; font-size: 16px;")
         self._status_lbl.setText(text)
         self._status_lbl.setStyleSheet(f"color: {colour};")
+        self._status_lbl.setToolTip(tooltip)
 
     # ── Reinstall ─────────────────────────────────────────────────────────────
 
@@ -206,7 +223,7 @@ class SettingsDialog(QDialog):
         self._log.setVisible(True)
         self._reinstall_btn.setEnabled(False)
         self._reinstall_btn.setText("Installing…")
-        self._set_status("checking")
+        self._apply_status(_COL_MUTED, "Installing…", "")
 
         self._reinstall_worker = _ReinstallWorker()
         self._reinstall_worker.output.connect(self._on_reinstall_output)
@@ -228,7 +245,7 @@ class SettingsDialog(QDialog):
         else:
             self._log.setTextColor(QColor(_COL_ERROR))
             self._log.insertPlainText("\nInstallation failed — see output above.\n")
-            self._set_status("error")
+            self._apply_status(_COL_ERROR, "Installation failed", "")
 
     # ── Stylesheet ────────────────────────────────────────────────────────────
 
@@ -237,7 +254,7 @@ class SettingsDialog(QDialog):
             QDialog {{
                 background-color: {_COL_BG};
                 color: {_COL_TEXT};
-                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+                font-family: "Helvetica Neue", Arial, sans-serif;
                 font-size: 13px;
             }}
             QLabel {{

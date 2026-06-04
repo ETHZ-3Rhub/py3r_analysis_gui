@@ -36,7 +36,7 @@ from PyQt6.QtWidgets import (
 
 from app import arenas as arena_pkg
 from app.runner import PipelineRunner
-from app.settings_dialog import SettingsDialog, get_version
+from app.settings_dialog import EnvCheckWorker, SettingsDialog, get_version, parse_env_result
 
 # ── Colour tokens ─────────────────────────────────────────────────────────────
 _COL_BG = "#1e1e2e"
@@ -116,6 +116,11 @@ class MainWindow(QWidget):
 
         # Populate initial tooltip (button starts disabled)
         self._refresh_run_button()
+
+        # Kick off tracking env status check
+        self._env_check_worker = EnvCheckWorker()
+        self._env_check_worker.done.connect(self._on_env_status)
+        self._env_check_worker.start()
 
     # ── Left panel ────────────────────────────────────────────────────────────
     def _build_left_panel(self) -> QWidget:
@@ -269,10 +274,26 @@ class MainWindow(QWidget):
         layout.addWidget(self._open_btn)
         self._last_output: str | None = None
 
+        # ── Bottom bar: tracking status (left) + settings button (right) ──────
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(6)
+
+        self._env_dot = QLabel("●")
+        self._env_dot.setFixedWidth(14)
+        self._env_dot.setStyleSheet(f"color: {_COL_MUTED}; font-size: 13px;")
+        self._env_lbl = QLabel("Checking…")
+        self._env_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px;")
+        bottom_row.addWidget(self._env_dot)
+        bottom_row.addWidget(self._env_lbl)
+        bottom_row.addStretch()
+
         settings_btn = QPushButton("⚙  Settings")
         settings_btn.setObjectName("settingsButton")
+        settings_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         settings_btn.clicked.connect(self._open_settings)
-        layout.addWidget(settings_btn)
+        bottom_row.addWidget(settings_btn)
+
+        layout.addLayout(bottom_row)
 
         return panel
 
@@ -792,8 +813,20 @@ class MainWindow(QWidget):
             self._log_line(line, colour=_COL_ERROR)
         self._reset_controls()
 
+    def _on_env_status(self, result: str) -> None:
+        colour, label, tooltip = parse_env_result(result)
+        self._env_dot.setStyleSheet(f"color: {colour}; font-size: 13px;")
+        self._env_lbl.setText(label)
+        self._env_lbl.setStyleSheet(f"color: {colour}; font-size: 11px;")
+        self._env_lbl.setToolTip(tooltip)
+        self._env_dot.setToolTip(tooltip)
+
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
+        # Refresh status after settings dialog closes (user may have reinstalled)
+        self._env_check_worker = EnvCheckWorker()
+        self._env_check_worker.done.connect(self._on_env_status)
+        self._env_check_worker.start()
 
     def _open_results(self) -> None:
         if not self._last_output:
@@ -834,12 +867,15 @@ class MainWindow(QWidget):
             QWidget {{
                 background-color: {_COL_BG};
                 color: {_COL_TEXT};
-                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+                font-family: "Helvetica Neue", Arial, sans-serif;
                 font-size: 13px;
             }}
             QFrame#panel {{
                 background-color: {_COL_PANEL};
                 border-radius: 8px;
+            }}
+            QLabel {{
+                background: transparent;
             }}
             QLabel#sectionTitle {{
                 color: {_COL_TEXT};
