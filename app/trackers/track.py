@@ -46,7 +46,6 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-_REPORT_INTERVAL = 500
 _MAX_INSTANCES_LIMIT = 16  # hard cap on max per instance type; raise if genuinely needed
 
 
@@ -190,7 +189,6 @@ def track(
         )
         buffer_caps = {inst.instance_type: 4 * inst.max_instances for inst in spec.instances}
 
-        report_every = max(1, _REPORT_INTERVAL // spec.stride)
         stream_idx = 0
 
         for result in spec.model.track(
@@ -245,12 +243,6 @@ def track(
                     td["kps"].append(kp)
 
             stream_idx += 1
-            if stream_idx % report_every == 0:
-                if progress_cb is not None:
-                    progress_cb(video_frame_idx)
-                else:
-                    label = f"{video_frame_idx}/{total}" if total else str(video_frame_idx)
-                    print(f"{spec.name} frame {label}")
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
