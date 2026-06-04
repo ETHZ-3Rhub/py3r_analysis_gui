@@ -14,7 +14,7 @@ TRACKER_ARGS = {
         {
             "model": "mouse/mouse_top_main",
             "instances": [{"type": "mouse_top", "max": 1}],
-            "batch": 192,
+            "batch": 128,
         },
     ],
 }
