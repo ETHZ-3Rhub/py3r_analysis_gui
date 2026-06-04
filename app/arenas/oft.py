@@ -1,8 +1,8 @@
 from app.pipelines import oft_pipeline as pipeline
-from app.trackers import yolo_tracker
+from app.trackers import yolo_tracker as tracker
 
 NAME = "Open Field Test"
-TRACKER = yolo_tracker
+TRACKER = tracker
 TRACKER_ARGS = {
     "models": [
         {
@@ -14,7 +14,7 @@ TRACKER_ARGS = {
         {
             "model": "mouse/mouse_top_main",
             "instances": [{"type": "mouse_top", "max": 1}],
-            "batch": 16,
+            "batch": 256,
         },
     ],
 }
