@@ -20,8 +20,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent
 TRACKING_ENV = REPO_ROOT / "tracking_env"
 
-# PyTorch index URLs — cu124 requires driver ≥ 525, cu118 requires driver ≥ 450.
-# Add newer tiers here when ultralytics pins are bumped to require them.
+# PyTorch index URLs — cu128 requires driver >= 570 (Blackwell/sm_120),
+# cu124 requires driver >= 525, cu118 requires driver >= 450.
+TORCH_INDEX_CU128 = "https://download.pytorch.org/whl/cu128"
 TORCH_INDEX_CU124 = "https://download.pytorch.org/whl/cu124"
 TORCH_INDEX_CU118 = "https://download.pytorch.org/whl/cu118"
 TORCH_INDEX_CPU = "https://download.pytorch.org/whl/cpu"
@@ -63,11 +64,13 @@ def _pick_torch_index() -> tuple[str, str]:
     if driver is None:
         return TORCH_INDEX_CPU, "CPU (no NVIDIA GPU detected)"
     major, _ = driver
+    if major >= 570:
+        return TORCH_INDEX_CU128, f"CUDA 12.8 (driver {major} >= 570)"
     if major >= 525:
-        return TORCH_INDEX_CU124, f"CUDA 12.4 (driver {major} ≥ 525)"
+        return TORCH_INDEX_CU124, f"CUDA 12.4 (driver {major} >= 525)"
     if major >= 450:
-        return TORCH_INDEX_CU118, f"CUDA 11.8 (driver {major} ≥ 450)"
-    return TORCH_INDEX_CPU, f"CPU (driver {major} too old for CUDA builds — upgrade to ≥ 450)"
+        return TORCH_INDEX_CU118, f"CUDA 11.8 (driver {major} >= 450)"
+    return TORCH_INDEX_CPU, f"CPU (driver {major} too old for CUDA builds - upgrade to >= 450)"
 
 
 def _python_exe() -> Path:
