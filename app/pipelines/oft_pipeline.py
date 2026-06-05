@@ -357,6 +357,7 @@ def _export_animations(
         progress_cb(f"  {group_name} ({'with video' if video_path else 'no video'})…", None)
 
         try:
+            has_video = video_path is not None
             stream = feat.animation_stream(
                 points=_ANIM_MOUSE_POINTS + _CORNERS,
                 lines=_ANIM_BODY_LINES + _CORNER_LINES,
@@ -366,12 +367,12 @@ def _export_animations(
                     "In centre": "within_boundary_static_bodycentre_in_centre",
                     "Cluster": _CLUSTER_COL,
                 },
-                pixel_coords=True,
-                undo_meta_scaling=True,
+                pixel_coords=has_video,
+                undo_meta_scaling=has_video,
                 style=_ANIM_STYLE,
             )
             save_kwargs = {"out_path": str(out_path)}
-            if video_path is not None:
+            if has_video:
                 save_kwargs["video_path"] = str(video_path)
             stream.save(**save_kwargs)
         except Exception as exc:
