@@ -101,8 +101,8 @@ class MainWindow(QWidget):
 
         self._arenas = arena_pkg.discover()
         self._runner: PipelineRunner | None = None
-        # Each group: (name, path)
         self._groups: list[tuple[str, Path]] = []
+        self._env_status: str = "checking"  # mirrors EnvCheckWorker result strings
 
         root = QHBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -683,6 +683,15 @@ class MainWindow(QWidget):
         if not self._out_edit.text().strip():
             reasons.append("No output folder set.")
 
+        # Hard block: tracking env not installed (only matters when actually tracking)
+        skip = self._skip_tracking_cb.isChecked()
+        if not skip and self._env_status in ("not_installed", "error"):
+            reasons.append(
+                "Tracking environment is not set up.\n"
+                "     Open Settings to install it, or tick\n"
+                "     'Groups contain pre-tracked CSV files' to skip tracking."
+            )
+
         # Hard block: any group with zero relevant files
         if self._groups:
             skip = self._skip_tracking_cb.isChecked()
@@ -814,12 +823,14 @@ class MainWindow(QWidget):
         self._reset_controls()
 
     def _on_env_status(self, result: str) -> None:
+        self._env_status = result
         colour, label, tooltip = parse_env_result(result)
         self._env_dot.setStyleSheet(f"color: {colour}; font-size: 13px;")
         self._env_lbl.setText(label)
         self._env_lbl.setStyleSheet(f"color: {colour}; font-size: 11px;")
         self._env_lbl.setToolTip(tooltip)
         self._env_dot.setToolTip(tooltip)
+        self._refresh_run_button()
 
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()

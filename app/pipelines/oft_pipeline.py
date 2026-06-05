@@ -456,7 +456,6 @@ def _export_figures(
         "total_distance_bodycentre",
         "time_in_centre",
         "distance_in_centre",
-        "time_in_cluster",
     ]:
         progress_cb(f"  Plotting {metric}…", None)
         try:

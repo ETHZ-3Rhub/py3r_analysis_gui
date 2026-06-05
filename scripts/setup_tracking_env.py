@@ -1,7 +1,7 @@
 """Set up a local tracking environment for development and testing.
 
-Creates <repo_root>/tracking_env/ using uv, installs PyTorch (CUDA if an
-NVIDIA GPU is detected, CPU otherwise), then installs ultralytics.
+Creates <repo_root>/tracking_env/ using uv, installs PyTorch (CUDA build matched
+to the installed driver, or CPU fallback), then installs ultralytics.
 
 Usage:
     python scripts/setup_tracking_env.py
@@ -20,8 +20,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent
 TRACKING_ENV = REPO_ROOT / "tracking_env"
 
-TORCH_INDEX_CUDA = "https://download.pytorch.org/whl/cu124"
+# PyTorch index URLs — cu124 requires driver ≥ 525, cu118 requires driver ≥ 450.
+# Add newer tiers here when ultralytics pins are bumped to require them.
+TORCH_INDEX_CU124 = "https://download.pytorch.org/whl/cu124"
+TORCH_INDEX_CU118 = "https://download.pytorch.org/whl/cu118"
 TORCH_INDEX_CPU = "https://download.pytorch.org/whl/cpu"
+
+# Pinned versions — bump these together when updating the tracking stack.
+ULTRALYTICS_VERSION = "8.4.60"
+LAP_VERSION = "0.5.13"
 
 
 def _check_uv() -> None:
@@ -31,11 +38,36 @@ def _check_uv() -> None:
         )
 
 
-def _has_nvidia_gpu() -> bool:
-    return (
-        shutil.which("nvidia-smi") is not None
-        and subprocess.run(["nvidia-smi"], capture_output=True).returncode == 0
-    )
+def _nvidia_driver_version() -> tuple[int, int] | None:
+    """Return (major, minor) of the installed NVIDIA driver, or None if not found."""
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            return None
+        version_str = r.stdout.strip().splitlines()[0].strip()
+        parts = version_str.split(".")
+        return int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+    except Exception:
+        return None
+
+
+def _pick_torch_index() -> tuple[str, str]:
+    """Return (index_url, label) for the best torch build for this machine."""
+    driver = _nvidia_driver_version()
+    if driver is None:
+        return TORCH_INDEX_CPU, "CPU (no NVIDIA GPU detected)"
+    major, _ = driver
+    if major >= 525:
+        return TORCH_INDEX_CU124, f"CUDA 12.4 (driver {major} ≥ 525)"
+    if major >= 450:
+        return TORCH_INDEX_CU118, f"CUDA 11.8 (driver {major} ≥ 450)"
+    return TORCH_INDEX_CPU, f"CPU (driver {major} too old for CUDA builds — upgrade to ≥ 450)"
 
 
 def _python_exe() -> Path:
@@ -52,10 +84,10 @@ def _run(*cmd: str) -> None:
 def main() -> None:
     _check_uv()
 
-    cuda = _has_nvidia_gpu()
-    torch_index = TORCH_INDEX_CUDA if cuda else TORCH_INDEX_CPU
-    print(f"GPU detected: {'yes (CUDA)' if cuda else 'no (CPU-only)'}")
-    print(f"PyTorch index: {torch_index}")
+    torch_index, torch_label = _pick_torch_index()
+    print(f"PyTorch build: {torch_label}")
+    print(f"ultralytics:   {ULTRALYTICS_VERSION}")
+    print(f"lap:           {LAP_VERSION}")
 
     if TRACKING_ENV.exists():
         print(f"\nRemoving existing {TRACKING_ENV.name}/")
@@ -78,8 +110,17 @@ def main() -> None:
         torch_index,
     )
 
-    # ultralytics pulls in all remaining deps (opencv, numpy, etc.) from PyPI.
-    _run("uv", "pip", "install", "--python", python, "ultralytics")
+    # Pin ultralytics and lap exactly — these are part of the app's reproducibility
+    # guarantee. See ULTRALYTICS_VERSION / LAP_VERSION constants above.
+    _run(
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        python,
+        f"ultralytics=={ULTRALYTICS_VERSION}",
+        f"lap=={LAP_VERSION}",
+    )
 
     print(f"\nDone. Tracking environment created at: {TRACKING_ENV}")
     print("Run the app normally — it will find tracking_env/ automatically.")
