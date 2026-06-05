@@ -79,28 +79,26 @@ def _python_exe() -> Path:
     return TRACKING_ENV / "bin" / "python"
 
 
+_CUDA_SMOKE_TEST = """
+import sys, torch
+if not torch.cuda.is_available():
+    print("CUDA_NOT_AVAILABLE")
+    sys.exit(1)
+try:
+    torch.zeros(1, device="cuda")
+    print(f"CUDA_OK:{torch.cuda.get_device_name(0)}")
+except Exception as e:
+    print(f"CUDA_ERROR:{e}")
+    sys.exit(1)
+"""
+
+
 def _run(*cmd: str) -> None:
     print(f"\n$ {' '.join(cmd)}")
     subprocess.run(list(cmd), check=True)
 
 
-def main() -> None:
-    _check_uv()
-
-    torch_index, torch_label = _pick_torch_index()
-    print(f"PyTorch build: {torch_label}")
-    print(f"ultralytics:   {ULTRALYTICS_VERSION}")
-    print(f"lap:           {LAP_VERSION}")
-
-    if TRACKING_ENV.exists():
-        print(f"\nRemoving existing {TRACKING_ENV.name}/")
-        shutil.rmtree(TRACKING_ENV)
-    _run("uv", "venv", str(TRACKING_ENV), "--python", "3.12")
-
-    python = str(_python_exe())
-
-    # Install PyTorch first from the machine-specific index so we get the right
-    # CUDA build. ultralytics will see torch already satisfied and won't replace it.
+def _install_torch(python: str, index_url: str) -> None:
     _run(
         "uv",
         "pip",
@@ -110,8 +108,39 @@ def main() -> None:
         "torch",
         "torchvision",
         "--index-url",
-        torch_index,
+        index_url,
     )
+
+
+def _verify_cuda(python: str) -> tuple[bool, str]:
+    """Smoke-test the installed torch. Returns (gpu_ok, message)."""
+    r = subprocess.run([python, "-c", _CUDA_SMOKE_TEST], capture_output=True, text=True)
+    for line in (r.stdout + r.stderr).splitlines():
+        if line.startswith("CUDA_OK:"):
+            return True, line[len("CUDA_OK:") :]
+        if line.startswith("CUDA_NOT_AVAILABLE"):
+            return False, "CUDA not available"
+        if line.startswith("CUDA_ERROR:"):
+            return False, line[len("CUDA_ERROR:") :]
+    return False, (r.stdout + r.stderr).strip() or "unknown error"
+
+
+def main() -> None:
+    _check_uv()
+
+    torch_index, torch_label = _pick_torch_index()
+    wants_cuda = torch_index != TORCH_INDEX_CPU
+    print(f"PyTorch build: {torch_label}")
+    print(f"ultralytics:   {ULTRALYTICS_VERSION}")
+    print(f"lap:           {LAP_VERSION}")
+
+    _run("uv", "venv", str(TRACKING_ENV), "--python", "3.12")
+
+    python = str(_python_exe())
+
+    # Install PyTorch first from the machine-specific index so we get the right
+    # CUDA build. ultralytics will see torch already satisfied and won't replace it.
+    _install_torch(python, torch_index)
 
     # Pin ultralytics and lap exactly — these are part of the app's reproducibility
     # guarantee. See ULTRALYTICS_VERSION / LAP_VERSION constants above.
@@ -125,8 +154,18 @@ def main() -> None:
         f"lap=={LAP_VERSION}",
     )
 
-    print(f"\nDone. Tracking environment created at: {TRACKING_ENV}")
-    print("Run the app normally — it will find tracking_env/ automatically.")
+    if wants_cuda:
+        print("\nVerifying GPU...")
+        ok, msg = _verify_cuda(python)
+        if ok:
+            print(f"\nReady. GPU: {msg}")
+        else:
+            print(f"GPU verification failed: {msg}")
+            print("Falling back to CPU — reinstalling PyTorch...")
+            _install_torch(python, TORCH_INDEX_CPU)
+            print("\nReady. Running on CPU (GPU unavailable).")
+    else:
+        print("\nReady. Running on CPU.")
 
 
 if __name__ == "__main__":
