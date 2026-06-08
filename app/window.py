@@ -85,14 +85,16 @@ class MainWindow(QWidget):
         self._env_status: str = "checking"  # mirrors EnvCheckWorker result strings
         self._last_source_is_csv: bool | None = None  # None until a source is first chosen
 
+        # Shared filter so tooltips still show on disabled widgets (gated
+        # sections, the Analyse button) — Qt suppresses them by default.
+        self._btn_tooltip_filter = _TooltipOnDisabled(self)
+
         root = QHBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
         root.addWidget(self._build_left_panel(), stretch=2)
         root.addWidget(self._build_run_panel(), stretch=3)
 
-        # Show tooltip on the Analyse button even when it is disabled
-        self._btn_tooltip_filter = _TooltipOnDisabled(self)
         self._run_btn.installEventFilter(self._btn_tooltip_filter)
 
         # Populate initial tooltip (button starts disabled)
@@ -147,58 +149,45 @@ class MainWindow(QWidget):
         sep0.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
         layout.addWidget(sep0)
 
-        # ── Arena — its own peer section, not a Source sub-item ──────────────
-        arena_label = QLabel("Arena")
-        arena_label.setObjectName("sectionTitle")
-        layout.addWidget(arena_label)
-
-        self._arena_combo = QComboBox()
-        self._arena_combo.addItem("— select arena —", userData=None)
-        for mod in self._arenas:
-            self._arena_combo.addItem(mod.NAME, userData=mod)
-        self._arena_combo.currentIndexChanged.connect(self._refresh_run_button)
-        layout.addWidget(self._arena_combo)
-
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.Shape.HLine)
-        sep1.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
-        layout.addWidget(sep1)
+        no_source_tip = (
+            "Choose a source above first — it determines what kind of files belong in groups."
+        )
 
         # ── Groups — locked until a source is chosen above ───────────────────
-        self._groups_section = QWidget()
-        self._groups_section.setEnabled(False)
-        group_col = QVBoxLayout(self._groups_section)
-        group_col.setContentsMargins(0, 0, 0, 0)
+        self._groups_section = self._build_gated_section(no_source_tip)
+        group_col = self._groups_section.layout()
 
         self._group_panel = GroupManifestPanel()
         self._group_panel.group_added.connect(self._sync_comp_add)
         self._group_panel.group_added.connect(self._refresh_run_button)
+        self._group_panel.group_added.connect(self._refresh_comparisons_enabled)
         self._group_panel.group_removed.connect(self._sync_comp_remove)
         self._group_panel.group_removed.connect(self._refresh_run_button)
+        self._group_panel.group_removed.connect(self._refresh_comparisons_enabled)
         self._group_panel.group_renamed.connect(self._sync_comp_rename)
         self._group_panel.files_changed.connect(self._refresh_run_button)
         group_col.addWidget(self._group_panel)
 
         layout.addWidget(self._groups_section, stretch=1)
 
-        return panel
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        layout.addWidget(sep2)
 
-    # ── Run panel ─────────────────────────────────────────────────────────────
-    def _build_run_panel(self) -> QWidget:
-        panel = QFrame()
-        panel.setObjectName("panel")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        # ── Comparisons — locked until there are at least two groups to pair ──
+        self._comp_section = self._build_gated_section(
+            "Add at least two groups before defining comparisons between them."
+        )
+        comp_col = self._comp_section.layout()
 
-        # Comparisons section
         comp_label = QLabel("Comparisons")
         comp_label.setObjectName("sectionTitle")
-        layout.addWidget(comp_label)
+        comp_col.addWidget(comp_label)
 
         self._comp_list = QListWidget()
         self._comp_list.setObjectName("groupList")
-        layout.addWidget(self._comp_list, stretch=1)
+        comp_col.addWidget(self._comp_list, stretch=1)
 
         comp_btns = QHBoxLayout()
         comp_btns.setSpacing(6)
@@ -211,12 +200,61 @@ class MainWindow(QWidget):
             btn.setObjectName("secondaryButton")
             btn.clicked.connect(slot)
             comp_btns.addWidget(btn)
-        layout.addLayout(comp_btns)
+        comp_col.addLayout(comp_btns)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
-        layout.addWidget(sep)
+        layout.addWidget(self._comp_section)
+
+        return panel
+
+    def _build_gated_section(self, disabled_tooltip: str) -> QWidget:
+        """A plain container that starts disabled with an explanatory tooltip
+        — used for sections that only make sense once an earlier choice has
+        been made (e.g. Groups need a Source, Comparisons need ≥ 2 groups).
+        Qt suppresses tooltips on disabled widgets by default, hence the
+        `_TooltipOnDisabled` filter. The tooltip is stored rather than left
+        permanently set — `_set_gated_enabled` clears it once the section
+        becomes relevant, so it doesn't linger and contradict what's now an
+        active, self-explanatory part of the UI."""
+        section = QWidget()
+        section.setObjectName("gatedSection")
+        section._disabled_tip = disabled_tooltip
+        section.installEventFilter(self._btn_tooltip_filter)
+        col = QVBoxLayout(section)
+        col.setContentsMargins(0, 0, 0, 0)
+        self._set_gated_enabled(section, False)
+        return section
+
+    def _set_gated_enabled(self, section: QWidget, enabled: bool) -> None:
+        section.setEnabled(enabled)
+        section.setToolTip("" if enabled else section._disabled_tip)
+
+    # ── Run panel ─────────────────────────────────────────────────────────────
+    def _build_run_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        # ── Arena — a processing-pipeline choice (model + analysis), not
+        # something that depends on the source file type, so it lives here
+        # among the other run-configuration controls rather than gated on
+        # the left ──────────────────────────────────────────────────────────
+        arena_label = QLabel("Arena")
+        arena_label.setObjectName("sectionTitle")
+        layout.addWidget(arena_label)
+
+        self._arena_combo = QComboBox()
+        self._arena_combo.addItem("— select arena —", userData=None)
+        for mod in self._arenas:
+            self._arena_combo.addItem(mod.NAME, userData=mod)
+        self._arena_combo.currentIndexChanged.connect(self._refresh_run_button)
+        layout.addWidget(self._arena_combo)
+
+        sep_arena = QFrame()
+        sep_arena.setFrameShape(QFrame.Shape.HLine)
+        sep_arena.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        layout.addWidget(sep_arena)
 
         out_label = QLabel("Output folder")
         out_label.setObjectName("sectionTitle")
@@ -319,7 +357,7 @@ class MainWindow(QWidget):
 
         self._last_source_is_csv = is_csv
         self._group_panel.set_file_extensions(CSV_EXTS if is_csv else VIDEO_EXTS)
-        self._groups_section.setEnabled(True)
+        self._set_gated_enabled(self._groups_section, True)
         self._refresh_run_button()
 
     def _update_video_radio_availability(self) -> None:
@@ -416,6 +454,12 @@ class MainWindow(QWidget):
         idx = self._list_index(self._comp_list, row_widget)
         if idx is not None:
             self._comp_list.takeItem(idx)
+
+    def _refresh_comparisons_enabled(self) -> None:
+        """Comparisons only mean something once there's something to pair —
+        grey the whole section out (with an explanatory tooltip) until at
+        least two groups exist, rather than showing empty, clickable controls."""
+        self._set_gated_enabled(self._comp_section, len(self._group_panel.groups()) >= 2)
 
     def _sync_comp_add(self, new_name: str) -> None:
         for w in self._comp_rows():
@@ -767,6 +811,9 @@ class MainWindow(QWidget):
                 background-color: {_COL_PANEL};
                 border-radius: 8px;
             }}
+            QWidget#gatedSection, QWidget#groupManifestPanel {{
+                background: transparent;
+            }}
             QLabel {{
                 background: transparent;
             }}
@@ -776,6 +823,9 @@ class MainWindow(QWidget):
                 font-size: 12px;
                 letter-spacing: 1px;
                 text-transform: uppercase;
+            }}
+            QLabel#sectionTitle:disabled {{
+                color: {_COL_MUTED};
             }}
             QPushButton#primaryButton {{
                 background-color: {_COL_ACCENT};
@@ -796,6 +846,11 @@ class MainWindow(QWidget):
                 padding: 6px 10px;
             }}
             QPushButton#secondaryButton:hover {{ background-color: {_COL_ACCENT}; color: white; }}
+            QPushButton#secondaryButton:disabled {{
+                color: {_COL_MUTED};
+                border-color: {_COL_MUTED};
+                background-color: transparent;
+            }}
             QPushButton#removeButton {{
                 background: transparent;
                 color: {_COL_MUTED};
@@ -826,28 +881,7 @@ class MainWindow(QWidget):
                 border-radius: 5px;
             }}
             QListWidget#groupList::item:selected {{ background: transparent; }}
-            QListWidget#manifestGroupList::item {{
-                border-radius: 4px;
-            }}
-            QListWidget#manifestGroupList::item:selected {{
-                background-color: rgba(124, 106, 247, 70);
-            }}
-            QListWidget#manifestGroupList::item:hover:!selected {{
-                background-color: rgba(124, 106, 247, 30);
-            }}
-            QGroupBox#manifestGroupBox {{
-                border: 1px solid {_COL_MUTED};
-                border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 12px;
-                font-weight: bold;
-            }}
-            QGroupBox#manifestGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 4px;
-                color: {_COL_TEXT};
-            }}
+            QListWidget#manifestGroupList::item:selected {{ background: transparent; }}
             QTableWidget#manifestTable {{
                 background-color: {_COL_BG};
                 border: 1px solid {_COL_MUTED};

@@ -1,15 +1,23 @@
-"""Master-detail group/file-manifest editor.
+"""Flat group list + per-group file-manifest editor dialog.
 
 Self-contained widget: owns its own data (group name -> list of file paths)
 and UI, exposes a narrow read/write API. The rest of the app doesn't know or
 care how groups are built — it just reads `groups()` when it needs them.
 
-Layout: groups on top (name, file-count badge, ✕ remove), selected group's
-file manifest below as a sortable Folder | Filename table — filenames get a
-wide column with right-elision, paths show only the parent directory with
-left-elision (so the directory closest to the file stays visible) and sort
-by full path (directory, then filename). Select a group, see and edit its
-files directly in place. No dialogs.
+Layout: a single flat list of named groups (name, file-count badge, "Files…"
+button, ✕ remove). Two creation paths sit below it:
+  - "Add from folder…" — picks a folder, the group is built from every
+    matching file in it (one click for the common case: organised labs
+    where each condition already lives in its own folder)
+  - "Add from files…" — opens the file picker directly and builds the group
+    from whatever's selected (the escape hatch for messy/scattered layouts)
+Either way the group is born already holding files — there's no such thing
+as an empty group to fill in later — and its name is immediately offered up
+for editing (pre-filled from the folder name, or "Group" for manual picks).
+
+Click a group's name at any time to rename it in place. Click "Files…" to
+open a small modal table (Folder | Filename, sortable, add/remove) for that
+group — kept out of the main view so the always-visible list stays simple.
 """
 
 from __future__ import annotations
@@ -21,8 +29,8 @@ from PyQt6.QtGui import QMouseEvent, QPalette
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QDialog,
     QFileDialog,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -49,22 +57,22 @@ from PyQt6.QtWidgets import (
 # has real value for users whose files come from messy/inconsistent folder
 # layouts, and no simpler Qt mechanism achieves either — `textElideMode` is
 # view-global (not per-column) and `QTableWidgetItem` sorting is by display
-# text unless you override `__lt__`. If the table ever needs to be ripped out
-# or simplified, these three classes plus their wiring in `_build_manifest_row`
-# / `_refresh_manifest_table` are the self-contained unit to remove.
+# text unless you override `__lt__`. If the manifest dialog ever needs to be
+# ripped out or simplified, these three classes plus their wiring in
+# `_ManifestDialog` are the self-contained unit to remove.
 # -----------------------------------------------------------------------------
 
 
-class _DoubleClickLabel(QLabel):
-    """A QLabel that emits `doubleClicked` — used so a single click on a
-    group name passes through to row selection, and only an explicit
-    double-click opens the rename field."""
+class _ClickableLabel(QLabel):
+    """A QLabel that emits `clicked` on a single press — used so clicking a
+    group's name opens it for renaming immediately (there's no row-selection
+    state to protect against accidental clicks anymore)."""
 
-    doubleClicked = pyqtSignal()
+    clicked = pyqtSignal()
 
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
-        self.doubleClicked.emit()
-        super().mouseDoubleClickEvent(event)
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+        self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class _ElideLeftDelegate(QStyledItemDelegate):
@@ -142,6 +150,125 @@ _BADGE_WIDTH = 44
 _REMOVE_BTN_WIDTH = 28
 
 
+def _ext_label(file_exts: set[str]) -> str:
+    return "CSV" if file_exts == CSV_EXTS else "video"
+
+
+def _file_dialog_filter(file_exts: set[str]) -> str:
+    label = "CSV" if file_exts == CSV_EXTS else "Video"
+    pattern = " ".join(f"*{ext}" for ext in sorted(file_exts))
+    return f"{label} files ({pattern})"
+
+
+class _ManifestDialog(QDialog):
+    """Modal Folder | Filename editor for one group's file list.
+
+    Deliberately separate from the main group list — keeping the table (the
+    "busy" part of this UI) out of the always-visible view was the whole
+    point of this redesign; it only needs to exist while the user is actively
+    curating one group's files."""
+
+    def __init__(self, panel: GroupManifestPanel, group_name: str) -> None:
+        super().__init__(panel)
+        self._panel = panel
+        self._group_name = group_name
+        self.setWindowTitle(group_name)
+        # Top-level windows (QDialog included) do NOT inherit a parent
+        # widget's `setStyleSheet()` — only the QApplication-wide one — so
+        # without this, the table/buttons/tooltips inside fall back to plain
+        # system (light) styling while everything else in the app is dark.
+        self.setStyleSheet(panel.window().styleSheet())
+        self.resize(560, 380)
+        self._build_ui()
+        self._refresh_table()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        # Two columns: Folder (parent directory only, elide-left — keeps the
+        # directory closest to the file, the most distinguishing part,
+        # visible) and Filename (wide, elide-right). Sorting the Folder
+        # column follows the *full* path so entries group by directory and
+        # then by filename within it.
+        self._table = QTableWidget(0, 2)
+        self._table.setObjectName("manifestTable")
+        self._table.setHorizontalHeaderLabels(["Folder", "Filename"])
+        self._table.setShowGrid(False)
+        self._table.setSortingEnabled(True)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setItemDelegateForColumn(0, _ElideLeftDelegate(self._table))
+        self._table.itemSelectionChanged.connect(self._refresh_remove_enabled)
+        header = self._table.horizontalHeader()
+        # Folder is the resizable column (its right edge — the boundary
+        # between the two columns — is where the drag handle naturally sits);
+        # Filename stretches to fill whatever's left, so there's no dangling
+        # resize handle floating at the table's far-right edge.
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setStretchLastSection(False)
+        header.resizeSection(0, 260)
+        layout.addWidget(self._table)
+
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("Add files…")
+        add_btn.setObjectName("secondaryButton")
+        add_btn.setToolTip(
+            "Select multiple files at once, or press Ctrl+A / Cmd+A\n"
+            "in the dialog to grab everything in a folder."
+        )
+        add_btn.clicked.connect(self._add_files)
+        self._remove_btn = QPushButton("Remove selected")
+        self._remove_btn.setObjectName("secondaryButton")
+        self._remove_btn.setEnabled(False)
+        self._remove_btn.clicked.connect(self._remove_selected)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(self._remove_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+    def _refresh_remove_enabled(self) -> None:
+        self._remove_btn.setEnabled(bool(self._table.selectedIndexes()))
+
+    def _refresh_table(self) -> None:
+        paths = self._panel._manifests.get(self._group_name, [])
+
+        self._table.setSortingEnabled(False)
+        self._table.setRowCount(len(paths))
+        for row, path in enumerate(paths):
+            full = str(path)
+            parent_text = str(path.parent) + "/"  # trailing slash marks it as a directory
+
+            # Right-aligned so the elided ("…/closest/dir/") tail consistently
+            # hugs the same edge the eliding cuts toward.
+            path_item = _PathSortItem(parent_text, sort_key=full)
+            path_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            path_item.setToolTip(str(path.parent))
+            name_item = _PlainTextSortItem(path.name)
+            name_item.setToolTip(path.name)
+            self._table.setItem(row, 0, path_item)
+            self._table.setItem(row, 1, name_item)
+        self._table.setSortingEnabled(True)
+
+    def _add_files(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Select files to add", filter=_file_dialog_filter(self._panel._file_exts)
+        )
+        if self._panel._add_paths(self._group_name, [Path(f) for f in files]):
+            self._refresh_table()
+
+    def _remove_selected(self) -> None:
+        rows = sorted({idx.row() for idx in self._table.selectedIndexes()}, reverse=True)
+        if not rows:
+            return
+        manifest = self._panel._manifests[self._group_name]
+        for row in rows:
+            del manifest[row]
+        self._refresh_table()
+        self._panel._on_manifest_changed(self._group_name)
+
+
 class GroupManifestPanel(QWidget):
     """Define named groups, each holding an explicit list of file paths."""
 
@@ -173,122 +300,120 @@ class GroupManifestPanel(QWidget):
         """Empty every group's file list, keeping the group names/structure intact."""
         for name in self._manifests:
             self._manifests[name] = []
-        self._refresh_manifest_table()
         self._refresh_all_badges()
         self.files_changed.emit()
 
     # ── UI construction ─────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
+        # Plain QWidgets pick up the app-wide `QWidget { background-color }`
+        # rule, which is *darker* than the panel they sit on — without an
+        # override the section reads as one big dark box swallowing its own
+        # heading rather than sitting flush on the panel like its siblings.
+        # NOTE: deliberately an object-name rule in the central stylesheet
+        # (see window.py `_apply_stylesheet`, `#groupManifestPanel`), not a
+        # local `setStyleSheet()` call here — a widget-instance stylesheet
+        # creates its own cascade scope that silently breaks descendants'
+        # object-name styling and tooltip theming (cost a few hours to find).
+        self.setObjectName("groupManifestPanel")
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._build_group_row(), stretch=1)
-        layout.addWidget(self._build_manifest_row(), stretch=2)
-
-    def _build_group_row(self) -> QWidget:
-        panel = QWidget()
-        col = QVBoxLayout(panel)
-        col.setContentsMargins(0, 0, 0, 0)
 
         groups_label = QLabel("Groups")
         groups_label.setObjectName("sectionTitle")
-        col.addWidget(groups_label)
+        layout.addWidget(groups_label)
 
         self._group_list = QListWidget()
         self._group_list.setObjectName("manifestGroupList")
-        self._group_list.currentItemChanged.connect(self._on_group_selected)
-        col.addWidget(self._group_list)
+        layout.addWidget(self._group_list, stretch=1)
 
-        add_btn = QPushButton("+ Add Group")
-        add_btn.setObjectName("secondaryButton")
-        add_btn.clicked.connect(self._add_group)
-        col.addWidget(add_btn)
-
-        return panel
-
-    def _build_manifest_row(self) -> QWidget:
-        # A titled box framing the table + buttons as belonging to the
-        # selected group — the title *is* the group's name, so the
-        # connection is structural rather than something to read and infer.
-        self._detail_box = QGroupBox("Select a group to manage its files")
-        self._detail_box.setObjectName("manifestGroupBox")
-        col = QVBoxLayout(self._detail_box)
-
-        # Two columns: Filename (wide, elide-right — the part users scan
-        # first) and Path (parent directory only, elide-left — keeps the
-        # directory closest to the file, the most distinguishing part,
-        # visible). Sorting the Folder column follows the *full* path so
-        # entries group by directory and then by filename within it.
-        self._manifest_table = QTableWidget(0, 2)
-        self._manifest_table.setObjectName("manifestTable")
-        self._manifest_table.setHorizontalHeaderLabels(["Folder", "Filename"])
-        self._manifest_table.setShowGrid(False)
-        self._manifest_table.setSortingEnabled(True)
-        self._manifest_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._manifest_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._manifest_table.verticalHeader().setVisible(False)
-        self._manifest_table.setItemDelegateForColumn(0, _ElideLeftDelegate(self._manifest_table))
-        self._manifest_table.itemSelectionChanged.connect(self._refresh_remove_files_enabled)
-        header = self._manifest_table.horizontalHeader()
-        # Path is the resizable column (its right edge — the boundary between
-        # the two columns — is where the drag handle naturally sits);
-        # Filename stretches to fill whatever's left, so there's no dangling
-        # resize handle floating at the table's far-right edge.
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setStretchLastSection(False)
-        header.resizeSection(0, 260)
-        col.addWidget(self._manifest_table)
-
-        btn_row = QHBoxLayout()
-        self._add_files_btn = QPushButton("Add files…")
-        self._add_files_btn.setObjectName("secondaryButton")
-        self._add_files_btn.setToolTip(
-            "Select multiple files at once, or press Ctrl+A / Cmd+A\n"
-            "in the dialog to grab everything in a folder."
+        add_row = QHBoxLayout()
+        add_row.setSpacing(6)
+        from_folder_btn = QPushButton("+ Add from folder…")
+        from_folder_btn.setObjectName("secondaryButton")
+        from_folder_btn.setToolTip(
+            "Build a group from every matching file already sitting\n"
+            "in one folder — the one-click option if your files are organised."
         )
-        self._add_files_btn.clicked.connect(self._add_files)
-        self._remove_files_btn = QPushButton("Remove selected")
-        self._remove_files_btn.setObjectName("secondaryButton")
-        self._remove_files_btn.clicked.connect(self._remove_selected_files)
-        btn_row.addWidget(self._add_files_btn)
-        btn_row.addWidget(self._remove_files_btn)
-        col.addLayout(btn_row)
+        from_folder_btn.clicked.connect(self._add_from_folder)
+        from_files_btn = QPushButton("+ Add from files…")
+        from_files_btn.setObjectName("secondaryButton")
+        from_files_btn.setToolTip(
+            "Pick individual files yourself — for groups whose files\n"
+            "are scattered across several folders."
+        )
+        from_files_btn.clicked.connect(self._add_from_files)
+        add_row.addWidget(from_folder_btn)
+        add_row.addWidget(from_files_btn)
+        layout.addLayout(add_row)
 
-        self._detail_box.setEnabled(False)
-        self._remove_files_btn.setEnabled(False)
-        return self._detail_box
+    # ── Group creation ───────────────────────────────────────────────────────
 
-    # ── Group list ───────────────────────────────────────────────────────────
+    def _add_from_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Select a folder")
+        if not folder:
+            return
+        folder_path = Path(folder)
+        try:
+            paths = sorted(
+                p
+                for p in folder_path.iterdir()
+                if p.is_file()
+                and not p.name.startswith(".")
+                and p.suffix.lower() in self._file_exts
+            )
+        except (PermissionError, OSError):
+            paths = []
 
-    def _add_group(self) -> None:
-        base = "Group"
-        name = base
+        if not paths:
+            QMessageBox.information(
+                self,
+                "No matching files",
+                f'"{folder_path.name}" contains no {_ext_label(self._file_exts)} files.\n'
+                "Pick a different folder, or add files manually instead.",
+            )
+            return
+        self._create_group(default_name=folder_path.name, paths=paths)
+
+    def _add_from_files(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Select files", filter=_file_dialog_filter(self._file_exts)
+        )
+        if not files:
+            return
+        self._create_group(default_name="Group", paths=[Path(f) for f in files])
+
+    def _create_group(self, default_name: str, paths: list[Path]) -> None:
+        """Groups are always born holding files — naming comes after, as a
+        "rename this thing you just made" step (pre-filled and ready to
+        type over), since an empty group never makes sense on its own."""
+        name = default_name
         suffix = 2
         while name in self._manifests:
-            name = f"{base} {suffix}"
+            name = f"{default_name} {suffix}"
             suffix += 1
 
         self._manifests[name] = []
         item, item_widget = self._build_group_item(name)
-        self._group_list.setCurrentItem(item)
         self.group_added.emit(name)
-
-        # New group goes straight into naming, text pre-selected so typing replaces it.
+        self._add_paths(name, paths)
         self._begin_rename(item_widget)
 
+    # ── Group list ───────────────────────────────────────────────────────────
+
     def _build_group_item(self, name: str) -> tuple[QListWidgetItem, QWidget]:
-        """Build a group row: name (label, switches to an edit field on
-        double-click — never a live text field, so single clicks
-        unambiguously select the row), file-count badge, ✕ remove."""
+        """Build a group row: name (label, click to rename — there's no
+        row-selection state to protect, so a single click is unambiguous),
+        file-count badge, "Files…" (opens the manifest dialog), ✕ remove."""
         item_widget = QWidget()
         row = QHBoxLayout(item_widget)
         row.setContentsMargins(4, 2, 4, 2)
         row.setSpacing(6)
 
-        name_lbl = _DoubleClickLabel(name)
+        name_lbl = _ClickableLabel(name)
         name_lbl.setStyleSheet(f"color: {_COL_TEXT}; padding: 3px 4px;")
-        name_lbl.doubleClicked.connect(lambda: self._begin_rename(item_widget))
+        name_lbl.clicked.connect(lambda: self._begin_rename(item_widget))
 
         name_edit = QLineEdit(name)
         name_edit.setFrame(False)
@@ -309,6 +434,11 @@ class GroupManifestPanel(QWidget):
         badge_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px; font-weight: bold;")
         row.addWidget(badge_lbl)
 
+        files_btn = QPushButton("Edit")
+        files_btn.setObjectName("secondaryButton")
+        files_btn.clicked.connect(lambda: self._open_manifest_dialog(item_widget._name))
+        row.addWidget(files_btn)
+
         remove_btn = QPushButton("✕")
         remove_btn.setObjectName("removeButton")
         remove_btn.setFixedWidth(_REMOVE_BTN_WIDTH)
@@ -328,10 +458,10 @@ class GroupManifestPanel(QWidget):
         self._update_group_badge(item_widget)
         return item, item_widget
 
+    def _open_manifest_dialog(self, name: str) -> None:
+        _ManifestDialog(self, name).exec()
+
     def _begin_rename(self, item_widget: QWidget) -> None:
-        idx = self._list_index(item_widget)
-        if idx is not None:
-            self._group_list.setCurrentRow(idx)
         item_widget._name_edit.setText(item_widget._name)
         item_widget._name_stack.setCurrentWidget(item_widget._name_edit)
         item_widget._name_edit.setFocus()
@@ -361,8 +491,6 @@ class GroupManifestPanel(QWidget):
         item_widget._name = new_name
         item_widget._name_lbl.setText(new_name)
         self.group_renamed.emit(old_name, new_name)
-        if self._selected_group_name() == new_name:
-            self._detail_box.setTitle(new_name)
 
     def _remove_group(self, item_widget: QWidget) -> None:
         name = item_widget._name
@@ -390,30 +518,11 @@ class GroupManifestPanel(QWidget):
                 return i
         return None
 
-    def _on_group_selected(self, current: QListWidgetItem | None, _previous) -> None:
-        self._refresh_manifest_table()
-
-        name = self._selected_group_name()
-        self._detail_box.setEnabled(name is not None)
-        self._detail_box.setTitle(name if name else "Select a group to manage its files")
-        self._refresh_remove_files_enabled()
-
-    def _refresh_remove_files_enabled(self) -> None:
-        """'Remove selected' is only meaningful once rows are actually selected."""
-        self._remove_files_btn.setEnabled(bool(self._manifest_table.selectedIndexes()))
-
-    def _selected_group_name(self) -> str | None:
-        item = self._group_list.currentItem()
-        if item is None:
-            return None
-        widget = self._group_list.itemWidget(item)
-        return widget._name if widget else None
-
     # ── File-count badges ────────────────────────────────────────────────────
 
     def _update_group_badge(self, item_widget: QWidget) -> None:
         count = len(self._manifests[item_widget._name])
-        ext_label = "CSV" if self._file_exts == CSV_EXTS else "video"
+        ext_label = _ext_label(self._file_exts)
 
         if count == 0:
             colour, text = _COL_ERROR, "0 ⚠"
@@ -437,49 +546,25 @@ class GroupManifestPanel(QWidget):
             if widget is not None:
                 self._update_group_badge(widget)
 
-    # ── Manifest table (detail view) ─────────────────────────────────────────
+    def _badge_widget_for(self, name: str) -> QWidget | None:
+        for i in range(self._group_list.count()):
+            widget = self._group_list.itemWidget(self._group_list.item(i))
+            if widget is not None and widget._name == name:
+                return widget
+        return None
 
-    def _refresh_manifest_table(self) -> None:
-        name = self._selected_group_name()
-        paths = self._manifests.get(name, []) if name else []
+    # ── Manifest editing (called from _ManifestDialog and group creation) ────
 
-        self._manifest_table.setSortingEnabled(False)
-        self._manifest_table.setRowCount(len(paths))
-        for row, path in enumerate(paths):
-            full = str(path)
-            parent_text = str(path.parent) + "/"  # trailing slash marks it as a directory
+    def _on_manifest_changed(self, group_name: str) -> None:
+        if (w := self._badge_widget_for(group_name)) is not None:
+            self._update_group_badge(w)
+        self.files_changed.emit()
 
-            # Display only the parent dir (filename lives in its own column);
-            # sort by the full path so directory-then-filename ordering holds.
-            # Right-aligned so the elided ("…/closest/dir/") tail consistently
-            # hugs the same edge the eliding cuts toward — strictly left-elide,
-            # no left/right mixing as the column is resized.
-            path_item = _PathSortItem(parent_text, sort_key=full)
-            path_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            path_item.setToolTip(str(path.parent))
-            name_item = _PlainTextSortItem(path.name)
-            name_item.setToolTip(path.name)
-            self._manifest_table.setItem(row, 0, path_item)
-            self._manifest_table.setItem(row, 1, name_item)
-        self._manifest_table.setSortingEnabled(True)
-
-    # ── Adding files ─────────────────────────────────────────────────────────
-
-    def _add_files(self) -> None:
-        name = self._selected_group_name()
-        if name is None:
-            return
-        ext_label = "CSV" if self._file_exts == CSV_EXTS else "Video"
-        pattern = " ".join(f"*{ext}" for ext in sorted(self._file_exts))
-        files, _ = QFileDialog.getOpenFileNames(
-            self, "Select files to add", filter=f"{ext_label} files ({pattern})"
-        )
-        self._add_paths(name, [Path(f) for f in files])
-
-    def _add_paths(self, group_name: str, paths: list[Path]) -> None:
-        """Shared add routine for both entry points — same dedup, same feedback."""
+    def _add_paths(self, group_name: str, paths: list[Path]) -> bool:
+        """Shared add routine for both entry points — same dedup, same
+        feedback. Returns True if anything was actually added."""
         if not paths:
-            return
+            return False
 
         manifest = self._manifests[group_name]
         existing_in_group = set(manifest)
@@ -494,7 +579,7 @@ class GroupManifestPanel(QWidget):
                 reply = QMessageBox.question(
                     self,
                     "File already in another group",
-                    f'"{path.name}" is already in group "{other_group}".\n'
+                    f'This file is already in group "{other_group}":\n\n{path}\n\n'
                     f'Add it to "{group_name}" too?',
                 )
                 if reply != QMessageBox.StandardButton.Yes:
@@ -505,39 +590,11 @@ class GroupManifestPanel(QWidget):
             added += 1
 
         if added:
-            self._refresh_manifest_table()
-            if (w := self._badge_widget_for(group_name)) is not None:
-                self._update_group_badge(w)
-            self.files_changed.emit()
-
-    def _badge_widget_for(self, name: str) -> QWidget | None:
-        for i in range(self._group_list.count()):
-            widget = self._group_list.itemWidget(self._group_list.item(i))
-            if widget is not None and widget._name == name:
-                return widget
-        return None
+            self._on_manifest_changed(group_name)
+        return added > 0
 
     def _group_containing(self, path: Path, *, exclude: str) -> str | None:
         for name, paths in self._manifests.items():
             if name != exclude and path in paths:
                 return name
         return None
-
-    # ── Removing files ───────────────────────────────────────────────────────
-
-    def _remove_selected_files(self) -> None:
-        name = self._selected_group_name()
-        if name is None:
-            return
-        rows = sorted({idx.row() for idx in self._manifest_table.selectedIndexes()}, reverse=True)
-        if not rows:
-            return
-
-        manifest = self._manifests[name]
-        for row in rows:
-            del manifest[row]
-
-        self._refresh_manifest_table()
-        if (w := self._badge_widget_for(name)) is not None:
-            self._update_group_badge(w)
-        self.files_changed.emit()
