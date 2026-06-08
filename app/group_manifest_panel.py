@@ -5,7 +5,7 @@ and UI, exposes a narrow read/write API. The rest of the app doesn't know or
 care how groups are built — it just reads `groups()` when it needs them.
 
 Layout: groups on top (name, file-count badge, ✕ remove), selected group's
-file manifest below as a sortable Filename | Path table — filenames get a
+file manifest below as a sortable Folder | Filename table — filenames get a
 wide column with right-elision, paths show only the parent directory with
 left-elision (so the directory closest to the file stays visible) and sort
 by full path (directory, then filename). Select a group, see and edit its
@@ -60,7 +60,7 @@ class _ElideLeftDelegate(QStyledItemDelegate):
     of a path — stays visible rather than the drive root.
 
     `option.textElideMode` is a per-*view* setting, not per-column, so the
-    only way to get left-eliding on just the Path column is to compute and
+    only way to get left-eliding on just the Folder column is to compute and
     paint the elided text by hand here (the style still paints the
     background/selection/focus chrome via CE_ItemViewItem as normal)."""
 
@@ -90,7 +90,7 @@ class _ElideLeftDelegate(QStyledItemDelegate):
 
 class _PathSortItem(QTableWidgetItem):
     """A table item whose sort order follows a separate full-path key rather
-    than its displayed text — so sorting the Path column (which displays only
+    than its displayed text — so sorting the Folder column (which displays only
     the parent directory) groups by directory *and* then by filename within
     it, matching what a user scanning the column would expect."""
 
@@ -101,6 +101,18 @@ class _PathSortItem(QTableWidgetItem):
     def __lt__(self, other: object) -> bool:  # type: ignore[override]
         if isinstance(other, _PathSortItem):
             return self._sort_key < other._sort_key
+        return super().__lt__(other)
+
+
+class _PlainTextSortItem(QTableWidgetItem):
+    """Compares with plain Python string ordering — guarantees the Filename
+    column sorts by exactly the same rule as the Folder column's filename
+    tie-break (Qt's built-in comparison may use locale-aware/case-folding
+    collation that subtly disagrees with a plain string comparison)."""
+
+    def __lt__(self, other: object) -> bool:  # type: ignore[override]
+        if isinstance(other, QTableWidgetItem):
+            return self.text() < other.text()
         return super().__lt__(other)
 
 
@@ -187,10 +199,10 @@ class GroupManifestPanel(QWidget):
         # Two columns: Filename (wide, elide-right — the part users scan
         # first) and Path (parent directory only, elide-left — keeps the
         # directory closest to the file, the most distinguishing part,
-        # visible). Sorting the Path column follows the *full* path so
+        # visible). Sorting the Folder column follows the *full* path so
         # entries group by directory and then by filename within it.
         self._manifest_table = QTableWidget(0, 2)
-        self._manifest_table.setHorizontalHeaderLabels(["Path", "Filename"])
+        self._manifest_table.setHorizontalHeaderLabels(["Folder", "Filename"])
         self._manifest_table.setSortingEnabled(True)
         self._manifest_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._manifest_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -422,8 +434,8 @@ class GroupManifestPanel(QWidget):
             path_item = _PathSortItem(parent_text, sort_key=full)
             path_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             path_item.setToolTip(str(path.parent))
-            name_item = QTableWidgetItem(path.name)
-            name_item.setToolTip(full)
+            name_item = _PlainTextSortItem(path.name)
+            name_item.setToolTip(path.name)
             self._manifest_table.setItem(row, 0, path_item)
             self._manifest_table.setItem(row, 1, name_item)
         self._manifest_table.setSortingEnabled(True)
