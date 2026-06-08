@@ -5,18 +5,22 @@ and UI, exposes a narrow read/write API. The rest of the app doesn't know or
 care how groups are built — it just reads `groups()` when it needs them.
 
 Layout: groups on top (name, file-count badge, ✕ remove), selected group's
-file manifest below as a sortable Filename | Path table, full width — select
-a group, see and edit its files directly in place. No dialogs.
+file manifest below as a sortable Filename | Path table — filenames get a
+wide column with right-elision, paths show only the parent directory with
+left-elision (so the directory closest to the file stays visible) and sort
+by full path (directory, then filename). Select a group, see and edit its
+files directly in place. No dialogs.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QMouseEvent
+from PyQt6.QtCore import QModelIndex, Qt, pyqtSignal
+from PyQt6.QtGui import QMouseEvent, QPalette
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -28,6 +32,9 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -45,6 +52,56 @@ class _DoubleClickLabel(QLabel):
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
         self.doubleClicked.emit()
         super().mouseDoubleClickEvent(event)
+
+
+class _ElideLeftDelegate(QStyledItemDelegate):
+    """Elides long text from the left ("…/closest/dir/") instead of the
+    right, so the directory nearest the file — the most distinguishing part
+    of a path — stays visible rather than the drive root.
+
+    `option.textElideMode` is a per-*view* setting, not per-column, so the
+    only way to get left-eliding on just the Path column is to compute and
+    paint the elided text by hand here (the style still paints the
+    background/selection/focus chrome via CE_ItemViewItem as normal)."""
+
+    def paint(self, painter, option: QStyleOptionViewItem, index: QModelIndex) -> None:  # type: ignore[override]
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text = opt.text
+        opt.text = ""
+
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
+
+        text_rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, opt.widget)
+        text_rect.adjust(4, 0, -4, 0)
+        elided = opt.fontMetrics.elidedText(text, Qt.TextElideMode.ElideLeft, text_rect.width())
+
+        role = (
+            QPalette.ColorRole.HighlightedText
+            if opt.state & QStyle.StateFlag.State_Selected
+            else QPalette.ColorRole.Text
+        )
+        painter.save()
+        painter.setPen(opt.palette.color(QPalette.ColorGroup.Active, role))
+        painter.drawText(text_rect, int(opt.displayAlignment), elided)
+        painter.restore()
+
+
+class _PathSortItem(QTableWidgetItem):
+    """A table item whose sort order follows a separate full-path key rather
+    than its displayed text — so sorting the Path column (which displays only
+    the parent directory) groups by directory *and* then by filename within
+    it, matching what a user scanning the column would expect."""
+
+    def __init__(self, display_text: str, sort_key: str) -> None:
+        super().__init__(display_text)
+        self._sort_key = sort_key
+
+    def __lt__(self, other: object) -> bool:  # type: ignore[override]
+        if isinstance(other, _PathSortItem):
+            return self._sort_key < other._sort_key
+        return super().__lt__(other)
 
 
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
@@ -127,16 +184,28 @@ class GroupManifestPanel(QWidget):
         self._detail_box = QGroupBox("Select a group to manage its files")
         col = QVBoxLayout(self._detail_box)
 
+        # Two columns: Filename (wide, elide-right — the part users scan
+        # first) and Path (parent directory only, elide-left — keeps the
+        # directory closest to the file, the most distinguishing part,
+        # visible). Sorting the Path column follows the *full* path so
+        # entries group by directory and then by filename within it.
         self._manifest_table = QTableWidget(0, 2)
-        self._manifest_table.setHorizontalHeaderLabels(["Filename", "Path"])
+        self._manifest_table.setHorizontalHeaderLabels(["Path", "Filename"])
         self._manifest_table.setSortingEnabled(True)
         self._manifest_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._manifest_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._manifest_table.verticalHeader().setVisible(False)
+        self._manifest_table.setItemDelegateForColumn(0, _ElideLeftDelegate(self._manifest_table))
         self._manifest_table.itemSelectionChanged.connect(self._refresh_remove_files_enabled)
         header = self._manifest_table.horizontalHeader()
+        # Path is the resizable column (its right edge — the boundary between
+        # the two columns — is where the drag handle naturally sits);
+        # Filename stretches to fill whatever's left, so there's no dangling
+        # resize handle floating at the table's far-right edge.
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setStretchLastSection(False)
+        header.resizeSection(0, 260)
         col.addWidget(self._manifest_table)
 
         btn_row = QHBoxLayout()
@@ -342,12 +411,21 @@ class GroupManifestPanel(QWidget):
         self._manifest_table.setSortingEnabled(False)
         self._manifest_table.setRowCount(len(paths))
         for row, path in enumerate(paths):
+            full = str(path)
+            parent_text = str(path.parent) + "/"  # trailing slash marks it as a directory
+
+            # Display only the parent dir (filename lives in its own column);
+            # sort by the full path so directory-then-filename ordering holds.
+            # Right-aligned so the elided ("…/closest/dir/") tail consistently
+            # hugs the same edge the eliding cuts toward — strictly left-elide,
+            # no left/right mixing as the column is resized.
+            path_item = _PathSortItem(parent_text, sort_key=full)
+            path_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            path_item.setToolTip(str(path.parent))
             name_item = QTableWidgetItem(path.name)
-            name_item.setToolTip(str(path))
-            path_item = QTableWidgetItem(str(path.parent))
-            path_item.setToolTip(str(path))
-            self._manifest_table.setItem(row, 0, name_item)
-            self._manifest_table.setItem(row, 1, path_item)
+            name_item.setToolTip(full)
+            self._manifest_table.setItem(row, 0, path_item)
+            self._manifest_table.setItem(row, 1, name_item)
         self._manifest_table.setSortingEnabled(True)
 
     # ── Adding files ─────────────────────────────────────────────────────────
