@@ -41,6 +41,19 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+# --- REVIEWED 2026-06-08: kept deliberately, not oversights -----------------
+# `_ElideLeftDelegate`, `_PathSortItem` and `_PlainTextSortItem` below are the
+# most "custom Qt internals"-heavy code in this file. Considered ripping them
+# out for simplicity; kept because the UX they buy (resize the Folder column
+# and watch paths reveal live, sort by path *or* by filename independently)
+# has real value for users whose files come from messy/inconsistent folder
+# layouts, and no simpler Qt mechanism achieves either — `textElideMode` is
+# view-global (not per-column) and `QTableWidgetItem` sorting is by display
+# text unless you override `__lt__`. If the table ever needs to be ripped out
+# or simplified, these three classes plus their wiring in `_build_manifest_row`
+# / `_refresh_manifest_table` are the self-contained unit to remove.
+# -----------------------------------------------------------------------------
+
 
 class _DoubleClickLabel(QLabel):
     """A QLabel that emits `doubleClicked` — used so a single click on a
