@@ -190,13 +190,17 @@ class GroupManifestPanel(QWidget):
         col = QVBoxLayout(panel)
         col.setContentsMargins(0, 0, 0, 0)
 
-        col.addWidget(QLabel("Groups"))
+        groups_label = QLabel("Groups")
+        groups_label.setObjectName("sectionTitle")
+        col.addWidget(groups_label)
 
         self._group_list = QListWidget()
+        self._group_list.setObjectName("manifestGroupList")
         self._group_list.currentItemChanged.connect(self._on_group_selected)
         col.addWidget(self._group_list)
 
         add_btn = QPushButton("+ Add Group")
+        add_btn.setObjectName("secondaryButton")
         add_btn.clicked.connect(self._add_group)
         col.addWidget(add_btn)
 
@@ -207,6 +211,7 @@ class GroupManifestPanel(QWidget):
         # selected group — the title *is* the group's name, so the
         # connection is structural rather than something to read and infer.
         self._detail_box = QGroupBox("Select a group to manage its files")
+        self._detail_box.setObjectName("manifestGroupBox")
         col = QVBoxLayout(self._detail_box)
 
         # Two columns: Filename (wide, elide-right — the part users scan
@@ -215,7 +220,9 @@ class GroupManifestPanel(QWidget):
         # visible). Sorting the Folder column follows the *full* path so
         # entries group by directory and then by filename within it.
         self._manifest_table = QTableWidget(0, 2)
+        self._manifest_table.setObjectName("manifestTable")
         self._manifest_table.setHorizontalHeaderLabels(["Folder", "Filename"])
+        self._manifest_table.setShowGrid(False)
         self._manifest_table.setSortingEnabled(True)
         self._manifest_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._manifest_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -235,12 +242,14 @@ class GroupManifestPanel(QWidget):
 
         btn_row = QHBoxLayout()
         self._add_files_btn = QPushButton("Add files…")
+        self._add_files_btn.setObjectName("secondaryButton")
         self._add_files_btn.setToolTip(
             "Select multiple files at once, or press Ctrl+A / Cmd+A\n"
             "in the dialog to grab everything in a folder."
         )
         self._add_files_btn.clicked.connect(self._add_files)
         self._remove_files_btn = QPushButton("Remove selected")
+        self._remove_files_btn.setObjectName("secondaryButton")
         self._remove_files_btn.clicked.connect(self._remove_selected_files)
         btn_row.addWidget(self._add_files_btn)
         btn_row.addWidget(self._remove_files_btn)
@@ -301,6 +310,7 @@ class GroupManifestPanel(QWidget):
         row.addWidget(badge_lbl)
 
         remove_btn = QPushButton("✕")
+        remove_btn.setObjectName("removeButton")
         remove_btn.setFixedWidth(_REMOVE_BTN_WIDTH)
         remove_btn.clicked.connect(lambda: self._remove_group(item_widget))
         row.addWidget(remove_btn)

@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app import arenas as arena_pkg
+from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
 from app.runner import PipelineRunner
 from app.settings_dialog import EnvCheckWorker, SettingsDialog, get_version, parse_env_result
 
@@ -50,30 +51,9 @@ _COL_ERROR = "#f38ba8"
 _COL_WARN = "#fab387"
 _COL_SUCCESS = "#a6e3a1"
 
-_NAME_EDIT_WIDTH = 130
 _BADGE_WIDTH = 44
 _REMOVE_BTN_WIDTH = 28
 _COMP_PLACEHOLDER = "— select —"
-
-# ── File extensions counted per mode ──────────────────────────────────────────
-_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
-_CSV_EXTS = {".csv"}
-
-
-def _count_files(path: Path, skip_tracking: bool) -> tuple[int, bool]:
-    """Return (file_count, has_subdirs) for *path*, counting only relevant extensions."""
-    exts = _CSV_EXTS if skip_tracking else _VIDEO_EXTS
-    try:
-        entries = list(path.iterdir())
-        count = sum(
-            1
-            for e in entries
-            if e.is_file() and not e.name.startswith(".") and e.suffix.lower() in exts
-        )
-        has_subdirs = any(e.is_dir() for e in entries)
-        return count, has_subdirs
-    except (PermissionError, OSError):
-        return 0, False
 
 
 class _TooltipOnDisabled(QObject):
@@ -102,8 +82,8 @@ class MainWindow(QWidget):
 
         self._arenas = arena_pkg.discover()
         self._runner: PipelineRunner | None = None
-        self._groups: list[tuple[str, Path]] = []
         self._env_status: str = "checking"  # mirrors EnvCheckWorker result strings
+        self._last_source_is_csv: bool | None = None  # None until a source is first chosen
 
         root = QHBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -162,6 +142,16 @@ class MainWindow(QWidget):
         layout.addWidget(self._csv_radio)
         self._update_video_radio_availability()
 
+        sep0 = QFrame()
+        sep0.setFrameShape(QFrame.Shape.HLine)
+        sep0.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        layout.addWidget(sep0)
+
+        # ── Arena — its own peer section, not a Source sub-item ──────────────
+        arena_label = QLabel("Arena")
+        arena_label.setObjectName("sectionTitle")
+        layout.addWidget(arena_label)
+
         self._arena_combo = QComboBox()
         self._arena_combo.addItem("— select arena —", userData=None)
         for mod in self._arenas:
@@ -169,68 +159,46 @@ class MainWindow(QWidget):
         self._arena_combo.currentIndexChanged.connect(self._refresh_run_button)
         layout.addWidget(self._arena_combo)
 
-        sep0 = QFrame()
-        sep0.setFrameShape(QFrame.Shape.HLine)
-        sep0.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
-        layout.addWidget(sep0)
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.HLine)
+        sep1.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        layout.addWidget(sep1)
 
         # ── Groups — locked until a source is chosen above ───────────────────
         self._groups_section = QWidget()
         self._groups_section.setEnabled(False)
         group_col = QVBoxLayout(self._groups_section)
         group_col.setContentsMargins(0, 0, 0, 0)
-        group_col.setSpacing(8)
 
-        t1 = QLabel("Groups")
-        t1.setObjectName("sectionTitle")
-        group_col.addWidget(t1)
+        self._group_panel = GroupManifestPanel()
+        self._group_panel.group_added.connect(self._sync_comp_add)
+        self._group_panel.group_added.connect(self._refresh_run_button)
+        self._group_panel.group_removed.connect(self._sync_comp_remove)
+        self._group_panel.group_removed.connect(self._refresh_run_button)
+        self._group_panel.group_renamed.connect(self._sync_comp_rename)
+        self._group_panel.files_changed.connect(self._refresh_run_button)
+        group_col.addWidget(self._group_panel)
 
-        # Column headers — widths must mirror _add_group_row layout
-        headers = QWidget()
-        hdr_row = QHBoxLayout(headers)
-        hdr_row.setContentsMargins(6, 0, 4, 0)
-        hdr_row.setSpacing(6)
-        for text, width, stretch, align in [
-            ("Name", _NAME_EDIT_WIDTH, 0, Qt.AlignmentFlag.AlignLeft),
-            ("Path", 0, 1, Qt.AlignmentFlag.AlignLeft),
-            ("Files", _BADGE_WIDTH, 0, Qt.AlignmentFlag.AlignCenter),
-            ("", _REMOVE_BTN_WIDTH, 0, Qt.AlignmentFlag.AlignLeft),  # remove-btn column
-        ]:
-            lbl = QLabel(text)
-            lbl.setObjectName("colHeader")
-            lbl.setAlignment(align)
-            if width:
-                lbl.setFixedWidth(width)
-            else:
-                lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-            hdr_row.addWidget(lbl, stretch=stretch)
-        group_col.addWidget(headers)
+        layout.addWidget(self._groups_section, stretch=1)
 
-        self._group_list = QListWidget()
-        self._group_list.setObjectName("groupList")
-        group_col.addWidget(self._group_list, stretch=3)
+        return panel
 
-        add_btn = QPushButton("+ Add Group")
-        add_btn.setObjectName("secondaryButton")
-        add_btn.clicked.connect(self._add_group)
-        group_col.addWidget(add_btn)
-
-        layout.addWidget(self._groups_section, stretch=3)
-
-        # Separator
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
-        layout.addWidget(sep)
+    # ── Run panel ─────────────────────────────────────────────────────────────
+    def _build_run_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         # Comparisons section
-        t2 = QLabel("Comparisons")
-        t2.setObjectName("sectionTitle")
-        layout.addWidget(t2)
+        comp_label = QLabel("Comparisons")
+        comp_label.setObjectName("sectionTitle")
+        layout.addWidget(comp_label)
 
         self._comp_list = QListWidget()
         self._comp_list.setObjectName("groupList")
-        layout.addWidget(self._comp_list, stretch=2)
+        layout.addWidget(self._comp_list, stretch=1)
 
         comp_btns = QHBoxLayout()
         comp_btns.setSpacing(6)
@@ -245,15 +213,10 @@ class MainWindow(QWidget):
             comp_btns.addWidget(btn)
         layout.addLayout(comp_btns)
 
-        return panel
-
-    # ── Run panel ─────────────────────────────────────────────────────────────
-    def _build_run_panel(self) -> QWidget:
-        panel = QFrame()
-        panel.setObjectName("panel")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        layout.addWidget(sep)
 
         out_label = QLabel("Output folder")
         out_label.setObjectName("sectionTitle")
@@ -328,11 +291,36 @@ class MainWindow(QWidget):
     # ── Source ────────────────────────────────────────────────────────────────
     def _on_source_changed(self, _button: QRadioButton, checked: bool) -> None:
         """Unlock group-building once the user has committed to a file type —
-        groups can't be sensibly built before we know what should be in them."""
+        groups can't be sensibly built before we know what should be in them.
+
+        Switching afterwards (videos <-> CSVs) invalidates every existing
+        manifest, since the files no longer match the expected type — confirm
+        before clearing them, and revert the radio if the user backs out."""
         if not checked:
             return
+        is_csv = self._csv_radio.isChecked()
+
+        if self._last_source_is_csv is not None and self._last_source_is_csv != is_csv:
+            if any(self._group_panel.groups().values()):
+                answer = QMessageBox.question(
+                    self,
+                    "Switch source?",
+                    "Switching source clears every group's file list, since the\n"
+                    "files no longer match the new type. Continue?",
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    self._source_group.blockSignals(True)
+                    (self._csv_radio if self._last_source_is_csv else self._video_radio).setChecked(
+                        True
+                    )
+                    self._source_group.blockSignals(False)
+                    return
+            self._group_panel.clear_all_files()
+
+        self._last_source_is_csv = is_csv
+        self._group_panel.set_file_extensions(CSV_EXTS if is_csv else VIDEO_EXTS)
         self._groups_section.setEnabled(True)
-        self._refresh_group_file_counts()
+        self._refresh_run_button()
 
     def _update_video_radio_availability(self) -> None:
         """'Video files' requires a working tracking environment — grey the
@@ -353,115 +341,11 @@ class MainWindow(QWidget):
             self._video_radio.setEnabled(True)
             self._video_radio.setToolTip("")
 
-    # ── Group management ──────────────────────────────────────────────────────
-    def _add_group(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Select group folder")
-        if not folder:
-            return
-        path = Path(folder)
-
-        if path in [p for _, p in self._groups]:
-            QMessageBox.warning(
-                self, "Duplicate folder", f"The folder\n{path}\nis already in the list."
-            )
-            return
-
-        # Unique name: append _2, _3, … until no collision
-        base = path.name
-        name = base
-        existing = {n for n, _ in self._groups}
-        suffix = 2
-        while name in existing:
-            name = f"{base}_{suffix}"
-            suffix += 1
-
-        self._groups.append((name, path))
-        row_widget = self._add_group_row(name, path)
-        self._update_group_badge(row_widget, path)
-        self._sync_comp_add(name)
-        self._refresh_run_button()
-
-    def _add_group_row(self, name: str, path: Path) -> QWidget:
-        item_widget = QWidget()
-        row = QHBoxLayout(item_widget)
-        row.setContentsMargins(4, 2, 4, 2)
-        row.setSpacing(6)
-
-        name_edit = QLineEdit(name)
-        name_edit.setFrame(False)
-        name_edit.setFixedWidth(_NAME_EDIT_WIDTH)
-        name_edit.setStyleSheet(
-            f"background: transparent; color: {_COL_TEXT}; padding: 3px 4px; border: none;"
-        )
-        name_edit.editingFinished.connect(
-            lambda: self._rename_group(item_widget, name_edit, name_edit.text())
-        )
-        row.addWidget(name_edit)
-
-        path_str = str(path)
-        path_lbl = QLabel(path_str)
-        path_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px;")
-        path_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        path_lbl.setToolTip(path_str)
-        row.addWidget(path_lbl, stretch=1)
-
-        # File-count badge — colour/text set by _update_group_badge()
-        badge_lbl = QLabel("…")
-        badge_lbl.setFixedWidth(_BADGE_WIDTH)
-        badge_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px; font-weight: bold;")
-        row.addWidget(badge_lbl)
-
-        remove_btn = QPushButton("✕")
-        remove_btn.setFixedWidth(_REMOVE_BTN_WIDTH)
-        remove_btn.setObjectName("removeButton")
-        remove_btn.clicked.connect(lambda: self._remove_group(item_widget))
-        row.addWidget(remove_btn)
-
-        item_widget._badge_lbl = badge_lbl
-
-        item = QListWidgetItem()
-        item.setSizeHint(item_widget.sizeHint())
-        self._group_list.addItem(item)
-        self._group_list.setItemWidget(item, item_widget)
-        return item_widget
-
-    def _rename_group(self, item_widget: QWidget, name_edit: QLineEdit, new_name: str) -> None:
-        new_name = new_name.strip()
-        idx = self._list_index(self._group_list, item_widget)
-        if idx is None:
-            return
-        old_name, path = self._groups[idx]
-        if new_name == old_name:
-            return
-        if not new_name:
-            name_edit.setText(old_name)
-            return
-        existing = {n for i, (n, _) in enumerate(self._groups) if i != idx}
-        if new_name in existing:
-            QMessageBox.warning(
-                self, "Duplicate name", f'A group named "{new_name}" already exists.'
-            )
-            name_edit.setText(old_name)
-            return
-        self._groups[idx] = (new_name, path)
-        self._sync_comp_rename(old_name, new_name)
-        self._refresh_run_button()
-
-    def _remove_group(self, item_widget: QWidget) -> None:
-        idx = self._list_index(self._group_list, item_widget)
-        if idx is not None:
-            name, _ = self._groups[idx]
-            self._groups.pop(idx)
-            self._group_list.takeItem(idx)
-            self._sync_comp_remove(name)
-            self._refresh_run_button()
-
     # ── Comparison management ─────────────────────────────────────────────────
     def _all_pairs(self) -> None:
         while self._comp_list.count():
             self._comp_list.takeItem(0)
-        for a, b in itertools.combinations([n for n, _ in self._groups], 2):
+        for a, b in itertools.combinations(self._group_panel.groups(), 2):
             self._add_comp_row(a, b)
 
     def _remove_all_comparisons(self) -> None:
@@ -469,12 +353,12 @@ class MainWindow(QWidget):
             self._comp_list.takeItem(0)
 
     def _add_blank_comparison(self) -> None:
-        if not self._groups:
+        if not self._group_panel.groups():
             return
         self._add_comp_row()  # both combos start on placeholder
 
     def _add_comp_row(self, name_a: str | None = None, name_b: str | None = None) -> None:
-        group_names = [n for n, _ in self._groups]
+        group_names = list(self._group_panel.groups())
         if not group_names:
             return
 
@@ -537,7 +421,7 @@ class MainWindow(QWidget):
         for w in self._comp_rows():
             w._combo_a.addItem(new_name)
             w._combo_b.addItem(new_name)
-        for existing_name in [n for n, _ in self._groups if n != new_name]:
+        for existing_name in [n for n in self._group_panel.groups() if n != new_name]:
             self._add_comp_row(existing_name, new_name)
 
     def _sync_comp_remove(self, name: str) -> None:
@@ -610,44 +494,6 @@ class MainWindow(QWidget):
                 pairs.append((a, b))
         return pairs
 
-    # ── File count badges ─────────────────────────────────────────────────────
-    def _update_group_badge(self, row_widget: QWidget, path: Path) -> None:
-        """Refresh the file-count badge on a single group row."""
-        skip = self._csv_radio.isChecked()
-        count, has_subdirs = _count_files(path, skip)
-        ext_label = "CSV" if skip else "video"
-
-        if count == 0:
-            # Hard error — blocks the run button; same ⚠ symbol as warnings but red
-            colour = _COL_ERROR
-            text = "0 ⚠"
-            tip_parts = [
-                f"No {ext_label} files found.",
-                "Analysis cannot proceed until this folder contains the right files.",
-            ]
-        elif count < 5:
-            # Soft warning — run is allowed but flagged
-            colour = _COL_WARN
-            text = f"{count} ⚠"
-            tip_parts = [
-                f"Only {count} {ext_label} file(s) — results may be underpowered (expected ≥ 5)."
-            ]
-        else:
-            colour = _COL_SUCCESS
-            text = str(count)
-            tip_parts = [f"{count} {ext_label} file(s) found."]
-
-        if has_subdirs:
-            tip_parts.append("Subfolders detected — only top-level files are counted.")
-            if colour != _COL_ERROR:
-                colour = _COL_WARN
-                if "⚠" not in text:
-                    text = f"{text} ⚠"
-
-        row_widget._badge_lbl.setText(text)
-        row_widget._badge_lbl.setStyleSheet(f"color: {colour}; font-size: 11px; font-weight: bold;")
-        row_widget._badge_lbl.setToolTip("\n".join(tip_parts))
-
     def _update_output_warning(self) -> None:
         """Show an orange ⚠ badge next to the output folder if it is non-empty."""
         out_text = self._out_edit.text().strip()
@@ -664,16 +510,6 @@ class MainWindow(QWidget):
                 pass
         self._out_warn_lbl.setText("")
         self._out_warn_lbl.setToolTip("")
-
-    def _refresh_group_file_counts(self) -> None:
-        """Re-evaluate badges for every group row (called when skip_tracking changes)."""
-        for i in range(self._group_list.count()):
-            w = self._group_list.itemWidget(self._group_list.item(i))
-            if w is None or not hasattr(w, "_badge_lbl"):
-                continue
-            _, path = self._groups[i]
-            self._update_group_badge(w, path)
-        self._refresh_run_button()
 
     def _collect_warnings(self) -> list[str]:
         """Return soft-warning strings shown in the 'proceed anyway?' dialog.
@@ -695,24 +531,13 @@ class MainWindow(QWidget):
             except (PermissionError, OSError):
                 pass  # can't read the folder; ignore silently
 
-        skip = self._csv_radio.isChecked()
-        ext_label = "CSV" if skip else "video"
-
-        for i in range(self._group_list.count()):
-            w = self._group_list.itemWidget(self._group_list.item(i))
-            if w is None:
-                continue
-            name, path = self._groups[i]
-            count, has_subdirs = _count_files(path, skip)
-            # count == 0 is a hard error handled by the run button gate; skip here
-            if 0 < count < 5:
+        ext_label = "CSV" if self._csv_radio.isChecked() else "video"
+        for name, files in self._group_panel.groups().items():
+            # 0 files is a hard error handled by the run button gate; skip here
+            if 0 < len(files) < 5:
                 warnings.append(
-                    f'Group "{name}": only {count} {ext_label} file(s) — '
+                    f'Group "{name}": only {len(files)} {ext_label} file(s) — '
                     f"results may be underpowered (expected ≥ 5)."
-                )
-            if has_subdirs:
-                warnings.append(
-                    f'Group "{name}": subfolders detected — only top-level files are counted.'
                 )
 
         if not self._get_comparisons():
@@ -731,10 +556,11 @@ class MainWindow(QWidget):
 
     def _refresh_run_button(self) -> None:
         reasons: list[str] = []
+        groups = self._group_panel.groups()
 
         if self._arena_combo.currentData() is None:
             reasons.append("No arena selected.")
-        if not self._groups:
+        if not groups:
             reasons.append("No groups added.")
         if not self._out_edit.text().strip():
             reasons.append("No output folder set.")
@@ -749,13 +575,10 @@ class MainWindow(QWidget):
             )
 
         # Hard block: any group with zero relevant files
-        if self._groups:
-            skip = self._csv_radio.isChecked()
-            ext_label = "CSV" if skip else "video"
-            for name, path in self._groups:
-                count, _ = _count_files(path, skip)
-                if count == 0:
-                    reasons.append(f'Group "{name}" contains no {ext_label} files.')
+        ext_label = "CSV" if skip else "video"
+        for name, files in groups.items():
+            if not files:
+                reasons.append(f'Group "{name}" contains no {ext_label} files.')
 
         if self._runner is not None:
             # Pipeline is running — keep Cancel button enabled regardless of validation
@@ -780,7 +603,7 @@ class MainWindow(QWidget):
         if arena_mod is None:
             return
         output_dir = Path(self._out_edit.text().strip())
-        groups = {name: path for name, path in self._groups}
+        groups = self._group_panel.groups()
         comparisons = self._get_comparisons()
         skip_tracking = self._csv_radio.isChecked()
 
@@ -954,12 +777,6 @@ class MainWindow(QWidget):
                 letter-spacing: 1px;
                 text-transform: uppercase;
             }}
-            QLabel#colHeader {{
-                color: {_COL_MUTED};
-                font-size: 10px;
-                text-transform: uppercase;
-                letter-spacing: 1px;
-            }}
             QPushButton#primaryButton {{
                 background-color: {_COL_ACCENT};
                 color: white;
@@ -1009,6 +826,53 @@ class MainWindow(QWidget):
                 border-radius: 5px;
             }}
             QListWidget#groupList::item:selected {{ background: transparent; }}
+            QListWidget#manifestGroupList::item {{
+                border-radius: 4px;
+            }}
+            QListWidget#manifestGroupList::item:selected {{
+                background-color: rgba(124, 106, 247, 70);
+            }}
+            QListWidget#manifestGroupList::item:hover:!selected {{
+                background-color: rgba(124, 106, 247, 30);
+            }}
+            QGroupBox#manifestGroupBox {{
+                border: 1px solid {_COL_MUTED};
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 12px;
+                font-weight: bold;
+            }}
+            QGroupBox#manifestGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 4px;
+                color: {_COL_TEXT};
+            }}
+            QTableWidget#manifestTable {{
+                background-color: {_COL_BG};
+                border: 1px solid {_COL_MUTED};
+                border-radius: 5px;
+                gridline-color: transparent;
+            }}
+            QTableWidget#manifestTable::item {{
+                padding: 4px 8px;
+                border: none;
+            }}
+            QTableWidget#manifestTable::item:selected {{
+                background-color: rgba(124, 106, 247, 70);
+                color: {_COL_TEXT};
+            }}
+            QHeaderView::section {{
+                background-color: transparent;
+                color: {_COL_MUTED};
+                border: none;
+                border-bottom: 1px solid {_COL_SEP};
+                padding: 4px 8px;
+                font-size: 10px;
+                font-weight: bold;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }}
             QTextEdit#logBox {{
                 background-color: {_COL_BG};
                 border: 1px solid {_COL_MUTED};
