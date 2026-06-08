@@ -264,13 +264,7 @@ class MainWindow(QWidget):
         self._out_edit = QLineEdit()
         self._out_edit.setPlaceholderText("Choose output folder…")
         self._out_edit.textChanged.connect(self._refresh_run_button)
-        self._out_edit.textChanged.connect(self._update_output_warning)
         out_row.addWidget(self._out_edit)
-        self._out_warn_lbl = QLabel("")
-        self._out_warn_lbl.setFixedWidth(_BADGE_WIDTH)
-        self._out_warn_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._out_warn_lbl.setStyleSheet(f"color: {_COL_WARN}; font-size: 11px; font-weight: bold;")
-        out_row.addWidget(self._out_warn_lbl)
         out_browse = QPushButton("📁")
         out_browse.setFixedWidth(36)
         out_browse.clicked.connect(self._browse_output)
@@ -538,23 +532,6 @@ class MainWindow(QWidget):
                 pairs.append((a, b))
         return pairs
 
-    def _update_output_warning(self) -> None:
-        """Show an orange ⚠ badge next to the output folder if it is non-empty."""
-        out_text = self._out_edit.text().strip()
-        if out_text:
-            try:
-                p = Path(out_text)
-                if p.is_dir() and any(p.iterdir()):
-                    self._out_warn_lbl.setText("⚠")
-                    self._out_warn_lbl.setToolTip(
-                        "Output folder is not empty.\nExisting files may be overwritten."
-                    )
-                    return
-            except (PermissionError, OSError):
-                pass
-        self._out_warn_lbl.setText("")
-        self._out_warn_lbl.setToolTip("")
-
     def _collect_warnings(self) -> list[str]:
         """Return soft-warning strings shown in the 'proceed anyway?' dialog.
 
@@ -562,18 +539,6 @@ class MainWindow(QWidget):
         never included here — by the time this is called those groups are fixed.
         """
         warnings: list[str] = []
-
-        # Warn if the output folder already contains files
-        out_text = self._out_edit.text().strip()
-        if out_text:
-            out_path = Path(out_text)
-            try:
-                if out_path.is_dir() and any(out_path.iterdir()):
-                    warnings.append(
-                        "Output folder is not empty — existing files may be overwritten."
-                    )
-            except (PermissionError, OSError):
-                pass  # can't read the folder; ignore silently
 
         ext_label = "CSV" if self._csv_radio.isChecked() else "video"
         for name, files in self._group_panel.groups().items():
@@ -646,7 +611,31 @@ class MainWindow(QWidget):
         arena_mod = self._arena_combo.currentData()
         if arena_mod is None:
             return
-        output_dir = Path(self._out_edit.text().strip())
+        # Nest everything inside a timestamped run folder of our own — if the
+        # user points this at somewhere like their Desktop, we don't want to
+        # scatter our tracking/figures/etc. folders directly into it.
+        run_name = f"py3r_analysis_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+        out_root = Path(self._out_edit.text().strip())
+        output_dir = out_root / run_name
+        if output_dir.exists():
+            # Timestamp collisions should be near-impossible (one-second
+            # resolution), but if the user fires off two runs in the same
+            # second — or a folder with this exact name already exists for
+            # some other reason — disambiguate rather than silently mixing
+            # outputs together in one folder.
+            original_name = run_name
+            suffix = 2
+            while (out_root / f"{original_name}_{suffix}").exists():
+                suffix += 1
+            run_name = f"{original_name}_{suffix}"
+            output_dir = out_root / run_name
+            QMessageBox.information(
+                self,
+                "Output folder already exists",
+                f'A folder named "{original_name}" already exists in the '
+                f'chosen output location.\n\nResults will be written to "{run_name}" instead.',
+            )
+        output_dir.mkdir(parents=True, exist_ok=True)
         groups = self._group_panel.groups()
         comparisons = self._get_comparisons()
         skip_tracking = self._csv_radio.isChecked()
