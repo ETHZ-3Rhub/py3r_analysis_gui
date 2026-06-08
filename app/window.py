@@ -1,8 +1,8 @@
 """Main application window.
 
 Two-panel layout:
-  Left  — groups (top) + comparisons (bottom)
-  Right — arena selector, output folder, run controls, log
+  Left  — source (input type + arena), groups, comparisons
+  Right — output folder, run controls, log
 """
 
 from __future__ import annotations
@@ -13,9 +13,9 @@ import os
 from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QObject, Qt
-from PyQt6.QtGui import QColor, QTextCursor
+from PyQt6.QtGui import QCloseEvent, QColor, QTextCursor
 from PyQt6.QtWidgets import (
-    QCheckBox,
+    QButtonGroup,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QTextEdit,
     QToolTip,
@@ -122,6 +123,17 @@ class MainWindow(QWidget):
         self._env_check_worker.done.connect(self._on_env_status)
         self._env_check_worker.start()
 
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Qt aborts (SIGABRT) if a QThread is destroyed while still running —
+        e.g. closing the window while the env check is still "checking". Make
+        sure any in-flight worker threads are stopped and joined first."""
+        if self._runner is not None:
+            self._cancel_run()
+        if self._env_check_worker.isRunning():
+            self._env_check_worker.done.disconnect(self._on_env_status)
+            self._env_check_worker.wait()
+        super().closeEvent(event)
+
     # ── Left panel ────────────────────────────────────────────────────────────
     def _build_left_panel(self) -> QWidget:
         panel = QFrame()
@@ -130,10 +142,48 @@ class MainWindow(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        # Groups section
+        # ── Source — decided first: it determines what kind of files
+        # belong in groups, so groups can't be built before it's chosen ──────
+        src_label = QLabel("Source")
+        src_label.setObjectName("sectionTitle")
+        layout.addWidget(src_label)
+
+        self._video_radio = QRadioButton("Video files (run tracking)")
+        self._csv_radio = QRadioButton("Pre-tracked CSV files")
+        self._csv_radio.setToolTip(
+            "Each group's files are CSVs already produced by YOLO3R —\n"
+            "tracking has already been done, so that step is skipped."
+        )
+        self._source_group = QButtonGroup(self)
+        self._source_group.addButton(self._video_radio)
+        self._source_group.addButton(self._csv_radio)
+        self._source_group.buttonToggled.connect(self._on_source_changed)
+        layout.addWidget(self._video_radio)
+        layout.addWidget(self._csv_radio)
+        self._update_video_radio_availability()
+
+        self._arena_combo = QComboBox()
+        self._arena_combo.addItem("— select arena —", userData=None)
+        for mod in self._arenas:
+            self._arena_combo.addItem(mod.NAME, userData=mod)
+        self._arena_combo.currentIndexChanged.connect(self._refresh_run_button)
+        layout.addWidget(self._arena_combo)
+
+        sep0 = QFrame()
+        sep0.setFrameShape(QFrame.Shape.HLine)
+        sep0.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        layout.addWidget(sep0)
+
+        # ── Groups — locked until a source is chosen above ───────────────────
+        self._groups_section = QWidget()
+        self._groups_section.setEnabled(False)
+        group_col = QVBoxLayout(self._groups_section)
+        group_col.setContentsMargins(0, 0, 0, 0)
+        group_col.setSpacing(8)
+
         t1 = QLabel("Groups")
         t1.setObjectName("sectionTitle")
-        layout.addWidget(t1)
+        group_col.addWidget(t1)
 
         # Column headers — widths must mirror _add_group_row layout
         headers = QWidget()
@@ -154,16 +204,18 @@ class MainWindow(QWidget):
             else:
                 lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             hdr_row.addWidget(lbl, stretch=stretch)
-        layout.addWidget(headers)
+        group_col.addWidget(headers)
 
         self._group_list = QListWidget()
         self._group_list.setObjectName("groupList")
-        layout.addWidget(self._group_list, stretch=3)
+        group_col.addWidget(self._group_list, stretch=3)
 
         add_btn = QPushButton("+ Add Group")
         add_btn.setObjectName("secondaryButton")
         add_btn.clicked.connect(self._add_group)
-        layout.addWidget(add_btn)
+        group_col.addWidget(add_btn)
+
+        layout.addWidget(self._groups_section, stretch=3)
 
         # Separator
         sep = QFrame()
@@ -203,19 +255,6 @@ class MainWindow(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        arena_label = QLabel("Arena")
-        arena_label.setObjectName("sectionTitle")
-        layout.addWidget(arena_label)
-
-        self._arena_combo = QComboBox()
-        self._arena_combo.addItem("— select arena —", userData=None)
-        for mod in self._arenas:
-            self._arena_combo.addItem(mod.NAME, userData=mod)
-        self._arena_combo.currentIndexChanged.connect(self._refresh_run_button)
-        layout.addWidget(self._arena_combo)
-
-        layout.addSpacing(6)
-
         out_label = QLabel("Output folder")
         out_label.setObjectName("sectionTitle")
         layout.addWidget(out_label)
@@ -236,17 +275,6 @@ class MainWindow(QWidget):
         out_browse.clicked.connect(self._browse_output)
         out_row.addWidget(out_browse)
         layout.addLayout(out_row)
-
-        layout.addSpacing(4)
-
-        self._skip_tracking_cb = QCheckBox("Groups contain pre-tracked CSV files")
-        self._skip_tracking_cb.setToolTip(
-            "When checked, each group folder is expected to contain CSV files\n"
-            "produced by YOLO3R (tracking already done). The tracking step is\n"
-            "skipped and analysis runs directly on those CSVs."
-        )
-        self._skip_tracking_cb.stateChanged.connect(self._refresh_group_file_counts)
-        layout.addWidget(self._skip_tracking_cb)
 
         layout.addSpacing(4)
 
@@ -296,6 +324,34 @@ class MainWindow(QWidget):
         layout.addLayout(bottom_row)
 
         return panel
+
+    # ── Source ────────────────────────────────────────────────────────────────
+    def _on_source_changed(self, _button: QRadioButton, checked: bool) -> None:
+        """Unlock group-building once the user has committed to a file type —
+        groups can't be sensibly built before we know what should be in them."""
+        if not checked:
+            return
+        self._groups_section.setEnabled(True)
+        self._refresh_group_file_counts()
+
+    def _update_video_radio_availability(self) -> None:
+        """'Video files' requires a working tracking environment — grey the
+        option out (with a tooltip explaining why) until one is available,
+        rather than letting the user pick it and only then telling them it
+        won't work."""
+        if self._env_status == "checking":
+            self._video_radio.setEnabled(False)
+            self._video_radio.setToolTip("Checking tracking environment…")
+        elif self._env_status in ("not_installed", "error"):
+            self._video_radio.setEnabled(False)
+            self._video_radio.setToolTip(
+                "Tracking environment is not set up.\n"
+                "Open Settings to install it, or choose\n"
+                "'Pre-tracked CSV files' if your files are already tracked."
+            )
+        else:
+            self._video_radio.setEnabled(True)
+            self._video_radio.setToolTip("")
 
     # ── Group management ──────────────────────────────────────────────────────
     def _add_group(self) -> None:
@@ -557,7 +613,7 @@ class MainWindow(QWidget):
     # ── File count badges ─────────────────────────────────────────────────────
     def _update_group_badge(self, row_widget: QWidget, path: Path) -> None:
         """Refresh the file-count badge on a single group row."""
-        skip = self._skip_tracking_cb.isChecked()
+        skip = self._csv_radio.isChecked()
         count, has_subdirs = _count_files(path, skip)
         ext_label = "CSV" if skip else "video"
 
@@ -639,7 +695,7 @@ class MainWindow(QWidget):
             except (PermissionError, OSError):
                 pass  # can't read the folder; ignore silently
 
-        skip = self._skip_tracking_cb.isChecked()
+        skip = self._csv_radio.isChecked()
         ext_label = "CSV" if skip else "video"
 
         for i in range(self._group_list.count()):
@@ -684,17 +740,17 @@ class MainWindow(QWidget):
             reasons.append("No output folder set.")
 
         # Hard block: tracking env not installed (only matters when actually tracking)
-        skip = self._skip_tracking_cb.isChecked()
+        skip = self._csv_radio.isChecked()
         if not skip and self._env_status in ("not_installed", "error"):
             reasons.append(
                 "Tracking environment is not set up.\n"
-                "     Open Settings to install it, or tick\n"
-                "     'Groups contain pre-tracked CSV files' to skip tracking."
+                "     Open Settings to install it, or choose\n"
+                "     'Pre-tracked CSV files' as the source to skip tracking."
             )
 
         # Hard block: any group with zero relevant files
         if self._groups:
-            skip = self._skip_tracking_cb.isChecked()
+            skip = self._csv_radio.isChecked()
             ext_label = "CSV" if skip else "video"
             for name, path in self._groups:
                 count, _ = _count_files(path, skip)
@@ -726,7 +782,7 @@ class MainWindow(QWidget):
         output_dir = Path(self._out_edit.text().strip())
         groups = {name: path for name, path in self._groups}
         comparisons = self._get_comparisons()
-        skip_tracking = self._skip_tracking_cb.isChecked()
+        skip_tracking = self._csv_radio.isChecked()
 
         warnings = self._collect_warnings()
         if warnings:
@@ -746,7 +802,8 @@ class MainWindow(QWidget):
         self._arena_combo.setEnabled(False)
         self._out_edit.setEnabled(False)
         self._comp_list.setEnabled(False)
-        self._skip_tracking_cb.setEnabled(False)
+        self._video_radio.setEnabled(False)
+        self._csv_radio.setEnabled(False)
 
         self._runner = PipelineRunner(
             arena_mod, groups, output_dir, comparisons, skip_tracking=skip_tracking
@@ -782,7 +839,8 @@ class MainWindow(QWidget):
         self._arena_combo.setEnabled(True)
         self._out_edit.setEnabled(True)
         self._comp_list.setEnabled(True)
-        self._skip_tracking_cb.setEnabled(True)
+        self._update_video_radio_availability()
+        self._csv_radio.setEnabled(True)
         self._progress.setRange(0, 100)  # un-spin indeterminate bar if active
         self._refresh_run_button()
 
@@ -830,6 +888,7 @@ class MainWindow(QWidget):
         self._env_lbl.setStyleSheet(f"color: {colour}; font-size: 11px;")
         self._env_lbl.setToolTip(tooltip)
         self._env_dot.setToolTip(tooltip)
+        self._update_video_radio_availability()
         self._refresh_run_button()
 
     def _open_settings(self) -> None:
