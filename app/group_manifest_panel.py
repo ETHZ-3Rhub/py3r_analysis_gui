@@ -25,7 +25,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import QModelIndex, Qt, pyqtSignal
-from PyQt6.QtGui import QMouseEvent, QPalette
+from PyQt6.QtGui import QBrush, QColor, QMouseEvent, QPalette
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -98,13 +98,20 @@ class _ElideLeftDelegate(QStyledItemDelegate):
         text_rect.adjust(4, 0, -4, 0)
         elided = opt.fontMetrics.elidedText(text, Qt.TextElideMode.ElideLeft, text_rect.width())
 
-        role = (
-            QPalette.ColorRole.HighlightedText
-            if opt.state & QStyle.StateFlag.State_Selected
-            else QPalette.ColorRole.Text
-        )
+        if opt.state & QStyle.StateFlag.State_Selected:
+            color = opt.palette.color(
+                QPalette.ColorGroup.Active, QPalette.ColorRole.HighlightedText
+            )
+        else:
+            fg: QBrush | None = index.data(Qt.ItemDataRole.ForegroundRole)
+            color = (
+                fg.color()
+                if isinstance(fg, QBrush)
+                else opt.palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.Text)
+            )
+
         painter.save()
-        painter.setPen(opt.palette.color(QPalette.ColorGroup.Active, role))
+        painter.setPen(color)
         painter.drawText(text_rect, int(opt.displayAlignment), elided)
         painter.restore()
 
@@ -148,6 +155,21 @@ _COL_SUCCESS = "#a6e3a1"
 
 _BADGE_WIDTH = 44
 _REMOVE_BTN_WIDTH = 28
+
+# Text colours cycled over unique folders in the manifest dialog table so
+# rows from the same folder share a colour. All Catppuccin Mocha tones —
+# readable against the dark background, distinct from each other, and none
+# clash with the app's error/warning/success semantic colours.
+_FOLDER_TEXT_COLOURS = [
+    "#89b4fa",  # blue
+    "#cba6f7",  # mauve
+    "#89dceb",  # sky
+    "#94e2d5",  # teal
+    "#f9e2af",  # yellow
+    "#b4befe",  # lavender
+    "#74c7ec",  # sapphire
+    "#a6adc8",  # overlay (dimmer, 8th+ folders)
+]
 
 
 def _ext_label(file_exts: set[str]) -> str:
@@ -234,20 +256,30 @@ class _ManifestDialog(QDialog):
     def _refresh_table(self) -> None:
         paths = self._panel._manifests.get(self._group_name, [])
 
+        # Assign a text colour to each unique parent folder in first-seen order.
+        folder_colour: dict[Path, QBrush] = {}
+        for path in paths:
+            if path.parent not in folder_colour:
+                idx = len(folder_colour) % len(_FOLDER_TEXT_COLOURS)
+                folder_colour[path.parent] = QBrush(QColor(_FOLDER_TEXT_COLOURS[idx]))
+
         self._table.clearSelection()
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(paths))
         for row, path in enumerate(paths):
             full = str(path)
             parent_text = str(path.parent) + "/"  # trailing slash marks it as a directory
+            bg = folder_colour[path.parent]
 
             # Right-aligned so the elided ("…/closest/dir/") tail consistently
             # hugs the same edge the eliding cuts toward.
             path_item = _PathSortItem(parent_text, sort_key=full)
             path_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             path_item.setToolTip(str(path.parent))
+            path_item.setForeground(bg)
             name_item = _PlainTextSortItem(path.name)
             name_item.setToolTip(path.name)
+            name_item.setForeground(bg)
             self._table.setItem(row, 0, path_item)
             self._table.setItem(row, 1, name_item)
         self._table.setSortingEnabled(True)
