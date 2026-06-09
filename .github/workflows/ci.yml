@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff==0.8.4
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Ruff lint
+        run: ruff check .
+
+  version-check:
+    if: github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version bump
+        shell: python
+        run: |
+          import subprocess, sys, re
+          from pathlib import Path
+          import tomllib
+          subprocess.run(["git", "fetch", "--tags", "--quiet"], check=True)
+          latest = subprocess.run(
+              ["bash", "-lc", "git tag -l 'v*' --sort=-v:refname | head -n1"],
+              capture_output=True, text=True, check=True,
+          ).stdout.strip() or "v0.0.0"
+          print(f"Latest tag: {latest}")
+          pyver = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          print(f"pyproject version: {pyver}")
+          def parse(v):
+              m = re.match(r"^(\d+)\.(\d+)\.(\d+)$", v)
+              if not m:
+                  sys.exit(f"Invalid semver: {v}")
+              return tuple(map(int, m.groups()))
+          la, lb, lc = parse(latest.lstrip("v"))
+          na, nb, nc = parse(pyver)
+          allowed = {(la, lb, lc + 1), (la, lb + 1, 0), (la + 1, 0, 0)}
+          if (na, nb, nc) not in allowed:
+              sys.exit(
+                  f"pyproject version {pyver} must be one of: "
+                  f"{la}.{lb}.{lc+1} (patch) or {la}.{lb+1}.0 (minor) or {la+1}.0.0 (major); "
+                  f"latest tag is {latest}"
+              )
+          print("Version bump check passed.")

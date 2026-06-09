@@ -1,8 +1,8 @@
 """Main application window.
 
 Two-panel layout:
-  Left  — groups (top) + comparisons (bottom)
-  Right — arena selector, output folder, run controls, log
+  Left  — source (input type + arena), groups, comparisons
+  Right — output folder, run controls, log
 """
 
 from __future__ import annotations
@@ -13,9 +13,9 @@ import os
 from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QObject, Qt
-from PyQt6.QtGui import QColor, QTextCursor
+from PyQt6.QtGui import QCloseEvent, QColor, QTextCursor
 from PyQt6.QtWidgets import (
-    QCheckBox,
+    QButtonGroup,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QTextEdit,
     QToolTip,
@@ -35,7 +36,9 @@ from PyQt6.QtWidgets import (
 )
 
 from app import arenas as arena_pkg
+from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
 from app.runner import PipelineRunner
+from app.settings_dialog import EnvCheckWorker, SettingsDialog, get_version, parse_env_result
 
 # ── Colour tokens ─────────────────────────────────────────────────────────────
 _COL_BG = "#1e1e2e"
@@ -48,30 +51,9 @@ _COL_ERROR = "#f38ba8"
 _COL_WARN = "#fab387"
 _COL_SUCCESS = "#a6e3a1"
 
-_NAME_EDIT_WIDTH = 130
 _BADGE_WIDTH = 44
 _REMOVE_BTN_WIDTH = 28
 _COMP_PLACEHOLDER = "— select —"
-
-# ── File extensions counted per mode ──────────────────────────────────────────
-_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
-_CSV_EXTS = {".csv"}
-
-
-def _count_files(path: Path, skip_tracking: bool) -> tuple[int, bool]:
-    """Return (file_count, has_subdirs) for *path*, counting only relevant extensions."""
-    exts = _CSV_EXTS if skip_tracking else _VIDEO_EXTS
-    try:
-        entries = list(path.iterdir())
-        count = sum(
-            1
-            for e in entries
-            if e.is_file() and not e.name.startswith(".") and e.suffix.lower() in exts
-        )
-        has_subdirs = any(e.is_dir() for e in entries)
-        return count, has_subdirs
-    except (PermissionError, OSError):
-        return 0, False
 
 
 class _TooltipOnDisabled(QObject):
@@ -94,14 +76,18 @@ class _TooltipOnDisabled(QObject):
 class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("py3r Analysis")
+        self.setWindowTitle(f"py3r Analysis  v{get_version()}")
         self.setMinimumSize(1020, 700)
         self._apply_stylesheet()
 
         self._arenas = arena_pkg.discover()
         self._runner: PipelineRunner | None = None
-        # Each group: (name, path)
-        self._groups: list[tuple[str, Path]] = []
+        self._env_status: str = "checking"  # mirrors EnvCheckWorker result strings
+        self._last_source_is_csv: bool | None = None  # None until a source is first chosen
+
+        # Shared filter so tooltips still show on disabled widgets (gated
+        # sections, the Analyse button) — Qt suppresses them by default.
+        self._btn_tooltip_filter = _TooltipOnDisabled(self)
 
         root = QHBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -109,12 +95,26 @@ class MainWindow(QWidget):
         root.addWidget(self._build_left_panel(), stretch=2)
         root.addWidget(self._build_run_panel(), stretch=3)
 
-        # Show tooltip on the Analyse button even when it is disabled
-        self._btn_tooltip_filter = _TooltipOnDisabled(self)
         self._run_btn.installEventFilter(self._btn_tooltip_filter)
 
         # Populate initial tooltip (button starts disabled)
         self._refresh_run_button()
+
+        # Kick off tracking env status check
+        self._env_check_worker = EnvCheckWorker()
+        self._env_check_worker.done.connect(self._on_env_status)
+        self._env_check_worker.start()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Qt aborts (SIGABRT) if a QThread is destroyed while still running —
+        e.g. closing the window while the env check is still "checking". Make
+        sure any in-flight worker threads are stopped and joined first."""
+        if self._runner is not None:
+            self._cancel_run()
+        if self._env_check_worker.isRunning():
+            self._env_check_worker.done.disconnect(self._on_env_status)
+            self._env_check_worker.wait()
+        super().closeEvent(event)
 
     # ── Left panel ────────────────────────────────────────────────────────────
     def _build_left_panel(self) -> QWidget:
@@ -124,55 +124,70 @@ class MainWindow(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        # Groups section
-        t1 = QLabel("Groups")
-        t1.setObjectName("sectionTitle")
-        layout.addWidget(t1)
+        # ── Source — decided first: it determines what kind of files
+        # belong in groups, so groups can't be built before it's chosen ──────
+        src_label = QLabel("Source")
+        src_label.setObjectName("sectionTitle")
+        layout.addWidget(src_label)
 
-        # Column headers — widths must mirror _add_group_row layout
-        headers = QWidget()
-        hdr_row = QHBoxLayout(headers)
-        hdr_row.setContentsMargins(6, 0, 4, 0)
-        hdr_row.setSpacing(6)
-        for text, width, stretch, align in [
-            ("Name", _NAME_EDIT_WIDTH, 0, Qt.AlignmentFlag.AlignLeft),
-            ("Path", 0, 1, Qt.AlignmentFlag.AlignLeft),
-            ("Files", _BADGE_WIDTH, 0, Qt.AlignmentFlag.AlignCenter),
-            ("", _REMOVE_BTN_WIDTH, 0, Qt.AlignmentFlag.AlignLeft),  # remove-btn column
-        ]:
-            lbl = QLabel(text)
-            lbl.setObjectName("colHeader")
-            lbl.setAlignment(align)
-            if width:
-                lbl.setFixedWidth(width)
-            else:
-                lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-            hdr_row.addWidget(lbl, stretch=stretch)
-        layout.addWidget(headers)
+        self._video_radio = QRadioButton("Video files (run tracking)")
+        self._csv_radio = QRadioButton("Pre-tracked CSV files")
+        self._csv_radio.setToolTip(
+            "Each group's files are CSVs already produced by YOLO3R —\n"
+            "tracking has already been done, so that step is skipped."
+        )
+        self._source_group = QButtonGroup(self)
+        self._source_group.addButton(self._video_radio)
+        self._source_group.addButton(self._csv_radio)
+        self._source_group.buttonToggled.connect(self._on_source_changed)
+        layout.addWidget(self._video_radio)
+        layout.addWidget(self._csv_radio)
+        self._update_video_radio_availability()
 
-        self._group_list = QListWidget()
-        self._group_list.setObjectName("groupList")
-        layout.addWidget(self._group_list, stretch=3)
+        sep0 = QFrame()
+        sep0.setFrameShape(QFrame.Shape.HLine)
+        sep0.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        layout.addWidget(sep0)
 
-        add_btn = QPushButton("+ Add Group")
-        add_btn.setObjectName("secondaryButton")
-        add_btn.clicked.connect(self._add_group)
-        layout.addWidget(add_btn)
+        no_source_tip = (
+            "Choose a source above first — it determines what kind of files belong in groups."
+        )
 
-        # Separator
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
-        layout.addWidget(sep)
+        # ── Groups — locked until a source is chosen above ───────────────────
+        self._groups_section = self._build_gated_section(no_source_tip)
+        group_col = self._groups_section.layout()
 
-        # Comparisons section
-        t2 = QLabel("Comparisons")
-        t2.setObjectName("sectionTitle")
-        layout.addWidget(t2)
+        self._group_panel = GroupManifestPanel()
+        self._group_panel.group_added.connect(self._sync_comp_add)
+        self._group_panel.group_added.connect(self._refresh_run_button)
+        self._group_panel.group_added.connect(self._refresh_comparisons_enabled)
+        self._group_panel.group_removed.connect(self._sync_comp_remove)
+        self._group_panel.group_removed.connect(self._refresh_run_button)
+        self._group_panel.group_removed.connect(self._refresh_comparisons_enabled)
+        self._group_panel.group_renamed.connect(self._sync_comp_rename)
+        self._group_panel.files_changed.connect(self._refresh_run_button)
+        group_col.addWidget(self._group_panel)
+
+        layout.addWidget(self._groups_section, stretch=1)
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        layout.addWidget(sep2)
+
+        # ── Comparisons — locked until there are at least two groups to pair ──
+        self._comp_section = self._build_gated_section(
+            "Add at least two groups before defining comparisons between them."
+        )
+        comp_col = self._comp_section.layout()
+
+        comp_label = QLabel("Comparisons")
+        comp_label.setObjectName("sectionTitle")
+        comp_col.addWidget(comp_label)
 
         self._comp_list = QListWidget()
         self._comp_list.setObjectName("groupList")
-        layout.addWidget(self._comp_list, stretch=2)
+        comp_col.addWidget(self._comp_list, stretch=1)
 
         comp_btns = QHBoxLayout()
         comp_btns.setSpacing(6)
@@ -185,9 +200,33 @@ class MainWindow(QWidget):
             btn.setObjectName("secondaryButton")
             btn.clicked.connect(slot)
             comp_btns.addWidget(btn)
-        layout.addLayout(comp_btns)
+        comp_col.addLayout(comp_btns)
+
+        layout.addWidget(self._comp_section)
 
         return panel
+
+    def _build_gated_section(self, disabled_tooltip: str) -> QWidget:
+        """A plain container that starts disabled with an explanatory tooltip
+        — used for sections that only make sense once an earlier choice has
+        been made (e.g. Groups need a Source, Comparisons need ≥ 2 groups).
+        Qt suppresses tooltips on disabled widgets by default, hence the
+        `_TooltipOnDisabled` filter. The tooltip is stored rather than left
+        permanently set — `_set_gated_enabled` clears it once the section
+        becomes relevant, so it doesn't linger and contradict what's now an
+        active, self-explanatory part of the UI."""
+        section = QWidget()
+        section.setObjectName("gatedSection")
+        section._disabled_tip = disabled_tooltip
+        section.installEventFilter(self._btn_tooltip_filter)
+        col = QVBoxLayout(section)
+        col.setContentsMargins(0, 0, 0, 0)
+        self._set_gated_enabled(section, False)
+        return section
+
+    def _set_gated_enabled(self, section: QWidget, enabled: bool) -> None:
+        section.setEnabled(enabled)
+        section.setToolTip("" if enabled else section._disabled_tip)
 
     # ── Run panel ─────────────────────────────────────────────────────────────
     def _build_run_panel(self) -> QWidget:
@@ -197,6 +236,10 @@ class MainWindow(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
+        # ── Arena — a processing-pipeline choice (model + analysis), not
+        # something that depends on the source file type, so it lives here
+        # among the other run-configuration controls rather than gated on
+        # the left ──────────────────────────────────────────────────────────
         arena_label = QLabel("Arena")
         arena_label.setObjectName("sectionTitle")
         layout.addWidget(arena_label)
@@ -208,7 +251,10 @@ class MainWindow(QWidget):
         self._arena_combo.currentIndexChanged.connect(self._refresh_run_button)
         layout.addWidget(self._arena_combo)
 
-        layout.addSpacing(6)
+        sep_arena = QFrame()
+        sep_arena.setFrameShape(QFrame.Shape.HLine)
+        sep_arena.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        layout.addWidget(sep_arena)
 
         out_label = QLabel("Output folder")
         out_label.setObjectName("sectionTitle")
@@ -218,29 +264,12 @@ class MainWindow(QWidget):
         self._out_edit = QLineEdit()
         self._out_edit.setPlaceholderText("Choose output folder…")
         self._out_edit.textChanged.connect(self._refresh_run_button)
-        self._out_edit.textChanged.connect(self._update_output_warning)
         out_row.addWidget(self._out_edit)
-        self._out_warn_lbl = QLabel("")
-        self._out_warn_lbl.setFixedWidth(_BADGE_WIDTH)
-        self._out_warn_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._out_warn_lbl.setStyleSheet(f"color: {_COL_WARN}; font-size: 11px; font-weight: bold;")
-        out_row.addWidget(self._out_warn_lbl)
         out_browse = QPushButton("📁")
         out_browse.setFixedWidth(36)
         out_browse.clicked.connect(self._browse_output)
         out_row.addWidget(out_browse)
         layout.addLayout(out_row)
-
-        layout.addSpacing(4)
-
-        self._skip_tracking_cb = QCheckBox("Groups contain pre-tracked CSV files")
-        self._skip_tracking_cb.setToolTip(
-            "When checked, each group folder is expected to contain CSV files\n"
-            "produced by YOLO3R (tracking already done). The tracking step is\n"
-            "skipped and analysis runs directly on those CSVs."
-        )
-        self._skip_tracking_cb.stateChanged.connect(self._refresh_group_file_counts)
-        layout.addWidget(self._skip_tracking_cb)
 
         layout.addSpacing(4)
 
@@ -268,117 +297,87 @@ class MainWindow(QWidget):
         layout.addWidget(self._open_btn)
         self._last_output: str | None = None
 
+        # ── Bottom bar: tracking status (left) + settings button (right) ──────
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(6)
+
+        self._env_dot = QLabel("●")
+        self._env_dot.setFixedWidth(14)
+        self._env_dot.setStyleSheet(f"color: {_COL_MUTED}; font-size: 13px;")
+        self._env_lbl = QLabel("Checking…")
+        self._env_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px;")
+        bottom_row.addWidget(self._env_dot)
+        bottom_row.addWidget(self._env_lbl)
+        bottom_row.addStretch()
+
+        settings_btn = QPushButton("⚙  Settings")
+        settings_btn.setObjectName("settingsButton")
+        settings_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        settings_btn.clicked.connect(self._open_settings)
+        bottom_row.addWidget(settings_btn)
+
+        layout.addLayout(bottom_row)
+
         return panel
 
-    # ── Group management ──────────────────────────────────────────────────────
-    def _add_group(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Select group folder")
-        if not folder:
+    # ── Source ────────────────────────────────────────────────────────────────
+    def _on_source_changed(self, _button: QRadioButton, checked: bool) -> None:
+        """Unlock group-building once the user has committed to a file type —
+        groups can't be sensibly built before we know what should be in them.
+
+        Switching afterwards (videos <-> CSVs) invalidates every existing
+        manifest, since the files no longer match the expected type — confirm
+        before clearing them, and revert the radio if the user backs out."""
+        if not checked:
             return
-        path = Path(folder)
+        is_csv = self._csv_radio.isChecked()
 
-        if path in [p for _, p in self._groups]:
-            QMessageBox.warning(
-                self, "Duplicate folder", f"The folder\n{path}\nis already in the list."
-            )
-            return
+        if self._last_source_is_csv is not None and self._last_source_is_csv != is_csv:
+            if any(self._group_panel.groups().values()):
+                answer = QMessageBox.question(
+                    self,
+                    "Switch source?",
+                    "Switching source clears every group's file list, since the\n"
+                    "files no longer match the new type. Continue?",
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    self._source_group.blockSignals(True)
+                    (self._csv_radio if self._last_source_is_csv else self._video_radio).setChecked(
+                        True
+                    )
+                    self._source_group.blockSignals(False)
+                    return
+            self._group_panel.clear_all_files()
 
-        # Unique name: append _2, _3, … until no collision
-        base = path.name
-        name = base
-        existing = {n for n, _ in self._groups}
-        suffix = 2
-        while name in existing:
-            name = f"{base}_{suffix}"
-            suffix += 1
-
-        self._groups.append((name, path))
-        row_widget = self._add_group_row(name, path)
-        self._update_group_badge(row_widget, path)
-        self._sync_comp_add(name)
+        self._last_source_is_csv = is_csv
+        self._group_panel.set_file_extensions(CSV_EXTS if is_csv else VIDEO_EXTS)
+        self._set_gated_enabled(self._groups_section, True)
         self._refresh_run_button()
 
-    def _add_group_row(self, name: str, path: Path) -> QWidget:
-        item_widget = QWidget()
-        row = QHBoxLayout(item_widget)
-        row.setContentsMargins(4, 2, 4, 2)
-        row.setSpacing(6)
-
-        name_edit = QLineEdit(name)
-        name_edit.setFrame(False)
-        name_edit.setFixedWidth(_NAME_EDIT_WIDTH)
-        name_edit.setStyleSheet(
-            f"background: transparent; color: {_COL_TEXT}; padding: 3px 4px; border: none;"
-        )
-        name_edit.editingFinished.connect(
-            lambda: self._rename_group(item_widget, name_edit, name_edit.text())
-        )
-        row.addWidget(name_edit)
-
-        path_str = str(path)
-        path_lbl = QLabel(path_str)
-        path_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px;")
-        path_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        path_lbl.setToolTip(path_str)
-        row.addWidget(path_lbl, stretch=1)
-
-        # File-count badge — colour/text set by _update_group_badge()
-        badge_lbl = QLabel("…")
-        badge_lbl.setFixedWidth(_BADGE_WIDTH)
-        badge_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px; font-weight: bold;")
-        row.addWidget(badge_lbl)
-
-        remove_btn = QPushButton("✕")
-        remove_btn.setFixedWidth(_REMOVE_BTN_WIDTH)
-        remove_btn.setObjectName("removeButton")
-        remove_btn.clicked.connect(lambda: self._remove_group(item_widget))
-        row.addWidget(remove_btn)
-
-        item_widget._badge_lbl = badge_lbl
-
-        item = QListWidgetItem()
-        item.setSizeHint(item_widget.sizeHint())
-        self._group_list.addItem(item)
-        self._group_list.setItemWidget(item, item_widget)
-        return item_widget
-
-    def _rename_group(self, item_widget: QWidget, name_edit: QLineEdit, new_name: str) -> None:
-        new_name = new_name.strip()
-        idx = self._list_index(self._group_list, item_widget)
-        if idx is None:
-            return
-        old_name, path = self._groups[idx]
-        if new_name == old_name:
-            return
-        if not new_name:
-            name_edit.setText(old_name)
-            return
-        existing = {n for i, (n, _) in enumerate(self._groups) if i != idx}
-        if new_name in existing:
-            QMessageBox.warning(
-                self, "Duplicate name", f'A group named "{new_name}" already exists.'
+    def _update_video_radio_availability(self) -> None:
+        """'Video files' requires a working tracking environment — grey the
+        option out (with a tooltip explaining why) until one is available,
+        rather than letting the user pick it and only then telling them it
+        won't work."""
+        if self._env_status == "checking":
+            self._video_radio.setEnabled(False)
+            self._video_radio.setToolTip("Checking tracking environment…")
+        elif self._env_status in ("not_installed", "error"):
+            self._video_radio.setEnabled(False)
+            self._video_radio.setToolTip(
+                "Tracking environment is not set up.\n"
+                "Open Settings to install it, or choose\n"
+                "'Pre-tracked CSV files' if your files are already tracked."
             )
-            name_edit.setText(old_name)
-            return
-        self._groups[idx] = (new_name, path)
-        self._sync_comp_rename(old_name, new_name)
-        self._refresh_run_button()
-
-    def _remove_group(self, item_widget: QWidget) -> None:
-        idx = self._list_index(self._group_list, item_widget)
-        if idx is not None:
-            name, _ = self._groups[idx]
-            self._groups.pop(idx)
-            self._group_list.takeItem(idx)
-            self._sync_comp_remove(name)
-            self._refresh_run_button()
+        else:
+            self._video_radio.setEnabled(True)
+            self._video_radio.setToolTip("")
 
     # ── Comparison management ─────────────────────────────────────────────────
     def _all_pairs(self) -> None:
         while self._comp_list.count():
             self._comp_list.takeItem(0)
-        for a, b in itertools.combinations([n for n, _ in self._groups], 2):
+        for a, b in itertools.combinations(self._group_panel.groups(), 2):
             self._add_comp_row(a, b)
 
     def _remove_all_comparisons(self) -> None:
@@ -386,12 +385,12 @@ class MainWindow(QWidget):
             self._comp_list.takeItem(0)
 
     def _add_blank_comparison(self) -> None:
-        if not self._groups:
+        if not self._group_panel.groups():
             return
         self._add_comp_row()  # both combos start on placeholder
 
     def _add_comp_row(self, name_a: str | None = None, name_b: str | None = None) -> None:
-        group_names = [n for n, _ in self._groups]
+        group_names = list(self._group_panel.groups())
         if not group_names:
             return
 
@@ -450,11 +449,17 @@ class MainWindow(QWidget):
         if idx is not None:
             self._comp_list.takeItem(idx)
 
+    def _refresh_comparisons_enabled(self) -> None:
+        """Comparisons only mean something once there's something to pair —
+        grey the whole section out (with an explanatory tooltip) until at
+        least two groups exist, rather than showing empty, clickable controls."""
+        self._set_gated_enabled(self._comp_section, len(self._group_panel.groups()) >= 2)
+
     def _sync_comp_add(self, new_name: str) -> None:
         for w in self._comp_rows():
             w._combo_a.addItem(new_name)
             w._combo_b.addItem(new_name)
-        for existing_name in [n for n, _ in self._groups if n != new_name]:
+        for existing_name in [n for n in self._group_panel.groups() if n != new_name]:
             self._add_comp_row(existing_name, new_name)
 
     def _sync_comp_remove(self, name: str) -> None:
@@ -527,71 +532,6 @@ class MainWindow(QWidget):
                 pairs.append((a, b))
         return pairs
 
-    # ── File count badges ─────────────────────────────────────────────────────
-    def _update_group_badge(self, row_widget: QWidget, path: Path) -> None:
-        """Refresh the file-count badge on a single group row."""
-        skip = self._skip_tracking_cb.isChecked()
-        count, has_subdirs = _count_files(path, skip)
-        ext_label = "CSV" if skip else "video"
-
-        if count == 0:
-            # Hard error — blocks the run button; same ⚠ symbol as warnings but red
-            colour = _COL_ERROR
-            text = "0 ⚠"
-            tip_parts = [
-                f"No {ext_label} files found.",
-                "Analysis cannot proceed until this folder contains the right files.",
-            ]
-        elif count < 5:
-            # Soft warning — run is allowed but flagged
-            colour = _COL_WARN
-            text = f"{count} ⚠"
-            tip_parts = [
-                f"Only {count} {ext_label} file(s) — results may be underpowered (expected ≥ 5)."
-            ]
-        else:
-            colour = _COL_SUCCESS
-            text = str(count)
-            tip_parts = [f"{count} {ext_label} file(s) found."]
-
-        if has_subdirs:
-            tip_parts.append("Subfolders detected — only top-level files are counted.")
-            if colour != _COL_ERROR:
-                colour = _COL_WARN
-                if "⚠" not in text:
-                    text = f"{text} ⚠"
-
-        row_widget._badge_lbl.setText(text)
-        row_widget._badge_lbl.setStyleSheet(f"color: {colour}; font-size: 11px; font-weight: bold;")
-        row_widget._badge_lbl.setToolTip("\n".join(tip_parts))
-
-    def _update_output_warning(self) -> None:
-        """Show an orange ⚠ badge next to the output folder if it is non-empty."""
-        out_text = self._out_edit.text().strip()
-        if out_text:
-            try:
-                p = Path(out_text)
-                if p.is_dir() and any(p.iterdir()):
-                    self._out_warn_lbl.setText("⚠")
-                    self._out_warn_lbl.setToolTip(
-                        "Output folder is not empty.\nExisting files may be overwritten."
-                    )
-                    return
-            except (PermissionError, OSError):
-                pass
-        self._out_warn_lbl.setText("")
-        self._out_warn_lbl.setToolTip("")
-
-    def _refresh_group_file_counts(self) -> None:
-        """Re-evaluate badges for every group row (called when skip_tracking changes)."""
-        for i in range(self._group_list.count()):
-            w = self._group_list.itemWidget(self._group_list.item(i))
-            if w is None or not hasattr(w, "_badge_lbl"):
-                continue
-            _, path = self._groups[i]
-            self._update_group_badge(w, path)
-        self._refresh_run_button()
-
     def _collect_warnings(self) -> list[str]:
         """Return soft-warning strings shown in the 'proceed anyway?' dialog.
 
@@ -600,36 +540,13 @@ class MainWindow(QWidget):
         """
         warnings: list[str] = []
 
-        # Warn if the output folder already contains files
-        out_text = self._out_edit.text().strip()
-        if out_text:
-            out_path = Path(out_text)
-            try:
-                if out_path.is_dir() and any(out_path.iterdir()):
-                    warnings.append(
-                        "Output folder is not empty — existing files may be overwritten."
-                    )
-            except (PermissionError, OSError):
-                pass  # can't read the folder; ignore silently
-
-        skip = self._skip_tracking_cb.isChecked()
-        ext_label = "CSV" if skip else "video"
-
-        for i in range(self._group_list.count()):
-            w = self._group_list.itemWidget(self._group_list.item(i))
-            if w is None:
-                continue
-            name, path = self._groups[i]
-            count, has_subdirs = _count_files(path, skip)
-            # count == 0 is a hard error handled by the run button gate; skip here
-            if 0 < count < 5:
+        ext_label = "CSV" if self._csv_radio.isChecked() else "video"
+        for name, files in self._group_panel.groups().items():
+            # 0 files is a hard error handled by the run button gate; skip here
+            if 0 < len(files) < 5:
                 warnings.append(
-                    f'Group "{name}": only {count} {ext_label} file(s) — '
+                    f'Group "{name}": only {len(files)} {ext_label} file(s) — '
                     f"results may be underpowered (expected ≥ 5)."
-                )
-            if has_subdirs:
-                warnings.append(
-                    f'Group "{name}": subfolders detected — only top-level files are counted.'
                 )
 
         if not self._get_comparisons():
@@ -648,22 +565,29 @@ class MainWindow(QWidget):
 
     def _refresh_run_button(self) -> None:
         reasons: list[str] = []
+        groups = self._group_panel.groups()
 
         if self._arena_combo.currentData() is None:
             reasons.append("No arena selected.")
-        if not self._groups:
+        if not groups:
             reasons.append("No groups added.")
         if not self._out_edit.text().strip():
             reasons.append("No output folder set.")
 
+        # Hard block: tracking env not installed (only matters when actually tracking)
+        skip = self._csv_radio.isChecked()
+        if not skip and self._env_status in ("not_installed", "error"):
+            reasons.append(
+                "Tracking environment is not set up.\n"
+                "     Open Settings to install it, or choose\n"
+                "     'Pre-tracked CSV files' as the source to skip tracking."
+            )
+
         # Hard block: any group with zero relevant files
-        if self._groups:
-            skip = self._skip_tracking_cb.isChecked()
-            ext_label = "CSV" if skip else "video"
-            for name, path in self._groups:
-                count, _ = _count_files(path, skip)
-                if count == 0:
-                    reasons.append(f'Group "{name}" contains no {ext_label} files.')
+        ext_label = "CSV" if skip else "video"
+        for name, files in groups.items():
+            if not files:
+                reasons.append(f'Group "{name}" contains no {ext_label} files.')
 
         if self._runner is not None:
             # Pipeline is running — keep Cancel button enabled regardless of validation
@@ -687,10 +611,34 @@ class MainWindow(QWidget):
         arena_mod = self._arena_combo.currentData()
         if arena_mod is None:
             return
-        output_dir = Path(self._out_edit.text().strip())
-        groups = {name: path for name, path in self._groups}
+        # Nest everything inside a timestamped run folder of our own — if the
+        # user points this at somewhere like their Desktop, we don't want to
+        # scatter our tracking/figures/etc. folders directly into it.
+        run_name = f"py3r_analysis_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+        out_root = Path(self._out_edit.text().strip())
+        output_dir = out_root / run_name
+        if output_dir.exists():
+            # Timestamp collisions should be near-impossible (one-second
+            # resolution), but if the user fires off two runs in the same
+            # second — or a folder with this exact name already exists for
+            # some other reason — disambiguate rather than silently mixing
+            # outputs together in one folder.
+            original_name = run_name
+            suffix = 2
+            while (out_root / f"{original_name}_{suffix}").exists():
+                suffix += 1
+            run_name = f"{original_name}_{suffix}"
+            output_dir = out_root / run_name
+            QMessageBox.information(
+                self,
+                "Output folder already exists",
+                f'A folder named "{original_name}" already exists in the '
+                f'chosen output location.\n\nResults will be written to "{run_name}" instead.',
+            )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        groups = self._group_panel.groups()
         comparisons = self._get_comparisons()
-        skip_tracking = self._skip_tracking_cb.isChecked()
+        skip_tracking = self._csv_radio.isChecked()
 
         warnings = self._collect_warnings()
         if warnings:
@@ -710,7 +658,8 @@ class MainWindow(QWidget):
         self._arena_combo.setEnabled(False)
         self._out_edit.setEnabled(False)
         self._comp_list.setEnabled(False)
-        self._skip_tracking_cb.setEnabled(False)
+        self._video_radio.setEnabled(False)
+        self._csv_radio.setEnabled(False)
 
         self._runner = PipelineRunner(
             arena_mod, groups, output_dir, comparisons, skip_tracking=skip_tracking
@@ -746,7 +695,8 @@ class MainWindow(QWidget):
         self._arena_combo.setEnabled(True)
         self._out_edit.setEnabled(True)
         self._comp_list.setEnabled(True)
-        self._skip_tracking_cb.setEnabled(True)
+        self._update_video_radio_availability()
+        self._csv_radio.setEnabled(True)
         self._progress.setRange(0, 100)  # un-spin indeterminate bar if active
         self._refresh_run_button()
 
@@ -785,6 +735,24 @@ class MainWindow(QWidget):
         for line in tb.splitlines():
             self._log_line(line, colour=_COL_ERROR)
         self._reset_controls()
+
+    def _on_env_status(self, result: str) -> None:
+        self._env_status = result
+        colour, label, tooltip = parse_env_result(result)
+        self._env_dot.setStyleSheet(f"color: {colour}; font-size: 13px;")
+        self._env_lbl.setText(label)
+        self._env_lbl.setStyleSheet(f"color: {colour}; font-size: 11px;")
+        self._env_lbl.setToolTip(tooltip)
+        self._env_dot.setToolTip(tooltip)
+        self._update_video_radio_availability()
+        self._refresh_run_button()
+
+    def _open_settings(self) -> None:
+        SettingsDialog(self).exec()
+        # Refresh status after settings dialog closes (user may have reinstalled)
+        self._env_check_worker = EnvCheckWorker()
+        self._env_check_worker.done.connect(self._on_env_status)
+        self._env_check_worker.start()
 
     def _open_results(self) -> None:
         if not self._last_output:
@@ -825,12 +793,18 @@ class MainWindow(QWidget):
             QWidget {{
                 background-color: {_COL_BG};
                 color: {_COL_TEXT};
-                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+                font-family: "Helvetica Neue", Arial, sans-serif;
                 font-size: 13px;
             }}
             QFrame#panel {{
                 background-color: {_COL_PANEL};
                 border-radius: 8px;
+            }}
+            QWidget#gatedSection, QWidget#groupManifestPanel {{
+                background: transparent;
+            }}
+            QLabel {{
+                background: transparent;
             }}
             QLabel#sectionTitle {{
                 color: {_COL_TEXT};
@@ -839,11 +813,8 @@ class MainWindow(QWidget):
                 letter-spacing: 1px;
                 text-transform: uppercase;
             }}
-            QLabel#colHeader {{
+            QLabel#sectionTitle:disabled {{
                 color: {_COL_MUTED};
-                font-size: 10px;
-                text-transform: uppercase;
-                letter-spacing: 1px;
             }}
             QPushButton#primaryButton {{
                 background-color: {_COL_ACCENT};
@@ -864,6 +835,11 @@ class MainWindow(QWidget):
                 padding: 6px 10px;
             }}
             QPushButton#secondaryButton:hover {{ background-color: {_COL_ACCENT}; color: white; }}
+            QPushButton#secondaryButton:disabled {{
+                color: {_COL_MUTED};
+                border-color: {_COL_MUTED};
+                background-color: transparent;
+            }}
             QPushButton#removeButton {{
                 background: transparent;
                 color: {_COL_MUTED};
@@ -894,6 +870,32 @@ class MainWindow(QWidget):
                 border-radius: 5px;
             }}
             QListWidget#groupList::item:selected {{ background: transparent; }}
+            QListWidget#manifestGroupList::item:selected {{ background: transparent; }}
+            QTableWidget#manifestTable {{
+                background-color: {_COL_BG};
+                border: 1px solid {_COL_MUTED};
+                border-radius: 5px;
+                gridline-color: transparent;
+            }}
+            QTableWidget#manifestTable::item {{
+                padding: 4px 8px;
+                border: none;
+            }}
+            QTableWidget#manifestTable::item:selected {{
+                background-color: rgba(124, 106, 247, 70);
+                color: {_COL_TEXT};
+            }}
+            QHeaderView::section {{
+                background-color: transparent;
+                color: {_COL_MUTED};
+                border: none;
+                border-bottom: 1px solid {_COL_SEP};
+                padding: 4px 8px;
+                font-size: 10px;
+                font-weight: bold;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }}
             QTextEdit#logBox {{
                 background-color: {_COL_BG};
                 border: 1px solid {_COL_MUTED};
@@ -920,6 +922,15 @@ class MainWindow(QWidget):
                 background: {_COL_MUTED};
                 border-radius: 4px;
             }}
+            QPushButton#settingsButton {{
+                background: transparent;
+                color: {_COL_MUTED};
+                border: none;
+                font-size: 11px;
+                padding: 2px 0;
+                text-align: right;
+            }}
+            QPushButton#settingsButton:hover {{ color: {_COL_TEXT}; }}
             QToolTip {{
                 background-color: {_COL_PANEL};
                 color: {_COL_TEXT};

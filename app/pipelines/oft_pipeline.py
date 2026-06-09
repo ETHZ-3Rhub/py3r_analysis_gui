@@ -116,18 +116,18 @@ def _sanitize_group_name(name: str) -> str:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 def run(
-    group_csv_dirs: dict[str, Path],
+    group_csv_files: dict[str, list[Path]],
     output_dir: Path,
     progress_cb: Callable[[str, float | None], None],
     comparisons: list[tuple[str, str]],
-    group_video_dirs: dict[str, Path] | None = None,
+    group_video_files: dict[str, list[Path]] | None = None,
 ) -> None:
     """Full OFT pipeline across all groups.
 
     Parameters
     ----------
-    group_csv_dirs:
-        ``{group_name: Path}`` — each Path is a folder of per-animal YOLO3R CSVs.
+    group_csv_files:
+        ``{group_name: [Path, ...]}`` — each group's per-animal YOLO3R CSVs.
     output_dir:
         Root output folder.  Sub-folders are created automatically.
     progress_cb:
@@ -148,22 +148,18 @@ def run(
     for d in [qc_dir, features_dir, summaries_dir, figures_dir, bfa_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
-    group_names = list(group_csv_dirs.keys())
+    group_names = list(group_csv_files.keys())
 
     # ── Load ──────────────────────────────────────────────────────────────────
     progress_cb("Loading tracking data…", 42)
     group_tcs: dict[str, p3b.TrackingCollection] = {}
-    for group_name, csv_dir in group_csv_dirs.items():
+    for group_name, csv_files in group_csv_files.items():
         progress_cb(f"  Loading {group_name}…", None)
 
         # Build {handle: path} with group suffix baked in at load time —
         # from_yolo3r sets obj.handle = key, so no post-hoc mutation needed.
         safe = _sanitize_group_name(group_name)
-        handles_and_paths = {
-            f"{p.stem}_{safe}": str(p)
-            for p in sorted(csv_dir.iterdir())
-            if p.is_file() and p.suffix.lower() == ".csv" and not p.name.startswith(".")
-        }
+        handles_and_paths = {f"{p.stem}_{safe}": str(p) for p in sorted(csv_files)}
         tc = p3b.TrackingCollection.from_yolo3r(handles_and_paths, fps=_FPS)
         tc.each.strip_column_names()
 
@@ -209,7 +205,7 @@ def run(
     _cluster(fc, progress_cb)
 
     progress_cb("Rendering QC animations…", 76)
-    _export_animations(fc, group_names, group_video_dirs or {}, output_dir, progress_cb)
+    _export_animations(fc, group_names, group_video_files or {}, output_dir, progress_cb)
 
     progress_cb("Saving features…", 78)
     fc.save(str(features_dir), data_format="parquet", overwrite=True)
@@ -321,7 +317,7 @@ def _compute_features(
 def _export_animations(
     fc: p3b.FeaturesCollection,
     group_names: list[str],
-    group_video_dirs: dict[str, Path],
+    group_video_files: dict[str, list[Path]],
     output_dir: Path,
     progress_cb: Callable[[str, float | None], None],
 ) -> None:
@@ -338,17 +334,17 @@ def _export_animations(
         # Pick first animal in this group as the representative sample
         feat = next(iter(group_fc.values()))
 
-        # Try to find the source video for overlay
+        # Try to find the source video for overlay — exact paths are known,
+        # so this is just a stem match, no extension-guessing required.
         video_path = None
-        if group_name in group_video_dirs:
+        if group_name in group_video_files:
             safe = _sanitize_group_name(group_name)
             video_stem = feat.handle.removesuffix(f"_{safe}")
-            video_dir = group_video_dirs[group_name]
             video_path = next(
                 (
-                    video_dir / f"{video_stem}{ext}"
-                    for ext in _VIDEO_EXTS
-                    if (video_dir / f"{video_stem}{ext}").exists()
+                    p
+                    for p in group_video_files[group_name]
+                    if p.stem == video_stem and p.suffix.lower() in _VIDEO_EXTS
                 ),
                 None,
             )
@@ -357,6 +353,7 @@ def _export_animations(
         progress_cb(f"  {group_name} ({'with video' if video_path else 'no video'})…", None)
 
         try:
+            has_video = video_path is not None
             stream = feat.animation_stream(
                 points=_ANIM_MOUSE_POINTS + _CORNERS,
                 lines=_ANIM_BODY_LINES + _CORNER_LINES,
@@ -366,12 +363,12 @@ def _export_animations(
                     "In centre": "within_boundary_static_bodycentre_in_centre",
                     "Cluster": _CLUSTER_COL,
                 },
-                pixel_coords=True,
-                undo_meta_scaling=True,
+                pixel_coords=has_video,
+                undo_meta_scaling=has_video,
                 style=_ANIM_STYLE,
             )
             save_kwargs = {"out_path": str(out_path)}
-            if video_path is not None:
+            if has_video:
                 save_kwargs["video_path"] = str(video_path)
             stream.save(**save_kwargs)
         except Exception as exc:
@@ -456,7 +453,6 @@ def _export_figures(
         "total_distance_bodycentre",
         "time_in_centre",
         "distance_in_centre",
-        "time_in_cluster",
     ]:
         progress_cb(f"  Plotting {metric}…", None)
         try:
