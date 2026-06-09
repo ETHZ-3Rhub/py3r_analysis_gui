@@ -234,6 +234,7 @@ class _ManifestDialog(QDialog):
     def _refresh_table(self) -> None:
         paths = self._panel._manifests.get(self._group_name, [])
 
+        self._table.clearSelection()
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(paths))
         for row, path in enumerate(paths):
