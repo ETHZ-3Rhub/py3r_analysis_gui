@@ -22,6 +22,7 @@ group — kept out of the main view so the always-visible list stays simple.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PyQt6.QtCore import QModelIndex, Qt, pyqtSignal
@@ -128,7 +129,7 @@ class _PathSortItem(QTableWidgetItem):
 
     def __lt__(self, other: object) -> bool:  # type: ignore[override]
         if isinstance(other, _PathSortItem):
-            return self._sort_key < other._sort_key
+            return _natural_key(self._sort_key) < _natural_key(other._sort_key)
         return super().__lt__(other)
 
 
@@ -140,7 +141,7 @@ class _PlainTextSortItem(QTableWidgetItem):
 
     def __lt__(self, other: object) -> bool:  # type: ignore[override]
         if isinstance(other, QTableWidgetItem):
-            return self.text() < other.text()
+            return _natural_key(self.text()) < _natural_key(other.text())
         return super().__lt__(other)
 
 
@@ -170,6 +171,12 @@ _FOLDER_TEXT_COLOURS = [
     "#74c7ec",  # sapphire
     "#a6adc8",  # overlay (dimmer, 8th+ folders)
 ]
+
+
+def _natural_key(s: str) -> list[int | str]:
+    """Split a string into alternating text/integer chunks for natural sort.
+    "oft2.csv" → ["oft", 2, ".csv"] so numeric runs compare by value."""
+    return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", s)]
 
 
 def _ext_label(file_exts: set[str]) -> str:
@@ -203,6 +210,7 @@ class _ManifestDialog(QDialog):
         self.resize(560, 380)
         self._build_ui()
         self._refresh_table()
+        self._table.sortItems(0, Qt.SortOrder.AscendingOrder)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
