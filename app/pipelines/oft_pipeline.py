@@ -196,13 +196,18 @@ def run(
 
     if numbins:
         print(f"Computing {numbins}-bin summaries…")
-        bins_dir = summaries_dir / "bins"
-        bins_dir.mkdir(exist_ok=True)
+        whole_df, _ = sc.to_df(include_tags=True, series="separate")
+        bin_dfs = {"whole": whole_df}
         for i, bin_sc in enumerate(sc.make_bins(numbins)):
             print(f"  Bin {i + 1}/{numbins}…")
             _compute_summaries(bin_sc)
             bin_df, _ = bin_sc.to_df(include_tags=True, series="separate")
-            bin_df.to_csv(bins_dir / f"bin_{i + 1:02d}.csv")
+            bin_dfs[f"bin_{i + 1:02d}"] = bin_df
+        tall = p3b.SummaryCollection.collate_bin_dfs(bin_dfs, format="tall")
+        wide = p3b.SummaryCollection.collate_bin_dfs(bin_dfs, format="wide")
+        tall.to_csv(summaries_dir / "OFT_results_binned_tall.csv")
+        wide.to_csv(summaries_dir / "OFT_results_binned_wide.csv")
+        print(f"  Saved binned CSVs ({numbins} bins, tall + wide).")
 
     sc_grouped = sc.groupby(tags=[_GROUP_TAG])
 
