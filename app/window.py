@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 
 from app import arenas as arena_pkg
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
+from app.options_dialog import AdvancedOptionsDialog
 from app.runner import PipelineRunner
 from app.settings_dialog import EnvCheckWorker, SettingsDialog, get_version, parse_env_result
 
@@ -83,6 +84,7 @@ class MainWindow(QWidget):
         self._runner: PipelineRunner | None = None
         self._env_status: str = "checking"  # mirrors EnvCheckWorker result strings
         self._last_source_is_csv: bool | None = None  # None until a source is first chosen
+        self._current_options: dict = {}
 
         # Shared filter so tooltips still show on disabled widgets (gated
         # sections, the Analyse button) — Qt suppresses them by default.
@@ -247,8 +249,18 @@ class MainWindow(QWidget):
         self._arena_combo.addItem("— select arena —", userData=None)
         for mod in self._arenas:
             self._arena_combo.addItem(mod.NAME, userData=mod)
-        self._arena_combo.currentIndexChanged.connect(self._refresh_run_button)
+        self._arena_combo.currentIndexChanged.connect(self._on_arena_changed)
         layout.addWidget(self._arena_combo)
+
+        opts_row = QHBoxLayout()
+        opts_row.addStretch()
+        self._options_btn = QPushButton("Advanced options")
+        self._options_btn.setObjectName("settingsButton")
+        self._options_btn.setEnabled(False)
+        self._options_btn.setToolTip("No arena selected.")
+        self._options_btn.clicked.connect(self._open_options)
+        opts_row.addWidget(self._options_btn)
+        layout.addLayout(opts_row)
 
         sep_arena = QFrame()
         sep_arena.setFrameShape(QFrame.Shape.HLine)
@@ -556,7 +568,33 @@ class MainWindow(QWidget):
         if folder:
             self._out_edit.setText(folder)
 
+    def _on_arena_changed(self) -> None:
+        self._current_options = {}
+        self._refresh_run_button()
+
+    def _open_options(self) -> None:
+        arena_mod = self._arena_combo.currentData()
+        options = getattr(arena_mod, "OPTIONS", []) if arena_mod else []
+        if not options:
+            return
+        from PyQt6.QtWidgets import QDialog
+
+        dlg = AdvancedOptionsDialog(options, self._current_options, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._current_options = dlg.values()
+
     def _refresh_run_button(self) -> None:
+        arena_mod = self._arena_combo.currentData()
+        arena_options = getattr(arena_mod, "OPTIONS", []) if arena_mod else []
+        self._options_btn.setEnabled(bool(arena_options))
+        if not arena_mod:
+            self._options_btn.setToolTip("No arena selected.")
+        elif not arena_options:
+            self._options_btn.setToolTip("This arena has no advanced options.")
+        else:
+            n = len(arena_options)
+            self._options_btn.setToolTip(f"{n} advanced option{'s' if n != 1 else ''} available.")
+
         reasons: list[str] = []
         groups = self._group_panel.groups()
 
@@ -654,7 +692,12 @@ class MainWindow(QWidget):
         self._csv_radio.setEnabled(False)
 
         self._runner = PipelineRunner(
-            arena_mod, groups, output_dir, comparisons, skip_tracking=skip_tracking, options={}
+            arena_mod,
+            groups,
+            output_dir,
+            comparisons,
+            skip_tracking=skip_tracking,
+            options=self._current_options,
         )
         self._runner.log.connect(self._on_log)
         self._runner.warning.connect(self._on_warning)

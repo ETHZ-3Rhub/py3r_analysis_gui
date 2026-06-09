@@ -26,4 +26,14 @@ PIPELINE_INPUTS = {
     "comparisons": "comparisons",
     "group_video_files": "group_video_files",
 }
-OPTIONS = []
+OPTIONS = [
+    {"name": "numbins", "type": int, "default": None, "label": "Time bins", "min": 2, "max": 20},
+    {
+        "name": "n_clusters",
+        "type": int,
+        "default": 10,
+        "label": "Behaviour clusters (k)",
+        "min": 5,
+        "max": 50,
+    },
+]

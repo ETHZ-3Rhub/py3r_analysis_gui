@@ -14,7 +14,6 @@ import re
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import py3r.behaviour as p3b
 
 # ── Constants (proprietary hardware — do not expose to GUI) ───────────────────
@@ -110,6 +109,8 @@ def run(
     output_dir: Path,
     comparisons: list[tuple[str, str]] | None = None,
     group_video_files: dict[str, list[Path]] | None = None,
+    numbins: int | None = None,
+    n_clusters: int = _N_CLUSTERS,
 ) -> None:
     """Full OFT pipeline across all groups.
 
@@ -125,6 +126,10 @@ def run(
     group_video_files:
         ``{group_name: [Path, ...]}`` — source videos for QC animation overlay.
         None → animations render without video background.
+    numbins:
+        Split each animal's session into this many equal-frame-count bins and
+        write per-bin summary CSVs alongside the whole-session results.
+        None → no binning.
     """
     import matplotlib
 
@@ -175,8 +180,8 @@ def run(
     _compute_features(fc)
 
     # ── Clustering ────────────────────────────────────────────────────────────
-    print(f"Clustering (k={_N_CLUSTERS})…")
-    _cluster(fc)
+    print(f"Clustering (k={n_clusters})…")
+    _cluster(fc, n_clusters)
 
     print("Rendering QC animations…")
     _export_animations(fc, group_names, group_video_files or {}, output_dir)
@@ -188,6 +193,17 @@ def run(
     print("Computing summaries…")
     sc = fc.to_summary()
     _compute_summaries(sc)
+
+    if numbins:
+        print(f"Computing {numbins}-bin summaries…")
+        bins_dir = summaries_dir / "bins"
+        bins_dir.mkdir(exist_ok=True)
+        for i, bin_sc in enumerate(sc.make_bins(numbins)):
+            print(f"  Bin {i + 1}/{numbins}…")
+            _compute_summaries(bin_sc)
+            bin_df, _ = bin_sc.to_df(include_tags=True, series="separate")
+            bin_df.to_csv(bins_dir / f"bin_{i + 1:02d}.csv")
+
     sc_grouped = sc.groupby(tags=[_GROUP_TAG])
 
     # ── Export ────────────────────────────────────────────────────────────────
@@ -198,7 +214,7 @@ def run(
     _export_figures(sc_grouped, group_names, comparisons, figures_dir)
 
     print("Running BFA…")
-    _export_bfa(sc_grouped, bfa_dir)
+    _export_bfa(sc_grouped, bfa_dir, n_clusters)
 
     print("Pipeline complete.")
 
@@ -341,7 +357,7 @@ def _export_animations(
 
 
 # ── Clustering ────────────────────────────────────────────────────────────────
-def _cluster(fc: p3b.FeaturesCollection) -> None:
+def _cluster(fc: p3b.FeaturesCollection, n_clusters: int) -> None:
     bfa_prefixes = (
         "speed_of_",
         "azimuth_deviation_",
@@ -352,9 +368,9 @@ def _cluster(fc: p3b.FeaturesCollection) -> None:
     bfa_cols = [c for c in fc[0].data.columns if any(c.startswith(p) for p in bfa_prefixes)]
     offset = list(np.arange(-15, 16, 1))
     embedding_dict = {f: offset for f in bfa_cols}
-    print(f"  Fitting k={_N_CLUSTERS} on {len(bfa_cols)} features…")
+    print(f"  Fitting k={n_clusters} on {len(bfa_cols)} features…")
     cluster_labels, _ = fc.cluster_embedding_stream(
-        embedding_dict=embedding_dict, n_clusters=_N_CLUSTERS
+        embedding_dict=embedding_dict, n_clusters=n_clusters
     )
     cluster_labels.store(_CLUSTER_COL, overwrite=True)
 
@@ -375,16 +391,9 @@ def _export_tables(
     sc: p3b.SummaryCollection,
     summaries_dir: Path,
 ) -> None:
-    summary_df, series_dfs = sc.to_df(include_tags=True, series="separate")
+    summary_df, _ = sc.to_df(include_tags=True, series="separate")
     summary_df.to_csv(summaries_dir / "OFT_results.csv")
-    try:
-        with pd.ExcelWriter(summaries_dir / "OFT_results.xlsx", engine="openpyxl") as writer:
-            summary_df.to_excel(writer, sheet_name="Summary")
-            for key, df in series_dfs.items():
-                df.to_excel(writer, sheet_name=key[:31])
-        print("  Saved CSV + Excel.")
-    except ImportError:
-        print("  Note: openpyxl not installed — CSV saved, Excel skipped.")
+    print("  Saved OFT_results.csv.")
 
 
 # ── Figure export ─────────────────────────────────────────────────────────────
@@ -436,6 +445,7 @@ def _export_figures(
 def _export_bfa(
     sc_grouped: p3b.SummaryCollection,
     bfa_dir: Path,
+    n_clusters: int,
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -443,7 +453,7 @@ def _export_bfa(
         print("  Computing BFA transition statistics…")
         bfa_results = sc_grouped.bfa(
             column=_CLUSTER_COL,
-            all_states=list(range(_N_CLUSTERS)),
+            all_states=list(range(n_clusters)),
             random_state=_BFA_RANDOM_STATE,
         )
         bfa_stats = p3b.SummaryCollection.bfa_stats(bfa_results)
@@ -468,7 +478,7 @@ def _export_bfa(
             print("  Plotting chord diagrams…")
             sc_grouped.plot_chord(
                 column=_CLUSTER_COL,
-                all_states=list(range(_N_CLUSTERS)),
+                all_states=list(range(n_clusters)),
                 save_dir=bfa_dir,
                 show=False,
             )
@@ -480,7 +490,7 @@ def _export_bfa(
             print("  Plotting transition UMAP…")
             sc_grouped.plot_transition_umap(
                 column=_CLUSTER_COL,
-                all_states=list(range(_N_CLUSTERS)),
+                all_states=list(range(n_clusters)),
                 random_state=_BFA_RANDOM_STATE,
                 save_dir=str(bfa_dir),
                 show=False,
