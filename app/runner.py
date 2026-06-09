@@ -15,8 +15,6 @@ from types import ModuleType
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
-
 
 def _kill_tree(pid: int) -> None:
     """Kill a process and all its children (Windows: taskkill /F /T, Unix: SIGKILL pgid)."""
@@ -45,7 +43,7 @@ class PipelineRunner(QThread):
     def __init__(
         self,
         arena: ModuleType,
-        groups: dict[str, Path],
+        groups: dict[str, list[Path]],
         output_dir: Path,
         comparisons: list[tuple[str, str]],
         *,
@@ -81,30 +79,25 @@ class PipelineRunner(QThread):
 
     def _run_arena(self) -> None:
         arena = self._arena
-        csv_dirs: dict[str, Path] = {}
+        csv_files: dict[str, list[Path]] = {}
         n_groups = len(self._groups)
 
-        for i, (group_name, video_dir) in enumerate(self._groups.items()):
+        for i, (group_name, files) in enumerate(self._groups.items()):
             if self._skip_tracking:
-                csv_dirs[group_name] = video_dir
+                csv_files[group_name] = files
                 continue
 
             self._progress_cb(f"Group {i + 1}/{n_groups}: {group_name}", None)
             csv_out = self._output_dir / "tracking" / group_name
             csv_out.mkdir(parents=True, exist_ok=True)
 
-            video_files = sorted(
-                f
-                for f in video_dir.iterdir()
-                if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in _VIDEO_EXTS
-            )
-            if not video_files:
-                self._warn(f"{group_name}: no video files found in {video_dir}")
+            if not files:
+                self._warn(f"{group_name}: no video files added")
                 continue
 
             tracked_any = False
-            n_videos = len(video_files)
-            for j, video in enumerate(video_files):
+            n_videos = len(files)
+            for j, video in enumerate(files):
                 self._progress_cb(f"  Tracking {video.name} ({j + 1}/{n_videos})…", None)
                 try:
                     proc = arena.TRACKER.track(video, csv_out, **arena.TRACKER_ARGS)
@@ -118,21 +111,25 @@ class PipelineRunner(QThread):
                     self._warn(f"{group_name} / {video.name}: tracking failed — {exc}")
 
             if tracked_any:
-                csv_dirs[group_name] = csv_out
+                csv_files[group_name] = sorted(
+                    p
+                    for p in csv_out.iterdir()
+                    if p.is_file() and not p.name.startswith(".") and p.suffix.lower() == ".csv"
+                )
             else:
                 self._warn(f"{group_name}: no videos tracked successfully, skipping pipeline")
 
-        if not csv_dirs:
+        if not csv_files:
             raise RuntimeError("No groups were tracked successfully — cannot run pipeline.")
 
         self._progress_cb("Running analysis pipeline…", 40)
         try:
             arena.PIPELINE.run(
-                group_csv_dirs=csv_dirs,
+                group_csv_files=csv_files,
                 output_dir=self._output_dir,
                 progress_cb=self._progress_cb,
                 comparisons=self._comparisons,
-                group_video_dirs=self._groups,
+                group_video_files=self._groups,
             )
         except Exception as exc:
             self._warn(f"Pipeline error: {exc}")
