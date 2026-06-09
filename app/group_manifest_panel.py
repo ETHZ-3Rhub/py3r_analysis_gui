@@ -50,6 +50,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.theme import get_theme as _get_theme
+
+_T = _get_theme()  # cached at import for inline widget-creation calls
+
 # --- REVIEWED 2026-06-08: kept deliberately, not oversights -----------------
 # `_ElideLeftDelegate`, `_PathSortItem` and `_PlainTextSortItem` below are the
 # most "custom Qt internals"-heavy code in this file. Considered ripping them
@@ -148,11 +152,6 @@ class _PlainTextSortItem(QTableWidgetItem):
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
 CSV_EXTS = {".csv"}
 
-_COL_TEXT = "#cdd6f4"
-_COL_MUTED = "#6c7086"
-_COL_ERROR = "#f38ba8"
-_COL_WARN = "#fab387"
-_COL_SUCCESS = "#a6e3a1"
 
 _BADGE_WIDTH = 44
 _REMOVE_BTN_WIDTH = 28
@@ -479,13 +478,13 @@ class GroupManifestPanel(QWidget):
         row.setSpacing(6)
 
         name_lbl = _ClickableLabel(name)
-        name_lbl.setStyleSheet(f"color: {_COL_TEXT}; padding: 3px 4px;")
+        name_lbl.setStyleSheet(f"color: {_T.text}; padding: 3px 4px;")
         name_lbl.clicked.connect(lambda: self._begin_rename(item_widget))
 
         name_edit = QLineEdit(name)
         name_edit.setFrame(False)
         name_edit.setStyleSheet(
-            f"background: transparent; color: {_COL_TEXT}; padding: 3px 4px; border: none;"
+            f"background: transparent; color: {_T.text}; padding: 3px 4px; border: none;"
         )
         name_edit.editingFinished.connect(lambda: self._commit_rename(item_widget))
         name_edit.hide()
@@ -498,7 +497,7 @@ class GroupManifestPanel(QWidget):
         badge_lbl = QLabel("…")
         badge_lbl.setFixedWidth(_BADGE_WIDTH)
         badge_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px; font-weight: bold;")
+        badge_lbl.setStyleSheet(f"color: {_T.muted}; font-size: 11px; font-weight: bold;")
         row.addWidget(badge_lbl)
 
         files_btn = QPushButton("Edit")
@@ -592,13 +591,13 @@ class GroupManifestPanel(QWidget):
         ext_label = _ext_label(self._file_exts)
 
         if count == 0:
-            colour, text = _COL_ERROR, "0 ⚠"
+            colour, text = _T.error, "0 ⚠"
             tip = f"No {ext_label} files added yet."
         elif count < 5:
-            colour, text = _COL_WARN, f"{count} ⚠"
+            colour, text = _T.warn, f"{count} ⚠"
             tip = f"Only {count} {ext_label} file(s) — results may be underpowered (expected ≥ 5)."
         else:
-            colour, text = _COL_SUCCESS, str(count)
+            colour, text = _T.success, str(count)
             tip = f"{count} {ext_label} file(s)."
 
         item_widget._badge_lbl.setText(text)
