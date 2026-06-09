@@ -212,6 +212,10 @@ class _ManifestDialog(QDialog):
         self._refresh_table()
         self._table.sortItems(0, Qt.SortOrder.AscendingOrder)
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        self._table.clearSelection()
+        super().mousePressEvent(event)
+
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
@@ -371,14 +375,14 @@ class GroupManifestPanel(QWidget):
 
         add_row = QHBoxLayout()
         add_row.setSpacing(6)
-        from_folder_btn = QPushButton("+ Add from folder…")
+        from_folder_btn = QPushButton("+ New group from folder…")
         from_folder_btn.setObjectName("secondaryButton")
         from_folder_btn.setToolTip(
             "Build a group from every matching file already sitting\n"
             "in one folder — the one-click option if your files are organised."
         )
-        from_folder_btn.clicked.connect(self._add_from_folder)
-        from_files_btn = QPushButton("+ Add from files…")
+        from_folder_btn.clicked.connect(lambda: self._add_from_folder())
+        from_files_btn = QPushButton("+ New group from files…")
         from_files_btn.setObjectName("secondaryButton")
         from_files_btn.setToolTip(
             "Pick individual files yourself — for groups whose files\n"
@@ -391,30 +395,52 @@ class GroupManifestPanel(QWidget):
 
     # ── Group creation ───────────────────────────────────────────────────────
 
-    def _add_from_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Select a folder")
+    def _add_from_folder(self, start_dir: str = "") -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Select a folder", start_dir)
         if not folder:
             return
         folder_path = Path(folder)
+
         try:
+            contents = list(folder_path.iterdir())
             paths = sorted(
                 p
-                for p in folder_path.iterdir()
+                for p in contents
                 if p.is_file()
                 and not p.name.startswith(".")
                 and p.suffix.lower() in self._file_exts
             )
+            has_subdirs = any(p.is_dir() for p in contents)
         except (PermissionError, OSError):
             paths = []
+            has_subdirs = False
 
         if not paths:
             QMessageBox.information(
                 self,
                 "No matching files",
-                f'"{folder_path.name}" contains no {_ext_label(self._file_exts)} files.\n'
+                f'"{folder_path.name}" contains no {_ext_label(self._file_exts)} files '
+                "(subfolders are not scanned).\n"
                 "Pick a different folder, or add files manually instead.",
             )
             return
+
+        if has_subdirs:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Subfolders will be ignored")
+            msg.setText(
+                f'"{folder_path.name}" contains subfolders, which won\'t be scanned.\n\n'
+                f"Only {_ext_label(self._file_exts)} files directly inside this folder "
+                "will be added.\n\n"
+                "Continue, or go back to pick a different folder?"
+            )
+            continue_btn = msg.addButton("Continue", QMessageBox.ButtonRole.AcceptRole)
+            msg.addButton("Go Back", QMessageBox.ButtonRole.RejectRole)
+            msg.exec()
+            if msg.clickedButton() is not continue_btn:
+                self._add_from_folder(start_dir=str(folder_path.parent))
+                return
+
         self._create_group(default_name=folder_path.name, paths=paths)
 
     def _add_from_files(self) -> None:
