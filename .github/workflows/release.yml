@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate version bump against latest tag
+        shell: python
+        run: |
+          import subprocess, sys, re
+          from pathlib import Path
+          import tomllib
+          subprocess.run(["git", "fetch", "--tags", "--quiet"], check=True)
+          latest = subprocess.run(
+              ["bash", "-lc", "git tag -l 'v*' --sort=-v:refname | head -n1"],
+              capture_output=True, text=True, check=True,
+          ).stdout.strip() or "v0.0.0"
+          print(f"Latest tag: {latest}")
+          pyver = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          print(f"pyproject version: {pyver}")
+          def parse(v):
+              m = re.match(r"^(\d+)\.(\d+)\.(\d+)$", v)
+              if not m:
+                  sys.exit(f"Invalid semver: {v}")
+              return tuple(map(int, m.groups()))
+          la, lb, lc = parse(latest.lstrip("v"))
+          na, nb, nc = parse(pyver)
+          allowed = {(la, lb, lc + 1), (la, lb + 1, 0), (la + 1, 0, 0)}
+          if (na, nb, nc) not in allowed:
+              sys.exit(
+                  f"pyproject version {pyver} must be one of: "
+                  f"{la}.{lb}.{lc+1} (patch) or {la}.{lb+1}.0 (minor) or {la+1}.0.0 (major); "
+                  f"latest tag is {latest}"
+              )
+          print("Version bump check passed.")
+
+      - name: Read version from pyproject
+        id: readver
+        shell: python
+        run: |
+          from pathlib import Path
+          import tomllib, os
+          v = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"version={v}\n")
+
+      - name: Ensure tag does not already exist
+        run: |
+          git fetch --tags --quiet
+          TAG="v${{ steps.readver.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists"; exit 1
+          fi
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          TAG="v${{ steps.readver.outputs.version }}"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+      - name: Update draft release
+        uses: release-drafter/release-drafter@v6
+        with:
+          config-name: release-drafter.yml
+          tag: v${{ steps.readver.outputs.version }}
+          name: v${{ steps.readver.outputs.version }}
+          version: ${{ steps.readver.outputs.version }}
+          commitish: main
+          publish: false
+          disable-autolabeler: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
