@@ -4,13 +4,13 @@ Receives per-group folders of YOLO3R tracking CSVs and runs:
     load → preprocess → QC plots → features → clustering → summary → export
 
 Nothing in this file knows about the GUI, the tracker, or any other arena.
+Progress is reported via print() — the caller captures stdout if needed.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -99,18 +99,8 @@ _CORNER_SCALE = 0.2
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def _sanitize_group_name(name: str) -> str:
-    """Convert a group name to a safe suffix for animal handles.
-
-    Replaces any run of non-alphanumeric characters with a single underscore
-    and strips leading/trailing underscores.  Falls back to ``"group"`` if the
-    result would be empty (e.g. the name was entirely punctuation).
-
-    Examples
-    --------
-    ``"Control Group"``  →  ``"Control_Group"``
-    ``"KO (n=5)"``       →  ``"KO_n_5"``
-    """
-    sanitized = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_")
+    """Mirror of from_groups() internal sanitization — used to reverse handle stems."""
+    sanitized = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
     return sanitized or "group"
 
 
@@ -118,8 +108,7 @@ def _sanitize_group_name(name: str) -> str:
 def run(
     group_csv_files: dict[str, list[Path]],
     output_dir: Path,
-    progress_cb: Callable[[str, float | None], None],
-    comparisons: list[tuple[str, str]],
+    comparisons: list[tuple[str, str]] | None = None,
     group_video_files: dict[str, list[Path]] | None = None,
 ) -> None:
     """Full OFT pipeline across all groups.
@@ -130,15 +119,18 @@ def run(
         ``{group_name: [Path, ...]}`` — each group's per-animal YOLO3R CSVs.
     output_dir:
         Root output folder.  Sub-folders are created automatically.
-    progress_cb:
-        ``progress_cb(message, pct_or_None)`` forwarded from the GUI runner.
     comparisons:
         List of ``(group_a, group_b)`` pairs for statistical annotations and BFA plots.
-        Empty list → pipeline runs without pairwise stats.
+        Empty or None → pipeline runs without pairwise stats.
+    group_video_files:
+        ``{group_name: [Path, ...]}`` — source videos for QC animation overlay.
+        None → animations render without video background.
     """
     import matplotlib
 
     matplotlib.use("Agg")  # non-interactive backend — safe in QThread
+
+    comparisons = comparisons or []
 
     qc_dir = output_dir / "qc" / "trajectories"
     features_dir = output_dir / "features"
@@ -151,29 +143,11 @@ def run(
     group_names = list(group_csv_files.keys())
 
     # ── Load ──────────────────────────────────────────────────────────────────
-    progress_cb("Loading tracking data…", 42)
-    group_tcs: dict[str, p3b.TrackingCollection] = {}
-    for group_name, csv_files in group_csv_files.items():
-        progress_cb(f"  Loading {group_name}…", None)
-
-        # Build {handle: path} with group suffix baked in at load time —
-        # from_yolo3r sets obj.handle = key, so no post-hoc mutation needed.
-        safe = _sanitize_group_name(group_name)
-        handles_and_paths = {f"{p.stem}_{safe}": str(p) for p in sorted(csv_files)}
-        tc = p3b.TrackingCollection.from_yolo3r(handles_and_paths, fps=_FPS)
-        tc.each.strip_column_names()
-
-        for t in tc.values():
-            t.tags[_GROUP_TAG] = group_name
-
-        group_tcs[group_name] = tc
-
-    # ── Merge into one collection ─────────────────────────────────────────────
-    progress_cb("Merging groups…", 46)
-    tc_all = p3b.TrackingCollection.merge(list(group_tcs.values()))
+    print("Loading tracking data…")
+    tc_all = p3b.TrackingCollection.from_groups(group_csv_files, fps=_FPS)
 
     # ── Preprocess ────────────────────────────────────────────────────────────
-    progress_cb("Preprocessing…", 48)
+    print("Preprocessing…")
     tc_all.each.filter_likelihood(threshold=_LIKELIHOOD_THRESHOLD)
     tc_all.each.interpolate(limit=_INTERPOLATION_LIMIT)
     tc_all.each.smooth_all(window=_SMOOTH_WINDOW, method="mean")
@@ -182,7 +156,7 @@ def run(
     )
 
     # ── QC trajectory plots ───────────────────────────────────────────────────
-    progress_cb("Saving trajectory QC plots…", 53)
+    print("Saving trajectory QC plots…")
     tc_grouped = tc_all.groupby(tags=[_GROUP_TAG])
     for group_name in group_names:
         group_qc_dir = qc_dir / group_name
@@ -196,45 +170,42 @@ def run(
         )
 
     # ── Features ──────────────────────────────────────────────────────────────
-    progress_cb("Computing features…", 57)
+    print("Computing features…")
     fc = tc_all.to_features()
-    _compute_features(fc, progress_cb)
+    _compute_features(fc)
 
     # ── Clustering ────────────────────────────────────────────────────────────
-    progress_cb(f"Clustering (k={_N_CLUSTERS})…", 73)
-    _cluster(fc, progress_cb)
+    print(f"Clustering (k={_N_CLUSTERS})…")
+    _cluster(fc)
 
-    progress_cb("Rendering QC animations…", 76)
-    _export_animations(fc, group_names, group_video_files or {}, output_dir, progress_cb)
+    print("Rendering QC animations…")
+    _export_animations(fc, group_names, group_video_files or {}, output_dir)
 
-    progress_cb("Saving features…", 78)
+    print("Saving features…")
     fc.save(str(features_dir), data_format="parquet", overwrite=True)
 
     # ── Summary ───────────────────────────────────────────────────────────────
-    progress_cb("Computing summaries…", 82)
+    print("Computing summaries…")
     sc = fc.to_summary()
     _compute_summaries(sc)
     sc_grouped = sc.groupby(tags=[_GROUP_TAG])
 
     # ── Export ────────────────────────────────────────────────────────────────
-    progress_cb("Exporting tables…", 87)
-    _export_tables(sc, summaries_dir, progress_cb)
+    print("Exporting tables…")
+    _export_tables(sc, summaries_dir)
 
-    progress_cb("Exporting figures…", 90)
-    _export_figures(sc_grouped, group_names, comparisons, figures_dir, progress_cb)
+    print("Exporting figures…")
+    _export_figures(sc_grouped, group_names, comparisons, figures_dir)
 
-    progress_cb("Running BFA…", 93)
-    _export_bfa(sc_grouped, group_names, comparisons, bfa_dir, progress_cb)
+    print("Running BFA…")
+    _export_bfa(sc_grouped, bfa_dir)
 
-    progress_cb("Pipeline complete.", 95)
+    print("Pipeline complete.")
 
 
 # ── Feature computation ───────────────────────────────────────────────────────
-def _compute_features(
-    fc: p3b.FeaturesCollection,
-    progress_cb: Callable[[str, float | None], None],
-) -> None:
-    progress_cb("  Spatial boundaries…", None)
+def _compute_features(fc: p3b.FeaturesCollection) -> None:
+    print("  Spatial boundaries…")
 
     fc.each.define_static_boundary(_CORNERS, name="oft")
     fc.each.define_static_boundary(
@@ -267,7 +238,7 @@ def _compute_features(
     dist_change = fc.each.distance_change(_BODY_CENTRE)
     (in_centre.astype("Int64") * dist_change).store("dist_change_bodycentre_in_centre")
 
-    progress_cb("  Kinematic features…", None)
+    print("  Kinematic features…")
 
     for pt in ["nose", "neck", "earr", "earl", _BODY_CENTRE, "hipl", "hipr", "tailbase"]:
         fc.each.speed(pt).store()
@@ -312,14 +283,11 @@ def _compute_features(
 
 
 # ── QC animations ────────────────────────────────────────────────────────────
-
-
 def _export_animations(
     fc: p3b.FeaturesCollection,
     group_names: list[str],
     group_video_files: dict[str, list[Path]],
     output_dir: Path,
-    progress_cb: Callable[[str, float | None], None],
 ) -> None:
     anim_dir = output_dir / "qc" / "animations"
     anim_dir.mkdir(parents=True, exist_ok=True)
@@ -331,11 +299,8 @@ def _export_animations(
         if not group_fc:
             continue
 
-        # Pick first animal in this group as the representative sample
         feat = next(iter(group_fc.values()))
 
-        # Try to find the source video for overlay — exact paths are known,
-        # so this is just a stem match, no extension-guessing required.
         video_path = None
         if group_name in group_video_files:
             safe = _sanitize_group_name(group_name)
@@ -350,7 +315,7 @@ def _export_animations(
             )
 
         out_path = anim_dir / f"{group_name}.mp4"
-        progress_cb(f"  {group_name} ({'with video' if video_path else 'no video'})…", None)
+        print(f"  {group_name} ({'with video' if video_path else 'no video'})…")
 
         try:
             has_video = video_path is not None
@@ -372,14 +337,11 @@ def _export_animations(
                 save_kwargs["video_path"] = str(video_path)
             stream.save(**save_kwargs)
         except Exception as exc:
-            progress_cb(f"  Warning: animation failed for {group_name}: {exc}", None)
+            print(f"  Warning: animation failed for {group_name}: {exc}")
 
 
 # ── Clustering ────────────────────────────────────────────────────────────────
-def _cluster(
-    fc: p3b.FeaturesCollection,
-    progress_cb: Callable[[str, float | None], None],
-) -> None:
+def _cluster(fc: p3b.FeaturesCollection) -> None:
     bfa_prefixes = (
         "speed_of_",
         "azimuth_deviation_",
@@ -390,7 +352,7 @@ def _cluster(
     bfa_cols = [c for c in fc[0].data.columns if any(c.startswith(p) for p in bfa_prefixes)]
     offset = list(np.arange(-15, 16, 1))
     embedding_dict = {f: offset for f in bfa_cols}
-    progress_cb(f"  Fitting k={_N_CLUSTERS} on {len(bfa_cols)} features…", None)
+    print(f"  Fitting k={_N_CLUSTERS} on {len(bfa_cols)} features…")
     cluster_labels, _ = fc.cluster_embedding_stream(
         embedding_dict=embedding_dict, n_clusters=_N_CLUSTERS
     )
@@ -412,7 +374,6 @@ def _compute_summaries(sc: p3b.SummaryCollection) -> None:
 def _export_tables(
     sc: p3b.SummaryCollection,
     summaries_dir: Path,
-    progress_cb: Callable[[str, float | None], None],
 ) -> None:
     summary_df, series_dfs = sc.to_df(include_tags=True, series="separate")
     summary_df.to_csv(summaries_dir / "OFT_results.csv")
@@ -421,9 +382,9 @@ def _export_tables(
             summary_df.to_excel(writer, sheet_name="Summary")
             for key, df in series_dfs.items():
                 df.to_excel(writer, sheet_name=key[:31])
-        progress_cb("  Saved CSV + Excel.", None)
+        print("  Saved CSV + Excel.")
     except ImportError:
-        progress_cb("  Note: openpyxl not installed — CSV saved, Excel skipped.", None)
+        print("  Note: openpyxl not installed — CSV saved, Excel skipped.")
 
 
 # ── Figure export ─────────────────────────────────────────────────────────────
@@ -432,7 +393,6 @@ def _export_figures(
     group_names: list[str],
     comparisons: list[tuple[str, str]],
     figures_dir: Path,
-    progress_cb: Callable[[str, float | None], None],
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -454,7 +414,7 @@ def _export_figures(
         "time_in_centre",
         "distance_in_centre",
     ]:
-        progress_cb(f"  Plotting {metric}…", None)
+        print(f"  Plotting {metric}…")
         try:
             fig, ax, _ = sc_grouped.snsbox(
                 metric,
@@ -469,21 +429,18 @@ def _export_figures(
             fig.savefig(figures_dir / f"{slug}_boxplot.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
         except Exception as exc:
-            progress_cb(f"  Warning: could not plot {metric}: {exc}", None)
+            print(f"  Warning: could not plot {metric}: {exc}")
 
 
 # ── BFA export ────────────────────────────────────────────────────────────────
 def _export_bfa(
     sc_grouped: p3b.SummaryCollection,
-    group_names: list[str],
-    comparisons: list[tuple[str, str]],
     bfa_dir: Path,
-    progress_cb: Callable[[str, float | None], None],
 ) -> None:
     import matplotlib.pyplot as plt
 
     try:
-        progress_cb("  Computing BFA transition statistics…", None)
+        print("  Computing BFA transition statistics…")
         bfa_results = sc_grouped.bfa(
             column=_CLUSTER_COL,
             all_states=list(range(_N_CLUSTERS)),
@@ -496,7 +453,7 @@ def _export_bfa(
         with open(bfa_dir / "bfa_stats.json", "w") as f:
             json.dump(bfa_stats, f, indent=4)
 
-        progress_cb("  Plotting BFA histograms…", None)
+        print("  Plotting BFA histograms…")
         p3b.SummaryCollection.plot_bfa_results(
             bfa_results,
             add_stats=True,
@@ -507,9 +464,8 @@ def _export_bfa(
         )
         plt.close("all")
 
-        # Chord diagrams (requires pycirclize)
         try:
-            progress_cb("  Plotting chord diagrams…", None)
+            print("  Plotting chord diagrams…")
             sc_grouped.plot_chord(
                 column=_CLUSTER_COL,
                 all_states=list(range(_N_CLUSTERS)),
@@ -518,11 +474,10 @@ def _export_bfa(
             )
             plt.close("all")
         except ImportError:
-            progress_cb("  Note: pycirclize not installed — chord diagrams skipped.", None)
+            print("  Note: pycirclize not installed — chord diagrams skipped.")
 
-        # Transition UMAP (requires umap-learn)
         try:
-            progress_cb("  Plotting transition UMAP…", None)
+            print("  Plotting transition UMAP…")
             sc_grouped.plot_transition_umap(
                 column=_CLUSTER_COL,
                 all_states=list(range(_N_CLUSTERS)),
@@ -532,7 +487,7 @@ def _export_bfa(
             )
             plt.close("all")
         except ImportError:
-            progress_cb("  Note: umap-learn not installed — UMAP skipped.", None)
+            print("  Note: umap-learn not installed — UMAP skipped.")
 
     except Exception as exc:
-        progress_cb(f"  Warning: BFA failed: {exc}", None)
+        print(f"  Warning: BFA failed: {exc}")

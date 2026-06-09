@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import traceback
 from pathlib import Path
 from types import ModuleType
@@ -24,7 +25,6 @@ def _kill_tree(pid: int) -> None:
         if platform.system() == "Windows":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
         else:
-            import os
             import signal
 
             os.killpg(os.getpgid(pid), signal.SIGKILL)
@@ -32,11 +32,36 @@ def _kill_tree(pid: int) -> None:
         pass
 
 
+class _LogCapture:
+    """Redirect sys.stdout to the runner log signal during pipeline execution."""
+
+    def __init__(self, emit_fn):
+        self._emit = emit_fn
+        self._buf = ""
+
+    def write(self, text: str) -> None:
+        self._buf += text
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            self._emit(line)
+
+    def flush(self) -> None:
+        if self._buf:
+            self._emit(self._buf)
+            self._buf = ""
+
+    def isatty(self) -> bool:
+        return False
+
+    @property
+    def encoding(self) -> str:
+        return "utf-8"
+
+
 class PipelineRunner(QThread):
     log = pyqtSignal(str)
-    progress = pyqtSignal(int)
     warning = pyqtSignal(str)
-    subprocess_output = pyqtSignal(str)  # raw chunks from tracked subprocess
+    subprocess_output = pyqtSignal(str)  # raw chunks from tracking subprocess
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
 
@@ -48,12 +73,14 @@ class PipelineRunner(QThread):
         comparisons: list[tuple[str, str]],
         *,
         skip_tracking: bool = False,
+        options: dict | None = None,
     ) -> None:
         super().__init__()
         self._arena = arena
         self._groups = groups
         self._output_dir = output_dir
         self._comparisons = comparisons
+        self._options = options or {}
         self._skip_tracking = skip_tracking or os.environ.get("DEV_SKIP_TRACKING", "").lower() in (
             "1",
             "true",
@@ -87,7 +114,7 @@ class PipelineRunner(QThread):
                 csv_files[group_name] = files
                 continue
 
-            self._progress_cb(f"Group {i + 1}/{n_groups}: {group_name}", None)
+            self.log.emit(f"Group {i + 1}/{n_groups}: {group_name}")
             csv_out = self._output_dir / "tracking" / group_name
             csv_out.mkdir(parents=True, exist_ok=True)
 
@@ -98,7 +125,7 @@ class PipelineRunner(QThread):
             tracked_any = False
             n_videos = len(files)
             for j, video in enumerate(files):
-                self._progress_cb(f"  Tracking {video.name} ({j + 1}/{n_videos})…", None)
+                self.log.emit(f"  Tracking {video.name} ({j + 1}/{n_videos})…")
                 try:
                     proc = arena.TRACKER.track(video, csv_out, **arena.TRACKER_ARGS)
                     self._current_proc = proc
@@ -122,22 +149,45 @@ class PipelineRunner(QThread):
         if not csv_files:
             raise RuntimeError("No groups were tracked successfully — cannot run pipeline.")
 
-        self._progress_cb("Running analysis pipeline…", 40)
+        self.log.emit("Running analysis pipeline…")
         try:
-            arena.PIPELINE.run(
-                group_csv_files=csv_files,
-                output_dir=self._output_dir,
-                progress_cb=self._progress_cb,
-                comparisons=self._comparisons,
-                group_video_files=self._groups,
-            )
+            self._run_pipeline(csv_files)
         except Exception as exc:
             self._warn(f"Pipeline error: {exc}")
 
         if self._warnings:
             self._write_warning_file()
 
-        self._progress_cb("Done.", 100)
+        self.log.emit("Done.")
+
+    def _run_pipeline(self, csv_files: dict[str, list[Path]]) -> None:
+        arena = self._arena
+
+        available = {
+            "group_csv_files": csv_files,
+            "output_dir": self._output_dir,
+            "comparisons": self._comparisons,
+        }
+        if not self._skip_tracking:
+            available["group_video_files"] = self._groups
+
+        pipeline_inputs = getattr(arena, "PIPELINE_INPUTS", {})
+        kwargs = {
+            fn_arg: available[gui_concept]
+            for gui_concept, fn_arg in pipeline_inputs.items()
+            if gui_concept in available
+        }
+
+        for opt in getattr(arena, "OPTIONS", []):
+            kwargs[opt["name"]] = self._options.get(opt["name"], opt["default"])
+
+        _old_stdout = sys.stdout
+        sys.stdout = _LogCapture(self.log.emit)
+        try:
+            arena.PIPELINE(**kwargs)
+        finally:
+            sys.stdout.flush()
+            sys.stdout = _old_stdout
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -148,10 +198,6 @@ class PipelineRunner(QThread):
                 break
             self.subprocess_output.emit(chunk.decode("utf-8", errors="replace"))
         proc.wait()
-
-    def _progress_cb(self, message: str, pct: float | None) -> None:
-        self.log.emit(message)
-        self.progress.emit(int(pct) if pct is not None else -1)
 
     def _warn(self, msg: str) -> None:
         self._warnings.append(msg)

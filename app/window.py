@@ -25,7 +25,6 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QRadioButton,
     QSizePolicy,
@@ -278,12 +277,6 @@ class MainWindow(QWidget):
         self._run_btn.setEnabled(False)
         self._run_btn.clicked.connect(self._toggle_run)
         layout.addWidget(self._run_btn)
-
-        self._progress = QProgressBar()
-        self._progress.setRange(0, 100)
-        self._progress.setValue(0)
-        self._progress.setTextVisible(False)
-        layout.addWidget(self._progress)
 
         self._log = QTextEdit()
         self._log.setReadOnly(True)
@@ -652,7 +645,6 @@ class MainWindow(QWidget):
                 return
 
         self._log.clear()
-        self._progress.setValue(0)
         self._open_btn.setVisible(False)
         self._run_btn.setText("■  Cancel")
         self._arena_combo.setEnabled(False)
@@ -662,10 +654,9 @@ class MainWindow(QWidget):
         self._csv_radio.setEnabled(False)
 
         self._runner = PipelineRunner(
-            arena_mod, groups, output_dir, comparisons, skip_tracking=skip_tracking
+            arena_mod, groups, output_dir, comparisons, skip_tracking=skip_tracking, options={}
         )
         self._runner.log.connect(self._on_log)
-        self._runner.progress.connect(self._on_progress)
         self._runner.warning.connect(self._on_warning)
         self._runner.subprocess_output.connect(self._on_subprocess_output)
         self._runner.finished.connect(self._on_finished)
@@ -677,7 +668,6 @@ class MainWindow(QWidget):
             # Disconnect our handlers so stray signals from the dying thread
             # don't affect the UI after we've already reset it.
             self._runner.log.disconnect(self._on_log)
-            self._runner.progress.disconnect(self._on_progress)
             self._runner.warning.disconnect(self._on_warning)
             self._runner.subprocess_output.disconnect(self._on_subprocess_output)
             self._runner.finished.disconnect(self._on_finished)
@@ -697,26 +687,17 @@ class MainWindow(QWidget):
         self._comp_list.setEnabled(True)
         self._update_video_radio_availability()
         self._csv_radio.setEnabled(True)
-        self._progress.setRange(0, 100)  # un-spin indeterminate bar if active
         self._refresh_run_button()
 
     # ── Runner signal handlers ─────────────────────────────────────────────────
     def _on_log(self, msg: str) -> None:
         self._log_line(msg)
 
-    def _on_progress(self, pct: int) -> None:
-        if pct < 0:
-            self._progress.setRange(0, 0)
-        else:
-            self._progress.setRange(0, 100)
-            self._progress.setValue(pct)
-
     def _on_finished(self, output_path: str) -> None:
         self._runner.wait()  # ensure Qt thread machinery has fully stopped before GC
         self._runner = None
         self._last_output = output_path
         self._log_line(f"✅  Complete — results in {output_path}", colour=_COL_SUCCESS)
-        self._progress.setValue(100)
         self._open_btn.setVisible(True)
         self._reset_controls()
 
@@ -903,16 +884,6 @@ class MainWindow(QWidget):
                 font-family: "Consolas", monospace;
                 font-size: 12px;
                 padding: 4px;
-            }}
-            QProgressBar {{
-                background-color: {_COL_BG};
-                border: 1px solid {_COL_MUTED};
-                border-radius: 4px;
-                height: 8px;
-            }}
-            QProgressBar::chunk {{
-                background-color: {_COL_ACCENT};
-                border-radius: 4px;
             }}
             QScrollBar:vertical {{
                 background: {_COL_BG};
