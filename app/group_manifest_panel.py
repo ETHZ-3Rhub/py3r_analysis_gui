@@ -50,6 +50,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.confirm_dialog import ask, grumpy_teacher, warning_face
 from app.theme import get_theme as _get_theme
 
 _T = _get_theme()  # cached at import for inline widget-creation calls
@@ -560,14 +561,13 @@ class GroupManifestPanel(QWidget):
 
     def _remove_group(self, item_widget: QWidget) -> None:
         name = item_widget._name
-        if (
-            self._manifests[name]
-            and QMessageBox.question(
-                self,
-                "Remove group",
-                f'"{name}" contains {len(self._manifests[name])} file(s). Remove it anyway?',
-            )
-            != QMessageBox.StandardButton.Yes
+        if self._manifests[name] and not ask(
+            self,
+            "Remove group",
+            f'"{name}" contains {len(self._manifests[name])} file(s). Remove it anyway?',
+            warning_face(),
+            yes_label="Remove",
+            no_label="Cancel",
         ):
             return
 
@@ -636,20 +636,31 @@ class GroupManifestPanel(QWidget):
         existing_in_group = set(manifest)
         added = 0
 
-        for path in paths:
-            if path in existing_in_group:
-                continue  # within-group duplicate: silent skip
+        # Pre-scan for files already claimed by other groups, so we can ask
+        # about all of them in a single dialog instead of one per file.
+        new_paths = [p for p in paths if p not in existing_in_group]
+        duplicates = {
+            p for p in new_paths if self._group_containing(p, exclude=group_name) is not None
+        }
 
-            other_group = self._group_containing(path, exclude=group_name)
-            if other_group is not None:
-                reply = QMessageBox.question(
-                    self,
-                    "File already in another group",
-                    f'This file is already in group "{other_group}":\n\n{path}\n\n'
-                    f'Add it to "{group_name}" too?',
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    continue
+        add_duplicates = True
+        if duplicates:
+            count = len(duplicates)
+            noun = "file" if count == 1 else "files"
+            add_duplicates = ask(
+                self,
+                "File already in another group",
+                f"{count} {noun} you're adding to \"{group_name}\" "
+                f"{'is' if count == 1 else 'are'} already in another group.\n\n"
+                f"Add {'it' if count == 1 else 'them'} anyway?",
+                grumpy_teacher(),
+                yes_label="Add anyway",
+                no_label="Skip",
+            )
+
+        for path in new_paths:
+            if path in duplicates and not add_duplicates:
+                continue
 
             manifest.append(path)
             existing_in_group.add(path)

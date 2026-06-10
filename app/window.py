@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app import arenas as arena_pkg
+from app.confirm_dialog import ask, grumpy_teacher, warning_face
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
 from app.options_dialog import AdvancedOptionsDialog
 from app.runner import PipelineRunner
@@ -331,13 +332,15 @@ class MainWindow(QWidget):
 
         if self._last_source_is_csv is not None and self._last_source_is_csv != is_csv:
             if any(self._group_panel.groups().values()):
-                answer = QMessageBox.question(
+                if not ask(
                     self,
                     "Switch source?",
                     "Switching source clears every group's file list, since the\n"
                     "files no longer match the new type. Continue?",
-                )
-                if answer != QMessageBox.StandardButton.Yes:
+                    grumpy_teacher(),
+                    yes_label="Clear and switch",
+                    no_label="Cancel",
+                ):
                     self._source_group.blockSignals(True)
                     (self._csv_radio if self._last_source_is_csv else self._video_radio).setChecked(
                         True
@@ -666,12 +669,14 @@ class MainWindow(QWidget):
         warnings = self._collect_warnings()
         if warnings:
             bullet_list = "\n".join(f"  ⚠  {w}" for w in warnings)
-            answer = QMessageBox.question(
+            if not ask(
                 self,
                 "Warnings — proceed?",
                 f"The following issues were detected:\n\n{bullet_list}\n\nProceed anyway?",
-            )
-            if answer != QMessageBox.StandardButton.Yes:
+                warning_face(),
+                yes_label="Proceed",
+                no_label="Go back",
+            ):
                 return
 
         self._log.clear()
