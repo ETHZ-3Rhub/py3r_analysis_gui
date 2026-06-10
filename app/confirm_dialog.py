@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 from app.theme import get_theme as _get_theme
 
 _IMG_DIR = Path(__file__).parent / "resources"
-_IMG_SIZE = 128
+_IMG_SIZE = 180
 
 
 def _load(filename: str | None) -> QPixmap:
