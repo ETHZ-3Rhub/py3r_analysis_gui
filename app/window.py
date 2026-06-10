@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app import arenas as arena_pkg
-from app.confirm_dialog import ask, grumpy_teacher, warning_face
+from app.confirm_dialog import ask, grumpy_teacher, pipeline_reference_image, warning_face
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
 from app.options_dialog import AdvancedOptionsDialog
 from app.runner import PipelineRunner
@@ -234,12 +234,12 @@ class MainWindow(QWidget):
         # something that depends on the source file type, so it lives here
         # among the other run-configuration controls rather than gated on
         # the left ──────────────────────────────────────────────────────────
-        arena_label = QLabel("Arena")
+        arena_label = QLabel("Pipeline")
         arena_label.setObjectName("sectionTitle")
         layout.addWidget(arena_label)
 
         self._arena_combo = QComboBox()
-        self._arena_combo.addItem("— select arena —", userData=None)
+        self._arena_combo.addItem("— select pipeline —", userData=None)
         for mod in self._arenas:
             self._arena_combo.addItem(mod.NAME, userData=mod)
         self._arena_combo.currentIndexChanged.connect(self._on_arena_changed)
@@ -565,6 +565,19 @@ class MainWindow(QWidget):
 
     def _on_arena_changed(self) -> None:
         self._current_options = {}
+
+        arena_mod = self._arena_combo.currentData()
+        if arena_mod is not None and not ask(
+            self,
+            "Confirm pipeline",
+            f"Does your arena look like this?\n\n({arena_mod.NAME})",
+            pipeline_reference_image(arena_mod),
+            yes_label="Yes",
+            no_label="No",
+        ):
+            self._arena_combo.setCurrentIndex(0)
+            return
+
         self._refresh_run_button()
 
     def _open_options(self) -> None:

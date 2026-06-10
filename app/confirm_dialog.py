@@ -21,9 +21,9 @@ _IMG_DIR = Path(__file__).parent / "resources"
 _IMG_SIZE = 128
 
 
-def _load(filename: str) -> QPixmap:
-    path = _IMG_DIR / filename
-    if path.exists():
+def _load(filename: str | None) -> QPixmap:
+    path = _IMG_DIR / filename if filename else None
+    if path is not None and path.exists():
         px = QPixmap(str(path))
         return px.scaled(
             _IMG_SIZE,
@@ -45,6 +45,12 @@ def grumpy_teacher() -> QPixmap:
 def warning_face() -> QPixmap:
     """'Proceed anyway?' — soft warnings before a run."""
     return _load("warning_face.png")
+
+
+def pipeline_reference_image(pipeline_mod) -> QPixmap:
+    """Reference photo of the arena a pipeline expects, shown when
+    confirming the user picked the right pipeline for their setup."""
+    return _load(getattr(pipeline_mod, "ARENA_IMAGE", None))
 
 
 class _ConfirmDialog(QDialog):
