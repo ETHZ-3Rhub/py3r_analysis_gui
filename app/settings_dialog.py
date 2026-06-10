@@ -230,7 +230,7 @@ class SettingsDialog(QDialog):
 
     def _apply_status(self, colour: str, text: str, tooltip: str) -> None:
         self._status_dot.setStyleSheet(f"color: {colour}; font-size: 16px;")
-        self._status_lbl.setText(text)
+        self._status_lbl.setText(f"Tracking: {text}")
         self._status_lbl.setStyleSheet(f"color: {colour};")
         self._status_lbl.setToolTip(tooltip)
 

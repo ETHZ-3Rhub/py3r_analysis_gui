@@ -306,7 +306,7 @@ class MainWindow(QWidget):
         self._env_dot = QLabel("●")
         self._env_dot.setFixedWidth(14)
         self._env_dot.setStyleSheet(f"color: {_T.muted}; font-size: 13px;")
-        self._env_lbl = QLabel("Checking…")
+        self._env_lbl = QLabel("Tracking: Checking…")
         self._env_lbl.setStyleSheet(f"color: {_T.muted}; font-size: 11px;")
         bottom_row.addWidget(self._env_dot)
         bottom_row.addWidget(self._env_lbl)
@@ -778,7 +778,7 @@ class MainWindow(QWidget):
         self._env_status = result
         colour, label, tooltip = parse_env_result(result)
         self._env_dot.setStyleSheet(f"color: {colour}; font-size: 13px;")
-        self._env_lbl.setText(label)
+        self._env_lbl.setText(f"Tracking: {label}")
         self._env_lbl.setStyleSheet(f"color: {colour}; font-size: 11px;")
         self._env_lbl.setToolTip(tooltip)
         self._env_dot.setToolTip(tooltip)
