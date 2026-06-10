@@ -200,7 +200,7 @@ class SettingsDialog(QDialog):
         themes = all_themes()
         for t in themes:
             self._theme_combo.addItem(t.name)
-        self._theme_combo.setCurrentText(_T.name)
+        self._theme_combo.setCurrentText(_get_theme().name)
         self._theme_combo.currentTextChanged.connect(self._on_theme_changed)
         theme_row.addWidget(self._theme_combo, stretch=1)
         layout.addLayout(theme_row)

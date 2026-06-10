@@ -930,6 +930,12 @@ class MainWindow(QWidget):
                 background-color: {_T.display};
                 color: {_T.text};
             }}
+            QListWidget#groupList QComboBox QAbstractItemView,
+            QListWidget#manifestGroupList QComboBox QAbstractItemView {{
+                background-color: {_T.display};
+                color: {_T.text};
+                selection-background-color: {_T.selection_bg};
+            }}
             QTableWidget#manifestTable {{
                 background-color: {_T.display};
                 color: {_T.text};
