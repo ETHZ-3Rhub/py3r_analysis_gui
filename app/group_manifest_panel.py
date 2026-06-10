@@ -53,8 +53,6 @@ from PyQt6.QtWidgets import (
 from app.confirm_dialog import ask, grumpy_teacher, warning_face
 from app.theme import get_theme as _get_theme
 
-_T = _get_theme()  # cached at import for inline widget-creation calls
-
 # --- REVIEWED 2026-06-08: kept deliberately, not oversights -----------------
 # `_ElideLeftDelegate`, `_PathSortItem` and `_PlainTextSortItem` below are the
 # most "custom Qt internals"-heavy code in this file. Considered ripping them
@@ -478,14 +476,16 @@ class GroupManifestPanel(QWidget):
         row.setContentsMargins(4, 2, 4, 2)
         row.setSpacing(6)
 
+        t = _get_theme()
+
         name_lbl = _ClickableLabel(name)
-        name_lbl.setStyleSheet(f"color: {_T.text}; padding: 3px 4px;")
+        name_lbl.setStyleSheet(f"color: {t.text}; padding: 3px 4px;")
         name_lbl.clicked.connect(lambda: self._begin_rename(item_widget))
 
         name_edit = QLineEdit(name)
         name_edit.setFrame(False)
         name_edit.setStyleSheet(
-            f"background: transparent; color: {_T.text}; padding: 3px 4px; border: none;"
+            f"background: transparent; color: {t.text}; padding: 3px 4px; border: none;"
         )
         name_edit.editingFinished.connect(lambda: self._commit_rename(item_widget))
         name_edit.hide()
@@ -498,7 +498,7 @@ class GroupManifestPanel(QWidget):
         badge_lbl = QLabel("…")
         badge_lbl.setFixedWidth(_BADGE_WIDTH)
         badge_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge_lbl.setStyleSheet(f"color: {_T.muted}; font-size: 11px; font-weight: bold;")
+        badge_lbl.setStyleSheet(f"color: {t.muted}; font-size: 11px; font-weight: bold;")
         row.addWidget(badge_lbl)
 
         files_btn = QPushButton("Edit")
@@ -587,17 +587,18 @@ class GroupManifestPanel(QWidget):
     # ── File-count badges ────────────────────────────────────────────────────
 
     def _update_group_badge(self, item_widget: QWidget) -> None:
+        t = _get_theme()
         count = len(self._manifests[item_widget._name])
         ext_label = _ext_label(self._file_exts)
 
         if count == 0:
-            colour, text = _T.error, "0 ⚠"
+            colour, text = t.error, "0 ⚠"
             tip = f"No {ext_label} files added yet."
         elif count < 5:
-            colour, text = _T.warn, f"{count} ⚠"
+            colour, text = t.warn, f"{count} ⚠"
             tip = f"Only {count} {ext_label} file(s) — results may be underpowered (expected ≥ 5)."
         else:
-            colour, text = _T.success, str(count)
+            colour, text = t.success, str(count)
             tip = f"{count} {ext_label} file(s)."
 
         item_widget._badge_lbl.setText(text)
@@ -611,6 +612,21 @@ class GroupManifestPanel(QWidget):
             widget = self._group_list.itemWidget(self._group_list.item(i))
             if widget is not None:
                 self._update_group_badge(widget)
+
+    def refresh_theme(self) -> None:
+        """Re-apply theme colours to existing group rows after a theme
+        change — group widgets are built once and styled at creation time,
+        so they don't pick up new theme tokens automatically."""
+        t = _get_theme()
+        for i in range(self._group_list.count()):
+            widget = self._group_list.itemWidget(self._group_list.item(i))
+            if widget is None:
+                continue
+            widget._name_lbl.setStyleSheet(f"color: {t.text}; padding: 3px 4px;")
+            widget._name_edit.setStyleSheet(
+                f"background: transparent; color: {t.text}; padding: 3px 4px; border: none;"
+            )
+            self._update_group_badge(widget)
 
     def _badge_widget_for(self, name: str) -> QWidget | None:
         for i in range(self._group_list.count()):

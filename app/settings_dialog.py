@@ -142,6 +142,7 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(480)
         self._check_worker: EnvCheckWorker | None = None
         self._reinstall_worker: _ReinstallWorker | None = None
+        self._separators: list[QFrame] = []
         self._build_ui()
         self._apply_stylesheet()
         self._start_env_check()
@@ -156,7 +157,7 @@ class SettingsDialog(QDialog):
         version_lbl.setObjectName("versionLabel")
         layout.addWidget(version_lbl)
 
-        layout.addWidget(_sep())
+        layout.addWidget(self._sep())
 
         # ── Tracking environment ──────────────────────────────────────────────
         env_title = QLabel("Tracking Environment")
@@ -184,7 +185,7 @@ class SettingsDialog(QDialog):
         self._log.setVisible(False)
         layout.addWidget(self._log)
 
-        layout.addWidget(_sep())
+        layout.addWidget(self._sep())
 
         # ── Appearance ────────────────────────────────────────────────────────
         appearance_title = QLabel("Appearance")
@@ -204,11 +205,7 @@ class SettingsDialog(QDialog):
         theme_row.addWidget(self._theme_combo, stretch=1)
         layout.addLayout(theme_row)
 
-        restart_lbl = QLabel("Restart the app to apply.")
-        restart_lbl.setObjectName("hintLabel")
-        layout.addWidget(restart_lbl)
-
-        layout.addWidget(_sep())
+        layout.addWidget(self._sep())
 
         # ── Close ─────────────────────────────────────────────────────────────
         close_row = QHBoxLayout()
@@ -282,8 +279,16 @@ class SettingsDialog(QDialog):
 
     # ── Stylesheet ────────────────────────────────────────────────────────────
 
+    def _sep(self) -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        self._separators.append(line)
+        return line
+
     def _apply_stylesheet(self) -> None:
         _T = _get_theme()
+        for sep in self._separators:
+            sep.setStyleSheet(f"color: {_T.sep}; margin: 2px 0;")
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: {_T.bg};
@@ -306,10 +311,6 @@ class SettingsDialog(QDialog):
                 font-size: 12px;
                 letter-spacing: 1px;
                 text-transform: uppercase;
-            }}
-            QLabel#hintLabel {{
-                color: {_T.muted};
-                font-size: 11px;
             }}
             QComboBox {{
                 background-color: {_T.display};
@@ -356,10 +357,3 @@ class SettingsDialog(QDialog):
                 border-radius: 4px;
             }}
         """)
-
-
-def _sep() -> QFrame:
-    line = QFrame()
-    line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet(f"color: {_T.sep}; margin: 2px 0;")
-    return line

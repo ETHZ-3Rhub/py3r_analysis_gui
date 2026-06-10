@@ -71,6 +71,7 @@ class MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle(f"py3r Analysis  v{get_version()}")
         self.setMinimumSize(1020, 700)
+        self._separators: list[QFrame] = []
         self._apply_stylesheet()
 
         self._arenas = arena_pkg.discover()
@@ -141,6 +142,7 @@ class MainWindow(QWidget):
         sep0 = QFrame()
         sep0.setFrameShape(QFrame.Shape.HLine)
         sep0.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
+        self._separators.append(sep0)
         layout.addWidget(sep0)
 
         no_source_tip = (
@@ -167,6 +169,7 @@ class MainWindow(QWidget):
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.Shape.HLine)
         sep2.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
+        self._separators.append(sep2)
         layout.addWidget(sep2)
 
         # ── Comparisons — locked until there are at least two groups to pair ──
@@ -258,6 +261,7 @@ class MainWindow(QWidget):
         sep_arena = QFrame()
         sep_arena.setFrameShape(QFrame.Shape.HLine)
         sep_arena.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
+        self._separators.append(sep_arena)
         layout.addWidget(sep_arena)
 
         out_label = QLabel("Output folder")
@@ -825,6 +829,10 @@ class MainWindow(QWidget):
 
     def _apply_stylesheet(self) -> None:
         _T = _get_theme()
+        if hasattr(self, "_group_panel"):
+            self._group_panel.refresh_theme()
+        for sep in self._separators:
+            sep.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
         self.setStyleSheet(f"""
             QWidget {{
                 background-color: {_T.bg};

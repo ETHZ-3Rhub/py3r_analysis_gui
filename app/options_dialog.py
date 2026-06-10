@@ -18,12 +18,10 @@ from PyQt6.QtWidgets import (
 
 from app.theme import get_theme as _get_theme
 
-_T = _get_theme()  # cached at import for inline widget-creation calls
-
 
 def _range_label(lo: int, hi: int) -> QLabel:
     lbl = QLabel(f"{lo}–{hi}")
-    lbl.setStyleSheet(f"color: {_T.muted}; font-size: 11px;")
+    lbl.setStyleSheet(f"color: {_get_theme().muted}; font-size: 11px;")
     return lbl
 
 
