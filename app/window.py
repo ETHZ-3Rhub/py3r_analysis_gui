@@ -996,7 +996,7 @@ class MainWindow(QWidget):
                 border: 1px solid {_T.muted};
                 border-radius: 5px;
                 font-family: "Menlo", "Consolas", monospace;
-                font-size: 12px;
+                font-size: 11px;
                 padding: 4px;
             }}
             QScrollBar:vertical {{
