@@ -134,7 +134,7 @@ def main() -> None:
     print(f"ultralytics:   {ULTRALYTICS_VERSION}")
     print(f"lap:           {LAP_VERSION}")
 
-    _run("uv", "venv", str(TRACKING_ENV), "--python", "3.12")
+    _run("uv", "venv", str(TRACKING_ENV), "--python", "3.12", "--clear")
 
     python = str(_python_exe())
 

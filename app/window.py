@@ -35,21 +35,14 @@ from PyQt6.QtWidgets import (
 )
 
 from app import arenas as arena_pkg
+from app.confirm_dialog import ask, grumpy_teacher, pipeline_reference_image, warning_face
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
 from app.options_dialog import AdvancedOptionsDialog
 from app.runner import PipelineRunner
 from app.settings_dialog import EnvCheckWorker, SettingsDialog, get_version, parse_env_result
+from app.theme import get_theme as _get_theme
 
-# ── Colour tokens ─────────────────────────────────────────────────────────────
-_COL_BG = "#1e1e2e"
-_COL_PANEL = "#2a2a3e"
-_COL_ACCENT = "#7c6af7"
-_COL_TEXT = "#cdd6f4"
-_COL_MUTED = "#6c7086"
-_COL_SEP = "#3a3a4e"
-_COL_ERROR = "#f38ba8"
-_COL_WARN = "#fab387"
-_COL_SUCCESS = "#a6e3a1"
+_T = _get_theme()  # cached at import for inline widget-creation calls
 
 _BADGE_WIDTH = 44
 _REMOVE_BTN_WIDTH = 28
@@ -78,6 +71,7 @@ class MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle(f"py3r Analysis  v{get_version()}")
         self.setMinimumSize(1020, 700)
+        self._separators: list[QFrame] = []
         self._apply_stylesheet()
 
         self._arenas = arena_pkg.discover()
@@ -147,7 +141,8 @@ class MainWindow(QWidget):
 
         sep0 = QFrame()
         sep0.setFrameShape(QFrame.Shape.HLine)
-        sep0.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        sep0.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
+        self._separators.append(sep0)
         layout.addWidget(sep0)
 
         no_source_tip = (
@@ -173,7 +168,8 @@ class MainWindow(QWidget):
 
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        sep2.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
+        self._separators.append(sep2)
         layout.addWidget(sep2)
 
         # ── Comparisons — locked until there are at least two groups to pair ──
@@ -241,12 +237,12 @@ class MainWindow(QWidget):
         # something that depends on the source file type, so it lives here
         # among the other run-configuration controls rather than gated on
         # the left ──────────────────────────────────────────────────────────
-        arena_label = QLabel("Arena")
+        arena_label = QLabel("Pipeline")
         arena_label.setObjectName("sectionTitle")
         layout.addWidget(arena_label)
 
         self._arena_combo = QComboBox()
-        self._arena_combo.addItem("— select arena —", userData=None)
+        self._arena_combo.addItem("— select pipeline —", userData=None)
         for mod in self._arenas:
             self._arena_combo.addItem(mod.NAME, userData=mod)
         self._arena_combo.currentIndexChanged.connect(self._on_arena_changed)
@@ -264,7 +260,8 @@ class MainWindow(QWidget):
 
         sep_arena = QFrame()
         sep_arena.setFrameShape(QFrame.Shape.HLine)
-        sep_arena.setStyleSheet(f"color: {_COL_SEP}; margin: 4px 0;")
+        sep_arena.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
+        self._separators.append(sep_arena)
         layout.addWidget(sep_arena)
 
         out_label = QLabel("Output folder")
@@ -308,9 +305,9 @@ class MainWindow(QWidget):
 
         self._env_dot = QLabel("●")
         self._env_dot.setFixedWidth(14)
-        self._env_dot.setStyleSheet(f"color: {_COL_MUTED}; font-size: 13px;")
-        self._env_lbl = QLabel("Checking…")
-        self._env_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px;")
+        self._env_dot.setStyleSheet(f"color: {_T.muted}; font-size: 13px;")
+        self._env_lbl = QLabel("Tracking: Checking…")
+        self._env_lbl.setStyleSheet(f"color: {_T.muted}; font-size: 11px;")
         bottom_row.addWidget(self._env_dot)
         bottom_row.addWidget(self._env_lbl)
         bottom_row.addStretch()
@@ -339,13 +336,15 @@ class MainWindow(QWidget):
 
         if self._last_source_is_csv is not None and self._last_source_is_csv != is_csv:
             if any(self._group_panel.groups().values()):
-                answer = QMessageBox.question(
+                if not ask(
                     self,
                     "Switch source?",
                     "Switching source clears every group's file list, since the\n"
                     "files no longer match the new type. Continue?",
-                )
-                if answer != QMessageBox.StandardButton.Yes:
+                    grumpy_teacher(),
+                    yes_label="Clear and switch",
+                    no_label="Cancel",
+                ):
                     self._source_group.blockSignals(True)
                     (self._csv_radio if self._last_source_is_csv else self._video_radio).setChecked(
                         True
@@ -414,7 +413,7 @@ class MainWindow(QWidget):
         layout.addWidget(combo_a, stretch=1)
 
         vs_lbl = QLabel("vs")
-        vs_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px;")
+        vs_lbl.setStyleSheet(f"color: {_T.muted}; font-size: 11px;")
         vs_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         vs_lbl.setFixedWidth(20)
         layout.addWidget(vs_lbl)
@@ -570,6 +569,19 @@ class MainWindow(QWidget):
 
     def _on_arena_changed(self) -> None:
         self._current_options = {}
+
+        arena_mod = self._arena_combo.currentData()
+        if arena_mod is not None and not ask(
+            self,
+            "Confirm pipeline",
+            f"Does your arena look like this?\n\n({arena_mod.NAME})",
+            pipeline_reference_image(arena_mod),
+            yes_label="Yes",
+            no_label="No",
+        ):
+            self._arena_combo.setCurrentIndex(0)
+            return
+
         self._refresh_run_button()
 
     def _open_options(self) -> None:
@@ -674,12 +686,14 @@ class MainWindow(QWidget):
         warnings = self._collect_warnings()
         if warnings:
             bullet_list = "\n".join(f"  ⚠  {w}" for w in warnings)
-            answer = QMessageBox.question(
+            if not ask(
                 self,
                 "Warnings — proceed?",
                 f"The following issues were detected:\n\n{bullet_list}\n\nProceed anyway?",
-            )
-            if answer != QMessageBox.StandardButton.Yes:
+                warning_face(),
+                yes_label="Proceed",
+                no_label="Go back",
+            ):
                 return
 
         self._log.clear()
@@ -720,7 +734,7 @@ class MainWindow(QWidget):
             self._runner.finished.connect(self._runner.deleteLater)
             self._runner.cancel()
             self._runner = None
-        self._log_line("Cancelled.", colour=_COL_ERROR)
+        self._log_line("Cancelled.", colour=_T.error)
         self._reset_controls()
 
     def _reset_controls(self) -> None:
@@ -740,31 +754,31 @@ class MainWindow(QWidget):
         self._runner.wait()  # ensure Qt thread machinery has fully stopped before GC
         self._runner = None
         self._last_output = output_path
-        self._log_line(f"✅  Complete — results in {output_path}", colour=_COL_SUCCESS)
+        self._log_line(f"✅  Complete — results in {output_path}", colour=_T.success)
         self._open_btn.setVisible(True)
         self._reset_controls()
 
     def _on_subprocess_output(self, chunk: str) -> None:
-        self._log.setTextColor(QColor(_COL_MUTED))
+        self._log.setTextColor(QColor(_T.muted))
         self._log.insertPlainText(chunk)
         self._log.ensureCursorVisible()
 
     def _on_warning(self, msg: str) -> None:
-        self._log_line(f"⚠  {msg}", colour=_COL_WARN)
+        self._log_line(f"⚠  {msg}", colour=_T.warn)
 
     def _on_error(self, tb: str) -> None:
         self._runner.wait()  # ensure Qt thread machinery has fully stopped before GC
         self._runner = None
-        self._log_line("❌  Pipeline error:", colour=_COL_ERROR)
+        self._log_line("❌  Pipeline error:", colour=_T.error)
         for line in tb.splitlines():
-            self._log_line(line, colour=_COL_ERROR)
+            self._log_line(line, colour=_T.error)
         self._reset_controls()
 
     def _on_env_status(self, result: str) -> None:
         self._env_status = result
         colour, label, tooltip = parse_env_result(result)
         self._env_dot.setStyleSheet(f"color: {colour}; font-size: 13px;")
-        self._env_lbl.setText(label)
+        self._env_lbl.setText(f"Tracking: {label}")
         self._env_lbl.setStyleSheet(f"color: {colour}; font-size: 11px;")
         self._env_lbl.setToolTip(tooltip)
         self._env_dot.setToolTip(tooltip)
@@ -773,6 +787,7 @@ class MainWindow(QWidget):
 
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
+        self._apply_stylesheet()
         # Refresh status after settings dialog closes (user may have reinstalled)
         self._env_check_worker = EnvCheckWorker()
         self._env_check_worker.done.connect(self._on_env_status)
@@ -800,28 +815,33 @@ class MainWindow(QWidget):
                 return i
         return None
 
-    def _log_line(self, message: str, colour: str = _COL_TEXT) -> None:
+    def _log_line(self, message: str, colour: str = _T.text) -> None:
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         cursor = self._log.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if cursor.columnNumber() > 0:
             self._log.insertPlainText("\n")
-        self._log.setTextColor(QColor(_COL_MUTED))
+        self._log.setTextColor(QColor(_T.muted))
         self._log.insertPlainText(f"[{ts}] ")
         self._log.setTextColor(QColor(colour))
         self._log.insertPlainText(message + "\n")
         self._log.ensureCursorVisible()
 
     def _apply_stylesheet(self) -> None:
+        _T = _get_theme()
+        if hasattr(self, "_group_panel"):
+            self._group_panel.refresh_theme()
+        for sep in self._separators:
+            sep.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
         self.setStyleSheet(f"""
             QWidget {{
-                background-color: {_COL_BG};
-                color: {_COL_TEXT};
+                background-color: {_T.bg};
+                color: {_T.panel_text};
                 font-family: "Helvetica Neue", Arial, sans-serif;
                 font-size: 13px;
             }}
             QFrame#panel {{
-                background-color: {_COL_PANEL};
+                background-color: {_T.panel};
                 border-radius: 8px;
             }}
             QWidget#gatedSection, QWidget#groupManifestPanel {{
@@ -831,17 +851,17 @@ class MainWindow(QWidget):
                 background: transparent;
             }}
             QLabel#sectionTitle {{
-                color: {_COL_TEXT};
+                color: {_T.title};
                 font-weight: bold;
                 font-size: 12px;
                 letter-spacing: 1px;
                 text-transform: uppercase;
             }}
             QLabel#sectionTitle:disabled {{
-                color: {_COL_MUTED};
+                color: {_T.muted};
             }}
             QPushButton#primaryButton {{
-                background-color: {_COL_ACCENT};
+                background-color: {_T.accent};
                 color: white;
                 border: none;
                 border-radius: 6px;
@@ -849,31 +869,32 @@ class MainWindow(QWidget):
                 font-size: 14px;
                 font-weight: bold;
             }}
-            QPushButton#primaryButton:hover {{ background-color: #9580ff; }}
-            QPushButton#primaryButton:disabled {{ background-color: {_COL_MUTED}; }}
+            QPushButton#primaryButton:hover {{ background-color: {_T.accent_hover}; }}
+            QPushButton#primaryButton:disabled {{ background-color: {_T.muted}; }}
             QPushButton#secondaryButton {{
                 background-color: transparent;
-                color: {_COL_ACCENT};
-                border: 1px solid {_COL_ACCENT};
+                color: {_T.accent};
+                border: 1px solid {_T.accent};
                 border-radius: 5px;
                 padding: 6px 10px;
             }}
-            QPushButton#secondaryButton:hover {{ background-color: {_COL_ACCENT}; color: white; }}
+            QPushButton#secondaryButton:hover {{ background-color: {_T.accent}; color: white; }}
             QPushButton#secondaryButton:disabled {{
-                color: {_COL_MUTED};
-                border-color: {_COL_MUTED};
+                color: {_T.muted};
+                border-color: {_T.muted};
                 background-color: transparent;
             }}
             QPushButton#removeButton {{
                 background: transparent;
-                color: {_COL_MUTED};
+                color: {_T.muted};
                 border: none;
                 font-size: 12px;
             }}
-            QPushButton#removeButton:hover {{ color: {_COL_ERROR}; }}
+            QPushButton#removeButton:hover {{ color: {_T.error}; }}
             QComboBox {{
-                background-color: {_COL_BG};
-                border: 1px solid {_COL_MUTED};
+                background-color: {_T.display};
+                color: {_T.text};
+                border: 1px solid {_T.muted};
                 border-radius: 5px;
                 padding: 6px 10px;
             }}
@@ -882,38 +903,60 @@ class MainWindow(QWidget):
                 font-size: 12px;
             }}
             QComboBox::drop-down {{ border: none; width: 24px; }}
+            QComboBox QAbstractItemView {{
+                background-color: {_T.display};
+                color: {_T.text};
+                selection-background-color: {_T.selection_bg};
+            }}
             QLineEdit {{
-                background-color: {_COL_BG};
-                border: 1px solid {_COL_MUTED};
+                background-color: {_T.display};
+                color: {_T.text};
+                border: 1px solid {_T.muted};
                 border-radius: 5px;
                 padding: 6px 10px;
             }}
-            QListWidget#groupList {{
-                background-color: {_COL_BG};
-                border: 1px solid {_COL_MUTED};
+            QListWidget#groupList, QListWidget#manifestGroupList {{
+                background-color: {_T.display};
+                color: {_T.text};
+                border: 1px solid {_T.muted};
                 border-radius: 5px;
             }}
-            QListWidget#groupList::item:selected {{ background: transparent; }}
+            QListWidget#groupList::item:selected,
             QListWidget#manifestGroupList::item:selected {{ background: transparent; }}
+            QListWidget#groupList QWidget,
+            QListWidget#manifestGroupList QWidget {{ background: transparent; }}
+            QListWidget#groupList QComboBox,
+            QListWidget#manifestGroupList QComboBox {{
+                background-color: {_T.display};
+                color: {_T.text};
+            }}
+            QListWidget#groupList QComboBox QAbstractItemView,
+            QListWidget#manifestGroupList QComboBox QAbstractItemView {{
+                background-color: {_T.display};
+                color: {_T.text};
+                selection-background-color: {_T.selection_bg};
+            }}
             QTableWidget#manifestTable {{
-                background-color: {_COL_BG};
-                border: 1px solid {_COL_MUTED};
+                background-color: {_T.display};
+                color: {_T.text};
+                border: 1px solid {_T.muted};
                 border-radius: 5px;
                 gridline-color: transparent;
             }}
             QTableWidget#manifestTable::item {{
                 padding: 4px 8px;
                 border: none;
+                color: {_T.text};
             }}
             QTableWidget#manifestTable::item:selected {{
-                background-color: rgba(124, 106, 247, 70);
-                color: {_COL_TEXT};
+                background-color: {_T.selection_bg};
+                color: {_T.text};
             }}
             QHeaderView::section {{
                 background-color: transparent;
-                color: {_COL_MUTED};
+                color: {_T.muted};
                 border: none;
-                border-bottom: 1px solid {_COL_SEP};
+                border-bottom: 1px solid {_T.sep};
                 padding: 4px 8px;
                 font-size: 10px;
                 font-weight: bold;
@@ -921,34 +964,34 @@ class MainWindow(QWidget):
                 letter-spacing: 1px;
             }}
             QTextEdit#logBox {{
-                background-color: {_COL_BG};
-                border: 1px solid {_COL_MUTED};
+                background-color: {_T.display};
+                border: 1px solid {_T.muted};
                 border-radius: 5px;
                 font-family: "Consolas", monospace;
                 font-size: 12px;
                 padding: 4px;
             }}
             QScrollBar:vertical {{
-                background: {_COL_BG};
+                background: {_T.display};
                 width: 8px;
             }}
             QScrollBar::handle:vertical {{
-                background: {_COL_MUTED};
+                background: {_T.muted};
                 border-radius: 4px;
             }}
             QPushButton#settingsButton {{
                 background: transparent;
-                color: {_COL_MUTED};
+                color: {_T.muted};
                 border: none;
                 font-size: 11px;
                 padding: 2px 0;
                 text-align: right;
             }}
-            QPushButton#settingsButton:hover {{ color: {_COL_TEXT}; }}
+            QPushButton#settingsButton:hover {{ color: {_T.panel_text}; }}
             QToolTip {{
-                background-color: {_COL_PANEL};
-                color: {_COL_TEXT};
-                border: 1px solid {_COL_MUTED};
+                background-color: {_T.panel};
+                color: {_T.panel_text};
+                border: 1px solid {_T.muted};
                 padding: 4px;
             }}
         """)

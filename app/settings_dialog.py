@@ -11,6 +11,7 @@ from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -20,14 +21,10 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-_COL_BG = "#1e1e2e"
-_COL_PANEL = "#2a2a3e"
-_COL_ACCENT = "#7c6af7"
-_COL_TEXT = "#cdd6f4"
-_COL_MUTED = "#6c7086"
-_COL_ERROR = "#f38ba8"
-_COL_WARN = "#fab387"
-_COL_SUCCESS = "#a6e3a1"
+from app.theme import all_themes, update_theme
+from app.theme import get_theme as _get_theme
+
+_T = _get_theme()  # cached at import for inline widget-creation calls
 
 
 def get_version() -> str:
@@ -57,13 +54,13 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
     if result.startswith("cuda:"):
         cuda_ver = result[5:]
         return (
-            _COL_SUCCESS,
+            _T.success,
             f"GPU (CUDA {cuda_ver})",
             f"Tracking is running on your GPU using CUDA {cuda_ver} — optimal performance.",
         )
     if result == "cpu":
         return (
-            _COL_WARN,
+            _T.warn,
             "CPU only",
             "Tracking is running on CPU, which is slower.\n"
             "If you have an NVIDIA GPU, go to Settings → Reinstall tracking environment\n"
@@ -71,12 +68,12 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
         )
     if result == "not_installed":
         return (
-            _COL_ERROR,
+            _T.error,
             "Not installed",
             "The tracking environment has not been set up yet.\n"
             "Open Settings and click Reinstall tracking environment.",
         )
-    return (_COL_ERROR, "Status unknown", "Could not determine tracking environment status.")
+    return (_T.error, "Status unknown", "Could not determine tracking environment status.")
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +142,7 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(480)
         self._check_worker: EnvCheckWorker | None = None
         self._reinstall_worker: _ReinstallWorker | None = None
+        self._separators: list[QFrame] = []
         self._build_ui()
         self._apply_stylesheet()
         self._start_env_check()
@@ -159,7 +157,7 @@ class SettingsDialog(QDialog):
         version_lbl.setObjectName("versionLabel")
         layout.addWidget(version_lbl)
 
-        layout.addWidget(_sep())
+        layout.addWidget(self._sep())
 
         # ── Tracking environment ──────────────────────────────────────────────
         env_title = QLabel("Tracking Environment")
@@ -187,7 +185,27 @@ class SettingsDialog(QDialog):
         self._log.setVisible(False)
         layout.addWidget(self._log)
 
-        layout.addWidget(_sep())
+        layout.addWidget(self._sep())
+
+        # ── Appearance ────────────────────────────────────────────────────────
+        appearance_title = QLabel("Appearance")
+        appearance_title.setObjectName("sectionTitle")
+        layout.addWidget(appearance_title)
+
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(8)
+        theme_lbl = QLabel("Theme:")
+        theme_row.addWidget(theme_lbl)
+        self._theme_combo = QComboBox()
+        themes = all_themes()
+        for t in themes:
+            self._theme_combo.addItem(t.name)
+        self._theme_combo.setCurrentText(_get_theme().name)
+        self._theme_combo.currentTextChanged.connect(self._on_theme_changed)
+        theme_row.addWidget(self._theme_combo, stretch=1)
+        layout.addLayout(theme_row)
+
+        layout.addWidget(self._sep())
 
         # ── Close ─────────────────────────────────────────────────────────────
         close_row = QHBoxLayout()
@@ -201,7 +219,7 @@ class SettingsDialog(QDialog):
     # ── Env check ─────────────────────────────────────────────────────────────
 
     def _start_env_check(self) -> None:
-        self._apply_status(_COL_MUTED, "Checking…", "")
+        self._apply_status(_T.muted, "Checking…", "")
         self._check_worker = EnvCheckWorker()
         self._check_worker.done.connect(self._on_env_check_done)
         self._check_worker.start()
@@ -212,7 +230,7 @@ class SettingsDialog(QDialog):
 
     def _apply_status(self, colour: str, text: str, tooltip: str) -> None:
         self._status_dot.setStyleSheet(f"color: {colour}; font-size: 16px;")
-        self._status_lbl.setText(text)
+        self._status_lbl.setText(f"Tracking: {text}")
         self._status_lbl.setStyleSheet(f"color: {colour};")
         self._status_lbl.setToolTip(tooltip)
 
@@ -223,7 +241,7 @@ class SettingsDialog(QDialog):
         self._log.setVisible(True)
         self._reinstall_btn.setEnabled(False)
         self._reinstall_btn.setText("Installing…")
-        self._apply_status(_COL_MUTED, "Installing…", "")
+        self._apply_status(_T.muted, "Installing…", "")
 
         self._reinstall_worker = _ReinstallWorker()
         self._reinstall_worker.output.connect(self._on_reinstall_output)
@@ -231,7 +249,7 @@ class SettingsDialog(QDialog):
         self._reinstall_worker.start()
 
     def _on_reinstall_output(self, text: str) -> None:
-        self._log.setTextColor(QColor(_COL_MUTED))
+        self._log.setTextColor(QColor(_T.muted))
         self._log.insertPlainText(text)
         self._log.ensureCursorVisible()
 
@@ -239,77 +257,103 @@ class SettingsDialog(QDialog):
         self._reinstall_btn.setEnabled(True)
         self._reinstall_btn.setText("Reinstall tracking environment")
         if success:
-            self._log.setTextColor(QColor(_COL_SUCCESS))
+            self._log.setTextColor(QColor(_T.success))
             self._log.insertPlainText("\nDone.\n")
             self._start_env_check()
         else:
-            self._log.setTextColor(QColor(_COL_ERROR))
+            self._log.setTextColor(QColor(_T.error))
             self._log.insertPlainText("\nInstallation failed — see output above.\n")
-            self._apply_status(_COL_ERROR, "Installation failed", "")
+            self._apply_status(_T.error, "Installation failed", "")
+
+    # ── Theme ─────────────────────────────────────────────────────────────────
+
+    def _on_theme_changed(self, name: str) -> None:
+        for t in all_themes():
+            if t.name == name:
+                update_theme(t)
+                break
+        self._apply_stylesheet()
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_apply_stylesheet"):
+            parent._apply_stylesheet()
 
     # ── Stylesheet ────────────────────────────────────────────────────────────
 
+    def _sep(self) -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        self._separators.append(line)
+        return line
+
     def _apply_stylesheet(self) -> None:
+        _T = _get_theme()
+        for sep in self._separators:
+            sep.setStyleSheet(f"color: {_T.sep}; margin: 2px 0;")
         self.setStyleSheet(f"""
             QDialog {{
-                background-color: {_COL_BG};
-                color: {_COL_TEXT};
+                background-color: {_T.bg};
+                color: {_T.panel_text};
                 font-family: "Helvetica Neue", Arial, sans-serif;
                 font-size: 13px;
             }}
             QLabel {{
                 background: transparent;
-                color: {_COL_TEXT};
+                color: {_T.panel_text};
             }}
             QLabel#versionLabel {{
                 font-size: 18px;
                 font-weight: bold;
-                color: {_COL_TEXT};
+                color: {_T.panel_text};
             }}
             QLabel#sectionTitle {{
-                color: {_COL_TEXT};
+                color: {_T.title};
                 font-weight: bold;
                 font-size: 12px;
                 letter-spacing: 1px;
                 text-transform: uppercase;
             }}
+            QComboBox {{
+                background-color: {_T.display};
+                color: {_T.text};
+                border: 1px solid {_T.muted};
+                border-radius: 5px;
+                padding: 5px 8px;
+            }}
+            QComboBox::drop-down {{ border: none; width: 24px; }}
+            QComboBox QAbstractItemView {{
+                background-color: {_T.display};
+                color: {_T.text};
+            }}
             QPushButton#secondaryButton {{
                 background-color: transparent;
-                color: {_COL_ACCENT};
-                border: 1px solid {_COL_ACCENT};
+                color: {_T.accent};
+                border: 1px solid {_T.accent};
                 border-radius: 5px;
                 padding: 6px 10px;
             }}
             QPushButton#secondaryButton:hover {{
-                background-color: {_COL_ACCENT};
+                background-color: {_T.accent};
                 color: white;
             }}
             QPushButton#secondaryButton:disabled {{
-                color: {_COL_MUTED};
-                border-color: {_COL_MUTED};
+                color: {_T.muted};
+                border-color: {_T.muted};
             }}
             QTextEdit#logBox {{
-                background-color: {_COL_PANEL};
-                border: 1px solid {_COL_MUTED};
+                background-color: {_T.display};
+                border: 1px solid {_T.muted};
                 border-radius: 5px;
                 font-family: "Consolas", monospace;
                 font-size: 11px;
                 padding: 4px;
-                color: {_COL_MUTED};
+                color: {_T.muted};
             }}
             QScrollBar:vertical {{
-                background: {_COL_BG};
+                background: {_T.display};
                 width: 8px;
             }}
             QScrollBar::handle:vertical {{
-                background: {_COL_MUTED};
+                background: {_T.muted};
                 border-radius: 4px;
             }}
         """)
-
-
-def _sep() -> QFrame:
-    line = QFrame()
-    line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet("color: #3a3a4e; margin: 2px 0;")
-    return line

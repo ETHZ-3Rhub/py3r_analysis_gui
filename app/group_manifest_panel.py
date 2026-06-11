@@ -50,6 +50,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.confirm_dialog import ask, grumpy_teacher, warning_face
+from app.theme import get_theme as _get_theme
+
 # --- REVIEWED 2026-06-08: kept deliberately, not oversights -----------------
 # `_ElideLeftDelegate`, `_PathSortItem` and `_PlainTextSortItem` below are the
 # most "custom Qt internals"-heavy code in this file. Considered ripping them
@@ -148,11 +151,6 @@ class _PlainTextSortItem(QTableWidgetItem):
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
 CSV_EXTS = {".csv"}
 
-_COL_TEXT = "#cdd6f4"
-_COL_MUTED = "#6c7086"
-_COL_ERROR = "#f38ba8"
-_COL_WARN = "#fab387"
-_COL_SUCCESS = "#a6e3a1"
 
 _BADGE_WIDTH = 44
 _REMOVE_BTN_WIDTH = 28
@@ -478,14 +476,16 @@ class GroupManifestPanel(QWidget):
         row.setContentsMargins(4, 2, 4, 2)
         row.setSpacing(6)
 
+        t = _get_theme()
+
         name_lbl = _ClickableLabel(name)
-        name_lbl.setStyleSheet(f"color: {_COL_TEXT}; padding: 3px 4px;")
+        name_lbl.setStyleSheet(f"color: {t.text}; padding: 3px 4px;")
         name_lbl.clicked.connect(lambda: self._begin_rename(item_widget))
 
         name_edit = QLineEdit(name)
         name_edit.setFrame(False)
         name_edit.setStyleSheet(
-            f"background: transparent; color: {_COL_TEXT}; padding: 3px 4px; border: none;"
+            f"background: transparent; color: {t.text}; padding: 3px 4px; border: none;"
         )
         name_edit.editingFinished.connect(lambda: self._commit_rename(item_widget))
         name_edit.hide()
@@ -498,7 +498,7 @@ class GroupManifestPanel(QWidget):
         badge_lbl = QLabel("…")
         badge_lbl.setFixedWidth(_BADGE_WIDTH)
         badge_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px; font-weight: bold;")
+        badge_lbl.setStyleSheet(f"color: {t.muted}; font-size: 11px; font-weight: bold;")
         row.addWidget(badge_lbl)
 
         files_btn = QPushButton("Edit")
@@ -561,14 +561,13 @@ class GroupManifestPanel(QWidget):
 
     def _remove_group(self, item_widget: QWidget) -> None:
         name = item_widget._name
-        if (
-            self._manifests[name]
-            and QMessageBox.question(
-                self,
-                "Remove group",
-                f'"{name}" contains {len(self._manifests[name])} file(s). Remove it anyway?',
-            )
-            != QMessageBox.StandardButton.Yes
+        if self._manifests[name] and not ask(
+            self,
+            "Remove group",
+            f'"{name}" contains {len(self._manifests[name])} file(s). Remove it anyway?',
+            warning_face(),
+            yes_label="Remove",
+            no_label="Cancel",
         ):
             return
 
@@ -588,17 +587,18 @@ class GroupManifestPanel(QWidget):
     # ── File-count badges ────────────────────────────────────────────────────
 
     def _update_group_badge(self, item_widget: QWidget) -> None:
+        t = _get_theme()
         count = len(self._manifests[item_widget._name])
         ext_label = _ext_label(self._file_exts)
 
         if count == 0:
-            colour, text = _COL_ERROR, "0 ⚠"
+            colour, text = t.error, "0 ⚠"
             tip = f"No {ext_label} files added yet."
         elif count < 5:
-            colour, text = _COL_WARN, f"{count} ⚠"
+            colour, text = t.warn, f"{count} ⚠"
             tip = f"Only {count} {ext_label} file(s) — results may be underpowered (expected ≥ 5)."
         else:
-            colour, text = _COL_SUCCESS, str(count)
+            colour, text = t.success, str(count)
             tip = f"{count} {ext_label} file(s)."
 
         item_widget._badge_lbl.setText(text)
@@ -612,6 +612,21 @@ class GroupManifestPanel(QWidget):
             widget = self._group_list.itemWidget(self._group_list.item(i))
             if widget is not None:
                 self._update_group_badge(widget)
+
+    def refresh_theme(self) -> None:
+        """Re-apply theme colours to existing group rows after a theme
+        change — group widgets are built once and styled at creation time,
+        so they don't pick up new theme tokens automatically."""
+        t = _get_theme()
+        for i in range(self._group_list.count()):
+            widget = self._group_list.itemWidget(self._group_list.item(i))
+            if widget is None:
+                continue
+            widget._name_lbl.setStyleSheet(f"color: {t.text}; padding: 3px 4px;")
+            widget._name_edit.setStyleSheet(
+                f"background: transparent; color: {t.text}; padding: 3px 4px; border: none;"
+            )
+            self._update_group_badge(widget)
 
     def _badge_widget_for(self, name: str) -> QWidget | None:
         for i in range(self._group_list.count()):
@@ -637,20 +652,31 @@ class GroupManifestPanel(QWidget):
         existing_in_group = set(manifest)
         added = 0
 
-        for path in paths:
-            if path in existing_in_group:
-                continue  # within-group duplicate: silent skip
+        # Pre-scan for files already claimed by other groups, so we can ask
+        # about all of them in a single dialog instead of one per file.
+        new_paths = [p for p in paths if p not in existing_in_group]
+        duplicates = {
+            p for p in new_paths if self._group_containing(p, exclude=group_name) is not None
+        }
 
-            other_group = self._group_containing(path, exclude=group_name)
-            if other_group is not None:
-                reply = QMessageBox.question(
-                    self,
-                    "File already in another group",
-                    f'This file is already in group "{other_group}":\n\n{path}\n\n'
-                    f'Add it to "{group_name}" too?',
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    continue
+        add_duplicates = True
+        if duplicates:
+            count = len(duplicates)
+            noun = "file" if count == 1 else "files"
+            add_duplicates = ask(
+                self,
+                "File already in another group",
+                f"{count} {noun} you're adding to \"{group_name}\" "
+                f"{'is' if count == 1 else 'are'} already in another group.\n\n"
+                f"Add {'it' if count == 1 else 'them'} anyway?",
+                grumpy_teacher(),
+                yes_label="Add anyway",
+                no_label="Skip",
+            )
+
+        for path in new_paths:
+            if path in duplicates and not add_duplicates:
+                continue
 
             manifest.append(path)
             existing_in_group.add(path)

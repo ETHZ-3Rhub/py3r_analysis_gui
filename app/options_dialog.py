@@ -16,17 +16,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-_COL_BG = "#1e1e2e"
-_COL_PANEL = "#2a2a3e"
-_COL_SEP = "#3a3a4e"
-_COL_TEXT = "#cdd6f4"
-_COL_MUTED = "#6c7086"
-_COL_ACCENT = "#7c6af7"
+from app.theme import get_theme as _get_theme
 
 
 def _range_label(lo: int, hi: int) -> QLabel:
     lbl = QLabel(f"{lo}–{hi}")
-    lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px;")
+    lbl.setStyleSheet(f"color: {_get_theme().muted}; font-size: 11px;")
     return lbl
 
 
@@ -157,43 +152,44 @@ class AdvancedOptionsDialog(QDialog):
         return result
 
     def _apply_stylesheet(self) -> None:
+        _T = _get_theme()
         self.setStyleSheet(f"""
             QDialog, QWidget {{
-                background-color: {_COL_BG};
-                color: {_COL_TEXT};
+                background-color: {_T.bg};
+                color: {_T.panel_text};
                 font-family: "Helvetica Neue", Arial, sans-serif;
                 font-size: 13px;
             }}
-            QLabel {{ background: transparent; }}
+            QLabel {{ background: transparent; color: {_T.panel_text}; }}
             QLineEdit {{
-                background-color: {_COL_PANEL};
-                border: 1px solid {_COL_MUTED};
+                background-color: {_T.display};
+                color: {_T.text};
+                border: 1px solid {_T.muted};
                 border-radius: 4px;
                 padding: 4px 8px;
-                color: {_COL_TEXT};
             }}
             QSpinBox {{
-                background-color: {_COL_PANEL};
-                border: 1px solid {_COL_MUTED};
+                background-color: {_T.display};
+                color: {_T.text};
+                border: 1px solid {_T.muted};
                 border-radius: 4px;
                 padding: 3px 3px 3px 8px;
-                color: {_COL_TEXT};
                 min-width: 64px;
             }}
             QSpinBox:disabled {{
-                color: {_COL_MUTED};
-                background-color: {_COL_BG};
-                border-color: {_COL_BG};
+                color: {_T.muted};
+                background-color: {_T.bg};
+                border-color: {_T.bg};
             }}
             QSpinBox::up-button, QSpinBox::down-button {{
                 subcontrol-origin: border;
                 width: 18px;
-                background-color: {_COL_SEP};
-                border-left: 1px solid {_COL_MUTED};
+                background-color: {_T.sep};
+                border-left: 1px solid {_T.muted};
             }}
             QSpinBox::up-button {{
                 subcontrol-position: top right;
-                border-bottom: 1px solid {_COL_MUTED};
+                border-bottom: 1px solid {_T.muted};
                 border-top-right-radius: 3px;
             }}
             QSpinBox::down-button {{
@@ -201,34 +197,32 @@ class AdvancedOptionsDialog(QDialog):
                 border-bottom-right-radius: 3px;
             }}
             QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
-                background-color: {_COL_MUTED};
+                background-color: {_T.muted};
             }}
             QSpinBox::up-button:disabled, QSpinBox::down-button:disabled {{
-                background-color: {_COL_BG};
-                border-color: {_COL_BG};
+                background-color: {_T.bg};
+                border-color: {_T.bg};
             }}
-            QCheckBox {{
-                spacing: 6px;
-            }}
+            QCheckBox {{ spacing: 6px; color: {_T.panel_text}; }}
             QCheckBox::indicator {{
                 width: 12px;
                 height: 12px;
-                border: 1px solid {_COL_MUTED};
+                border: 1px solid {_T.muted};
                 border-radius: 2px;
                 background: transparent;
             }}
             QCheckBox::indicator:checked {{
-                background-color: {_COL_ACCENT};
-                border-color: {_COL_ACCENT};
+                background-color: {_T.accent};
+                border-color: {_T.accent};
                 border-radius: 2px;
             }}
             QPushButton#dlgBtn {{
                 background-color: transparent;
-                color: {_COL_ACCENT};
-                border: 1px solid {_COL_ACCENT};
+                color: {_T.accent};
+                border: 1px solid {_T.accent};
                 border-radius: 5px;
                 padding: 6px 20px;
                 min-width: 72px;
             }}
-            QPushButton#dlgBtn:hover {{ background-color: {_COL_ACCENT}; color: white; }}
+            QPushButton#dlgBtn:hover {{ background-color: {_T.accent}; color: white; }}
         """)
