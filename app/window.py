@@ -729,10 +729,11 @@ class MainWindow(QWidget):
             self._runner.subprocess_output.disconnect(self._on_subprocess_output)
             self._runner.finished.disconnect(self._on_finished)
             self._runner.error.disconnect(self._on_error)
-            # Schedule Qt-side cleanup once the thread actually finishes,
-            # without blocking the GUI thread via wait().
-            self._runner.finished.connect(self._runner.deleteLater)
+            # cancel() kills the running subprocess immediately, so run()
+            # returns within milliseconds — safe to wait() on the GUI thread.
             self._runner.cancel()
+            self._runner.wait()
+            self._runner.deleteLater()
             self._runner = None
         self._log_line("Cancelled.", colour=_T.error)
         self._reset_controls()
