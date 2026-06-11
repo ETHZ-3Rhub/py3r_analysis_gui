@@ -22,13 +22,14 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from app.proc_utils import kill_tree, popen_grouped
 
-_HEARTBEAT_INTERVAL = 5.0  # seconds of silence before emitting a "." to the log
+_HEARTBEAT_INTERVAL = 1.0  # seconds of silence before emitting a heartbeat tick
 
 
 class PipelineRunner(QThread):
     log = pyqtSignal(str)
     warning = pyqtSignal(str)
     subprocess_output = pyqtSignal(str)  # raw chunks from tracking subprocess
+    heartbeat = pyqtSignal()  # emitted on silence, to drive a "still working" spinner
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
 
@@ -216,7 +217,11 @@ class PipelineRunner(QThread):
 
         def reader() -> None:
             while True:
-                chunk = proc.stdout.read(256)
+                # read1(), not read(): BufferedReader.read(n) loops accumulating
+                # raw reads until n bytes or EOF, even if data is already
+                # available — that delays delivery until 256 bytes have built
+                # up. read1() returns whatever's available from one raw read.
+                chunk = proc.stdout.read1(256)
                 if not chunk:
                     break
                 q.put(chunk)
@@ -228,7 +233,7 @@ class PipelineRunner(QThread):
             try:
                 chunk = q.get(timeout=_HEARTBEAT_INTERVAL)
             except queue.Empty:
-                self.subprocess_output.emit(".")
+                self.heartbeat.emit()
                 continue
             if chunk is None:
                 break

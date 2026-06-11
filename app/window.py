@@ -47,6 +47,7 @@ _T = _get_theme()  # cached at import for inline widget-creation calls
 _BADGE_WIDTH = 44
 _REMOVE_BTN_WIDTH = 28
 _COMP_PLACEHOLDER = "— select —"
+_SPINNER_CHARS = "|/-\\"
 
 
 class _TooltipOnDisabled(QObject):
@@ -716,8 +717,11 @@ class MainWindow(QWidget):
         self._runner.log.connect(self._on_log)
         self._runner.warning.connect(self._on_warning)
         self._runner.subprocess_output.connect(self._on_subprocess_output)
+        self._runner.heartbeat.connect(self._on_heartbeat)
         self._runner.finished.connect(self._on_finished)
         self._runner.error.connect(self._on_error)
+        self._spinner_active = False
+        self._spinner_idx = 0
         self._runner.start()
 
     def _cancel_run(self) -> None:
@@ -727,6 +731,7 @@ class MainWindow(QWidget):
             self._runner.log.disconnect(self._on_log)
             self._runner.warning.disconnect(self._on_warning)
             self._runner.subprocess_output.disconnect(self._on_subprocess_output)
+            self._runner.heartbeat.disconnect(self._on_heartbeat)
             self._runner.finished.disconnect(self._on_finished)
             self._runner.error.disconnect(self._on_error)
             # cancel() kills the running subprocess immediately, so run()
@@ -760,9 +765,30 @@ class MainWindow(QWidget):
         self._reset_controls()
 
     def _on_subprocess_output(self, chunk: str) -> None:
+        self._clear_spinner()
         self._log.setTextColor(QColor(_T.muted))
         self._log.insertPlainText(chunk)
         self._log.ensureCursorVisible()
+
+    def _on_heartbeat(self) -> None:
+        cursor = self._log.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if self._spinner_active:
+            cursor.deletePreviousChar()
+        else:
+            self._spinner_active = True
+        self._log.setTextColor(QColor(_T.muted))
+        cursor.insertText(_SPINNER_CHARS[self._spinner_idx % len(_SPINNER_CHARS)])
+        self._spinner_idx += 1
+        self._log.ensureCursorVisible()
+
+    def _clear_spinner(self) -> None:
+        if not self._spinner_active:
+            return
+        self._spinner_active = False
+        cursor = self._log.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.deletePreviousChar()
 
     def _on_warning(self, msg: str) -> None:
         self._log_line(f"⚠  {msg}", colour=_T.warn)
@@ -817,6 +843,7 @@ class MainWindow(QWidget):
         return None
 
     def _log_line(self, message: str, colour: str = _T.text) -> None:
+        self._clear_spinner()
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         cursor = self._log.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
