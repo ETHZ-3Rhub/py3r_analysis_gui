@@ -23,6 +23,8 @@ a = Analysis(
     datas=[
         # Bundle any data files from py3r_behaviour (e.g. bundled test CSVs)
         *collect_data_files("py3r.behaviour"),
+        ("assets/icon.ico", "assets"),
+        ("assets/icon.png", "assets"),
     ],
     hiddenimports=hidden_imports,
     hookspath=[],
@@ -50,7 +52,7 @@ exe = EXE(
     upx=True,
     console=False,      # no terminal window — set True temporarily to debug crashes
     disable_windowed_traceback=False,
-    # icon="assets/icon.ico",   # uncomment when an icon is available
+    icon="assets/icon.ico",
 )
 
 coll = COLLECT(
