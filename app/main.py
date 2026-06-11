@@ -6,18 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-if sys.platform == "win32":
-    # Python 3.8+ no longer searches PATH for DLLs; PyQt6 normally registers
-    # its own Qt6/bin directory but this can fail on some Windows setups.
-    _qt_bin = Path(sys.prefix) / "Lib" / "site-packages" / "PyQt6" / "Qt6" / "bin"
-    if _qt_bin.exists():
-        os.add_dll_directory(str(_qt_bin))
-
-from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QApplication
-
-from app.window import MainWindow
-
 
 def _icon_path() -> Path:
     """Locate the app icon, in source tree or PyInstaller bundle."""
@@ -27,6 +15,25 @@ def _icon_path() -> Path:
 
 
 def main() -> None:
+    # Checked first and before any PyQt imports — the pipeline subprocess
+    # re-invokes this entry point and shouldn't pay PyQt's startup cost.
+    if len(sys.argv) > 2 and sys.argv[1] == "--pipeline-worker":
+        from app.pipeline_worker import run_worker
+
+        sys.exit(run_worker(Path(sys.argv[2])))
+
+    if sys.platform == "win32":
+        # Python 3.8+ no longer searches PATH for DLLs; PyQt6 normally registers
+        # its own Qt6/bin directory but this can fail on some Windows setups.
+        _qt_bin = Path(sys.prefix) / "Lib" / "site-packages" / "PyQt6" / "Qt6" / "bin"
+        if _qt_bin.exists():
+            os.add_dll_directory(str(_qt_bin))
+
+    from PyQt6.QtGui import QIcon
+    from PyQt6.QtWidgets import QApplication
+
+    from app.window import MainWindow
+
     app = QApplication(sys.argv)
     app.setApplicationName("py3r Analysis")
     app.setWindowIcon(QIcon(str(_icon_path())))

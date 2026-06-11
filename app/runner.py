@@ -8,60 +8,28 @@ Arena modules are pure config; all logic lives here.
 from __future__ import annotations
 
 import os
+import pickle
+import queue
 import subprocess
 import sys
+import tempfile
+import threading
 import traceback
 from pathlib import Path
 from types import ModuleType
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from app.proc_utils import kill_tree, popen_grouped
 
-def _kill_tree(pid: int) -> None:
-    """Kill a process and all its children (Windows: taskkill /F /T, Unix: SIGKILL pgid)."""
-    import platform
-
-    try:
-        if platform.system() == "Windows":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
-        else:
-            import signal
-
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
-    except Exception:
-        pass
-
-
-class _LogCapture:
-    """Redirect sys.stdout to the runner log signal during pipeline execution."""
-
-    def __init__(self, emit_fn):
-        self._emit = emit_fn
-        self._buf = ""
-
-    def write(self, text: str) -> None:
-        self._buf += text
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            self._emit(line)
-
-    def flush(self) -> None:
-        if self._buf:
-            self._emit(self._buf)
-            self._buf = ""
-
-    def isatty(self) -> bool:
-        return False
-
-    @property
-    def encoding(self) -> str:
-        return "utf-8"
+_HEARTBEAT_INTERVAL = 1.0  # seconds of silence before emitting a heartbeat tick
 
 
 class PipelineRunner(QThread):
     log = pyqtSignal(str)
     warning = pyqtSignal(str)
     subprocess_output = pyqtSignal(str)  # raw chunks from tracking subprocess
+    heartbeat = pyqtSignal()  # emitted on silence, to drive a "still working" spinner
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
 
@@ -88,19 +56,22 @@ class PipelineRunner(QThread):
         )
         self._warnings: list[str] = []
         self._current_proc: subprocess.Popen | None = None
+        self._cancelled = False
 
     def cancel(self) -> None:
+        self._cancelled = True
         if self._current_proc is not None:
-            _kill_tree(self._current_proc.pid)
-        self.terminate()
+            kill_tree(self._current_proc.pid)
 
     def run(self) -> None:
         try:
             self.log.emit(f"Starting {self._arena.NAME}…")
             self._run_arena()
-            self.finished.emit(str(self._output_dir))
+            if not self._cancelled:
+                self.finished.emit(str(self._output_dir))
         except Exception:
-            self.error.emit(traceback.format_exc())
+            if not self._cancelled:
+                self.error.emit(traceback.format_exc())
 
     # ── Orchestration ──────────────────────────────────────────────────────────
 
@@ -110,6 +81,9 @@ class PipelineRunner(QThread):
         n_groups = len(self._groups)
 
         for i, (group_name, files) in enumerate(self._groups.items()):
+            if self._cancelled:
+                return
+
             if self._skip_tracking:
                 csv_files[group_name] = files
                 continue
@@ -125,6 +99,9 @@ class PipelineRunner(QThread):
             tracked_any = False
             n_videos = len(files)
             for j, video in enumerate(files):
+                if self._cancelled:
+                    return
+
                 self.log.emit(f"  Tracking {video.name} ({j + 1}/{n_videos})…")
                 try:
                     proc = arena.TRACKER.track(video, csv_out, **arena.TRACKER_ARGS)
@@ -148,6 +125,9 @@ class PipelineRunner(QThread):
 
         if not csv_files:
             raise RuntimeError("No groups were tracked successfully — cannot run pipeline.")
+
+        if self._cancelled:
+            return
 
         self.log.emit("Running analysis pipeline…")
         try:
@@ -181,22 +161,84 @@ class PipelineRunner(QThread):
         for opt in getattr(arena, "OPTIONS", []):
             kwargs[opt["name"]] = self._options.get(opt["name"], opt["default"])
 
-        _old_stdout = sys.stdout
-        sys.stdout = _LogCapture(self.log.emit)
+        # Run the pipeline in its own subprocess: a long-running in-process call
+        # can only be stopped via QThread.terminate(), which is unsafe (it can
+        # leave native locks held and hang the GUI). A subprocess can be killed
+        # outright via the same kill_tree() used for the tracker.
+        payload = {"arena_module": arena.__name__, "kwargs": kwargs}
+        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
+            pickle.dump(payload, f)
+            payload_path = Path(f.name)
+
         try:
-            arena.PIPELINE(**kwargs)
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--pipeline-worker", str(payload_path)]
+            else:
+                cmd = [sys.executable, "-m", "app.main", "--pipeline-worker", str(payload_path)]
+
+            env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+            proc = popen_grouped(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+            self._current_proc = proc
+            self._drain_pipeline_output(proc)
+            self._current_proc = None
+
+            if self._cancelled:
+                return
+            if proc.returncode != 0:
+                raise RuntimeError("Pipeline subprocess failed — see log above for details.")
         finally:
-            sys.stdout.flush()
-            sys.stdout = _old_stdout
+            payload_path.unlink(missing_ok=True)
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _drain_proc(self, proc: subprocess.Popen) -> None:
+        self._stream(proc, self.subprocess_output.emit)
+
+    def _drain_pipeline_output(self, proc: subprocess.Popen) -> None:
+        buf = ""
+
+        def on_text(text: str) -> None:
+            nonlocal buf
+            buf += text
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                self.log.emit(line)
+
+        self._stream(proc, on_text)
+        if buf:
+            self.log.emit(buf)
+
+    def _stream(self, proc: subprocess.Popen, on_text) -> None:
+        """Read *proc*'s stdout on a background thread, emitting a "." heartbeat
+        to the log if nothing arrives for `_HEARTBEAT_INTERVAL` seconds — long
+        gaps in subprocess output (e.g. tracking a single video) would otherwise
+        look like the app has frozen."""
+        q: queue.Queue[bytes | None] = queue.Queue()
+
+        def reader() -> None:
+            while True:
+                # read1(), not read(): BufferedReader.read(n) loops accumulating
+                # raw reads until n bytes or EOF, even if data is already
+                # available — that delays delivery until 256 bytes have built
+                # up. read1() returns whatever's available from one raw read.
+                chunk = proc.stdout.read1(256)
+                if not chunk:
+                    break
+                q.put(chunk)
+            q.put(None)
+
+        threading.Thread(target=reader, daemon=True).start()
+
         while True:
-            chunk = proc.stdout.read(256)
-            if not chunk:
+            try:
+                chunk = q.get(timeout=_HEARTBEAT_INTERVAL)
+            except queue.Empty:
+                self.heartbeat.emit()
+                continue
+            if chunk is None:
                 break
-            self.subprocess_output.emit(chunk.decode("utf-8", errors="replace"))
+            on_text(chunk.decode("utf-8", errors="replace"))
+
         proc.wait()
 
     def _warn(self, msg: str) -> None:

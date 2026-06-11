@@ -25,6 +25,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app.proc_utils import popen_grouped
+
 _TRACK_SCRIPT = Path(__file__).parent / "track.py"
 
 
@@ -116,4 +118,4 @@ def track(video: Path, output_dir: Path, **kwargs) -> subprocess.Popen:
         resolved = {**mc, "model": str(folder)}
         cmd += ["--model", json.dumps(resolved)]
 
-    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return popen_grouped(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
