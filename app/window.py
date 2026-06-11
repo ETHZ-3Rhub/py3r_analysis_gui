@@ -995,7 +995,7 @@ class MainWindow(QWidget):
                 background-color: {_T.display};
                 border: 1px solid {_T.muted};
                 border-radius: 5px;
-                font-family: "Consolas", monospace;
+                font-family: "Menlo", "Consolas", monospace;
                 font-size: 12px;
                 padding: 4px;
             }}
