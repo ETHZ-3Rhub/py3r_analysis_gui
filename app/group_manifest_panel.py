@@ -22,6 +22,7 @@ group — kept out of the main view so the always-visible list stays simple.
 
 from __future__ import annotations
 
+import csv
 import re
 from pathlib import Path
 
@@ -169,6 +170,24 @@ _FOLDER_TEXT_COLOURS = [
     "#74c7ec",  # sapphire
     "#a6adc8",  # overlay (dimmer, 8th+ folders)
 ]
+
+
+# Columns present in every YOLO3R tracking CSV produced by a pixel-rescaled
+# (i.e. compatible) version of this pipeline — used to filter out unrelated
+# CSVs (shopping lists, metadata exports, ...) accidentally added in "skip
+# tracking" mode. max_dim.x/y specifically guards against older, non-rescaled
+# YOLO3R-shaped CSVs that would otherwise produce an aspect-ratio error.
+_YOLO3R_HEADER_MARKERS = {"frame_index", "max_dim.x", "max_dim.y"}
+
+
+def _looks_like_yolo3r_csv(path: Path) -> bool:
+    """Cheap structural check on a CSV's header row only."""
+    try:
+        with path.open(newline="", encoding="utf-8", errors="ignore") as f:
+            header = next(csv.reader(f), None)
+    except OSError:
+        return False
+    return header is not None and _YOLO3R_HEADER_MARKERS.issubset(header)
 
 
 def _natural_key(s: str) -> list[int | str]:
@@ -339,6 +358,23 @@ class GroupManifestPanel(QWidget):
         self._file_exts = exts
         self._refresh_all_badges()
 
+    def _filter_valid_csvs(self, paths: list[Path]) -> tuple[list[Path], int]:
+        """In CSV ("skip tracking") mode, drop files that don't look like
+        YOLO3R tracking output. Returns (valid_paths, n_skipped)."""
+        if self._file_exts != CSV_EXTS:
+            return paths, 0
+        valid = [p for p in paths if _looks_like_yolo3r_csv(p)]
+        return valid, len(paths) - len(valid)
+
+    def _warn_skipped_csvs(self, n_skipped: int) -> None:
+        noun = "file" if n_skipped == 1 else "files"
+        QMessageBox.information(
+            self,
+            "Some files skipped",
+            f"{n_skipped} {noun} don't look like YOLO3R tracking output "
+            "(unexpected column headers) and were skipped.",
+        )
+
     def clear_all_files(self) -> None:
         """Empty every group's file list, keeping the group names/structure intact."""
         for name in self._manifests:
@@ -413,15 +449,29 @@ class GroupManifestPanel(QWidget):
             paths = []
             has_subdirs = False
 
+        paths, n_skipped = self._filter_valid_csvs(paths)
+
         if not paths:
-            QMessageBox.information(
-                self,
-                "No matching files",
-                f'"{folder_path.name}" contains no {_ext_label(self._file_exts)} files '
-                "(subfolders are not scanned).\n"
-                "Pick a different folder, or add files manually instead.",
-            )
+            if n_skipped:
+                QMessageBox.information(
+                    self,
+                    "No matching files",
+                    f'"{folder_path.name}" contains {n_skipped} CSV file(s), but none look '
+                    "like YOLO3R tracking output (unexpected column headers).\n"
+                    "Pick a different folder, or add files manually instead.",
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "No matching files",
+                    f'"{folder_path.name}" contains no {_ext_label(self._file_exts)} files '
+                    "(subfolders are not scanned).\n"
+                    "Pick a different folder, or add files manually instead.",
+                )
             return
+
+        if n_skipped:
+            self._warn_skipped_csvs(n_skipped)
 
         if has_subdirs:
             msg = QMessageBox(self)
@@ -447,7 +497,12 @@ class GroupManifestPanel(QWidget):
         )
         if not files:
             return
-        self._create_group(default_name="Group", paths=[Path(f) for f in files])
+        paths, n_skipped = self._filter_valid_csvs([Path(f) for f in files])
+        if n_skipped:
+            self._warn_skipped_csvs(n_skipped)
+        if not paths:
+            return
+        self._create_group(default_name="Group", paths=paths)
 
     def _create_group(self, default_name: str, paths: list[Path]) -> None:
         """Groups are always born holding files — naming comes after, as a
@@ -645,6 +700,9 @@ class GroupManifestPanel(QWidget):
     def _add_paths(self, group_name: str, paths: list[Path]) -> bool:
         """Shared add routine for both entry points — same dedup, same
         feedback. Returns True if anything was actually added."""
+        paths, n_skipped = self._filter_valid_csvs(paths)
+        if n_skipped:
+            self._warn_skipped_csvs(n_skipped)
         if not paths:
             return False
 
