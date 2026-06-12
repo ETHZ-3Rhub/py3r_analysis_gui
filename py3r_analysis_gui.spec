@@ -5,13 +5,19 @@
 #
 # Build with:  pyinstaller py3r_analysis_gui.spec --clean
 
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+# py3r is a namespace package (no __init__.py) - collect_all ensures its
+# submodules, data, and binaries are all bundled and that py3r.behaviour's
+# __init__.py exports (e.g. TrackingCollection) resolve correctly when frozen.
+py3r_datas, py3r_binaries, py3r_hiddenimports = collect_all("py3r.behaviour")
 
 # Pull in all arena and pipeline modules so the auto-discovery works at runtime
 hidden_imports = (
     collect_submodules("app.arenas")
     + collect_submodules("app.pipelines")
-    + collect_submodules("py3r.behaviour")
+    + py3r_hiddenimports
+    + ["py3r"]
     # Add other heavyweight deps that PyInstaller may miss:
     + ["pyarrow", "sklearn", "shapely", "cv2"]
 )
@@ -23,10 +29,11 @@ a = Analysis(
         # uv — used by app.tracking_env_setup to build tracking_env/ on the
         # target machine, which won't have uv installed.
         ("vendor/uv.exe", "vendor"),
+        *py3r_binaries,
     ],
     datas=[
         # Bundle any data files from py3r_behaviour (e.g. bundled test CSVs)
-        *collect_data_files("py3r.behaviour"),
+        *py3r_datas,
         ("assets/icon.ico", "assets"),
         ("assets/icon.png", "assets"),
         # track.py is run as a script in tracking_env's interpreter, not
