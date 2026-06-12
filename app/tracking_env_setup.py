@@ -29,7 +29,7 @@ LAP_VERSION = "0.5.13"
 def _uv_exe() -> str:
     """Path to the uv binary: bundled copy in a frozen app, else PATH."""
     if getattr(sys, "frozen", False):
-        candidate = Path(sys.executable).parent / "vendor" / "uv.exe"
+        candidate = Path(sys._MEIPASS) / "vendor" / "uv.exe"
         if candidate.exists():
             return str(candidate)
 
