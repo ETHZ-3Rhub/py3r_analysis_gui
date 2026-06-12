@@ -51,16 +51,17 @@ def _find_tracking_python() -> Path | None:
 
 def parse_env_result(result: str) -> tuple[str, str, str]:
     """Return (colour, short_label, tooltip) for a raw EnvCheckWorker result."""
+    t = _get_theme()
     if result.startswith("cuda:"):
         cuda_ver = result[5:]
         return (
-            _T.success,
+            t.success,
             f"GPU (CUDA {cuda_ver})",
             f"Tracking is running on your GPU using CUDA {cuda_ver} — optimal performance.",
         )
     if result == "cpu":
         return (
-            _T.warn,
+            t.warn,
             "CPU only",
             "Tracking is running on CPU, which is slower.\n"
             "If you have an NVIDIA GPU, go to Settings → Reinstall tracking environment\n"
@@ -68,12 +69,12 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
         )
     if result == "not_installed":
         return (
-            _T.error,
+            t.error,
             "Not installed",
             "The tracking environment has not been set up yet.\n"
             "Open Settings and click Reinstall tracking environment.",
         )
-    return (_T.error, "Status unknown", "Could not determine tracking environment status.")
+    return (t.error, "Status unknown", "Could not determine tracking environment status.")
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +144,9 @@ class SettingsDialog(QDialog):
         self._check_worker: EnvCheckWorker | None = None
         self._reinstall_worker: _ReinstallWorker | None = None
         self._separators: list[QFrame] = []
+        self._status_state = (
+            "checking"  # "checking" | "installing" | "failed" | EnvCheckWorker result
+        )
         self._build_ui()
         self._apply_stylesheet()
         self._start_env_check()
@@ -219,20 +223,31 @@ class SettingsDialog(QDialog):
     # ── Env check ─────────────────────────────────────────────────────────────
 
     def _start_env_check(self) -> None:
-        self._apply_status(_T.muted, "Checking…", "")
+        self._apply_status("checking", "Checking…", "")
         self._check_worker = EnvCheckWorker()
         self._check_worker.done.connect(self._on_env_check_done)
         self._check_worker.start()
 
     def _on_env_check_done(self, result: str) -> None:
-        colour, label, tooltip = parse_env_result(result)
-        self._apply_status(colour, label, tooltip)
+        _, label, tooltip = parse_env_result(result)
+        self._apply_status(result, label, tooltip)
 
-    def _apply_status(self, colour: str, text: str, tooltip: str) -> None:
-        self._status_dot.setStyleSheet(f"color: {colour}; font-size: 16px;")
+    def _apply_status(self, state: str, text: str, tooltip: str) -> None:
+        self._status_state = state
         self._status_lbl.setText(f"Tracking: {text}")
-        self._status_lbl.setStyleSheet(f"color: {colour};")
         self._status_lbl.setToolTip(tooltip)
+        self._refresh_status_colour()
+
+    def _refresh_status_colour(self) -> None:
+        t = _get_theme()
+        if self._status_state == "checking" or self._status_state == "installing":
+            colour = t.muted
+        elif self._status_state == "failed":
+            colour = t.error
+        else:
+            colour = parse_env_result(self._status_state)[0]
+        self._status_dot.setStyleSheet(f"color: {colour}; font-size: 16px;")
+        self._status_lbl.setStyleSheet(f"color: {colour};")
 
     # ── Reinstall ─────────────────────────────────────────────────────────────
 
@@ -241,7 +256,7 @@ class SettingsDialog(QDialog):
         self._log.setVisible(True)
         self._reinstall_btn.setEnabled(False)
         self._reinstall_btn.setText("Installing…")
-        self._apply_status(_T.muted, "Installing…", "")
+        self._apply_status("installing", "Installing…", "")
 
         self._reinstall_worker = _ReinstallWorker()
         self._reinstall_worker.output.connect(self._on_reinstall_output)
@@ -263,7 +278,7 @@ class SettingsDialog(QDialog):
         else:
             self._log.setTextColor(QColor(_T.error))
             self._log.insertPlainText("\nInstallation failed — see output above.\n")
-            self._apply_status(_T.error, "Installation failed", "")
+            self._apply_status("failed", "Installation failed", "")
 
     # ── Theme ─────────────────────────────────────────────────────────────────
 
@@ -287,6 +302,7 @@ class SettingsDialog(QDialog):
 
     def _apply_stylesheet(self) -> None:
         _T = _get_theme()
+        self._refresh_status_colour()
         for sep in self._separators:
             sep.setStyleSheet(f"color: {_T.sep}; margin: 2px 0;")
         self.setStyleSheet(f"""
