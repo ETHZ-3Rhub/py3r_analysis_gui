@@ -30,6 +30,14 @@ from app.proc_utils import popen_grouped
 _TRACK_SCRIPT = Path(__file__).parent / "track.py"
 
 
+def tracking_env_dir() -> Path:
+    """Where tracking_env/ lives (or should be created): <exe_dir>/tracking_env
+    in a packaged app, <repo_root>/tracking_env in development."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "tracking_env"
+    return Path(__file__).parent.parent.parent / "tracking_env"
+
+
 def _find_python() -> Path:
     if override := os.environ.get("PY3R_TRACKER_PYTHON"):
         return Path(override)
@@ -37,22 +45,18 @@ def _find_python() -> Path:
     subdir = "Scripts" if platform.system() == "Windows" else "bin"
     exe = "python.exe" if platform.system() == "Windows" else "python"
 
+    candidate = tracking_env_dir() / subdir / exe
+    if candidate.exists():
+        return candidate
+
     if getattr(sys, "frozen", False):
-        candidate = Path(sys.executable).parent / "tracking_env" / subdir / exe
-        if candidate.exists():
-            return candidate
         raise RuntimeError(
             f"Tracking Python not found at {candidate}\n"
             "The tracking environment may not have been installed correctly."
         )
-
-    repo_root = Path(__file__).parent.parent.parent
-    local = repo_root / "tracking_env" / subdir / exe
-    if local.exists():
-        return local
-
     raise RuntimeError(
-        "tracking_env not found.\n" "Run python scripts/setup_tracking_env.py to create it."
+        "tracking_env not found.\n"
+        "Open Settings and click Reinstall tracking environment to create it."
     )
 
 

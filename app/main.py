@@ -22,6 +22,11 @@ def main() -> None:
 
         sys.exit(run_worker(Path(sys.argv[2])))
 
+    if len(sys.argv) > 2 and sys.argv[1] == "--setup-tracking-env":
+        from app.tracking_env_setup import setup
+
+        sys.exit(setup(Path(sys.argv[2])))
+
     if sys.platform == "win32":
         # Python 3.8+ no longer searches PATH for DLLs; PyQt6 normally registers
         # its own Qt6/bin directory but this can fail on some Windows setups.

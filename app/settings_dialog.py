@@ -39,14 +39,12 @@ def get_version() -> str:
 def _find_tracking_python() -> Path | None:
     if override := os.environ.get("PY3R_TRACKER_PYTHON"):
         return Path(override)
+    from app.trackers.yolo_tracker import tracking_env_dir
+
     subdir = "Scripts" if platform.system() == "Windows" else "bin"
     exe = "python.exe" if platform.system() == "Windows" else "python"
-    if getattr(sys, "frozen", False):
-        candidate = Path(sys.executable).parent / "tracking_env" / subdir / exe
-        return candidate if candidate.exists() else None
-    repo_root = Path(__file__).parent.parent
-    local = repo_root / "tracking_env" / subdir / exe
-    return local if local.exists() else None
+    candidate = tracking_env_dir() / subdir / exe
+    return candidate if candidate.exists() else None
 
 
 def parse_env_result(result: str) -> tuple[str, str, str]:
@@ -115,10 +113,16 @@ class _ReinstallWorker(QThread):
     done = pyqtSignal(bool)  # True = success
 
     def run(self) -> None:
-        script = Path(__file__).parent.parent / "scripts" / "setup_tracking_env.py"
+        from app.trackers.yolo_tracker import tracking_env_dir
+
+        target = tracking_env_dir()
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--setup-tracking-env", str(target)]
+        else:
+            cmd = [sys.executable, "-m", "app.main", "--setup-tracking-env", str(target)]
         try:
             proc = subprocess.Popen(
-                [sys.executable, str(script)],
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )

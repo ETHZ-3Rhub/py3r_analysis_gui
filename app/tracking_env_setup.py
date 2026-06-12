@@ -1,13 +1,10 @@
-"""Set up a local tracking environment for development and testing.
+"""Create/refresh a tracking_env/ venv: PyTorch (CUDA build matched to the
+installed driver, or CPU fallback) + pinned ultralytics/lap.
 
-Creates <repo_root>/tracking_env/ using uv, installs PyTorch (CUDA build matched
-to the installed driver, or CPU fallback), then installs ultralytics.
-
-Usage:
-    python scripts/setup_tracking_env.py
-
-The app will automatically find tracking_env/ when run from the repo root —
-no environment variables needed.
+Invoked via `--setup-tracking-env <dir>` (see app/main.py) by the in-app
+"Reinstall tracking environment" button — a frozen exe can't run an
+arbitrary .py script directly, so this is dispatched through the same
+entry point instead.
 """
 
 from __future__ import annotations
@@ -16,9 +13,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-
-REPO_ROOT = Path(__file__).parent.parent
-TRACKING_ENV = REPO_ROOT / "tracking_env"
 
 # PyTorch index URLs — cu128 requires driver >= 570 (Blackwell/sm_120),
 # cu124 requires driver >= 525, cu118 requires driver >= 450.
@@ -73,10 +67,10 @@ def _pick_torch_index() -> tuple[str, str]:
     return TORCH_INDEX_CPU, f"CPU (driver {major} too old for CUDA builds - upgrade to >= 450)"
 
 
-def _python_exe() -> Path:
+def _python_exe(tracking_env: Path) -> Path:
     if sys.platform == "win32":
-        return TRACKING_ENV / "Scripts" / "python.exe"
-    return TRACKING_ENV / "bin" / "python"
+        return tracking_env / "Scripts" / "python.exe"
+    return tracking_env / "bin" / "python"
 
 
 _CUDA_SMOKE_TEST = """
@@ -125,18 +119,20 @@ def _verify_cuda(python: str) -> tuple[bool, str]:
     return False, (r.stdout + r.stderr).strip() or "unknown error"
 
 
-def main() -> None:
+def setup(tracking_env: Path) -> int:
+    """Create/refresh *tracking_env* in place. Returns a process exit code."""
     _check_uv()
 
     torch_index, torch_label = _pick_torch_index()
     wants_cuda = torch_index != TORCH_INDEX_CPU
+    print(f"Tracking env:  {tracking_env}")
     print(f"PyTorch build: {torch_label}")
     print(f"ultralytics:   {ULTRALYTICS_VERSION}")
     print(f"lap:           {LAP_VERSION}")
 
-    _run("uv", "venv", str(TRACKING_ENV), "--python", "3.12", "--clear")
+    _run("uv", "venv", str(tracking_env), "--python", "3.12", "--clear")
 
-    python = str(_python_exe())
+    python = str(_python_exe(tracking_env))
 
     # Install PyTorch first from the machine-specific index so we get the right
     # CUDA build. ultralytics will see torch already satisfied and won't replace it.
@@ -167,6 +163,4 @@ def main() -> None:
     else:
         print("\nReady. Running on CPU.")
 
-
-if __name__ == "__main__":
-    main()
+    return 0
