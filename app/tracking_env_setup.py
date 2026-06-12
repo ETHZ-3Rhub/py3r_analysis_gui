@@ -26,11 +26,20 @@ ULTRALYTICS_VERSION = "8.4.60"
 LAP_VERSION = "0.5.13"
 
 
-def _check_uv() -> None:
-    if not shutil.which("uv"):
-        sys.exit(
-            "uv not found. Install it from https://docs.astral.sh/uv/getting-started/installation/"
-        )
+def _uv_exe() -> str:
+    """Path to the uv binary: bundled copy in a frozen app, else PATH."""
+    if getattr(sys, "frozen", False):
+        candidate = Path(sys.executable).parent / "vendor" / "uv.exe"
+        if candidate.exists():
+            return str(candidate)
+
+    found = shutil.which("uv")
+    if found:
+        return found
+
+    sys.exit(
+        "uv not found. Install it from https://docs.astral.sh/uv/getting-started/installation/"
+    )
 
 
 def _nvidia_driver_version() -> tuple[int, int] | None:
@@ -92,9 +101,9 @@ def _run(*cmd: str) -> None:
     subprocess.run(list(cmd), check=True)
 
 
-def _install_torch(python: str, index_url: str) -> None:
+def _install_torch(uv: str, python: str, index_url: str) -> None:
     _run(
-        "uv",
+        uv,
         "pip",
         "install",
         "--python",
@@ -121,7 +130,7 @@ def _verify_cuda(python: str) -> tuple[bool, str]:
 
 def setup(tracking_env: Path) -> int:
     """Create/refresh *tracking_env* in place. Returns a process exit code."""
-    _check_uv()
+    uv = _uv_exe()
 
     torch_index, torch_label = _pick_torch_index()
     wants_cuda = torch_index != TORCH_INDEX_CPU
@@ -130,18 +139,18 @@ def setup(tracking_env: Path) -> int:
     print(f"ultralytics:   {ULTRALYTICS_VERSION}")
     print(f"lap:           {LAP_VERSION}")
 
-    _run("uv", "venv", str(tracking_env), "--python", "3.12", "--clear")
+    _run(uv, "venv", str(tracking_env), "--python", "3.12", "--clear")
 
     python = str(_python_exe(tracking_env))
 
     # Install PyTorch first from the machine-specific index so we get the right
     # CUDA build. ultralytics will see torch already satisfied and won't replace it.
-    _install_torch(python, torch_index)
+    _install_torch(uv, python, torch_index)
 
     # Pin ultralytics and lap exactly — these are part of the app's reproducibility
     # guarantee. See ULTRALYTICS_VERSION / LAP_VERSION constants above.
     _run(
-        "uv",
+        uv,
         "pip",
         "install",
         "--python",
@@ -158,7 +167,7 @@ def setup(tracking_env: Path) -> int:
         else:
             print(f"GPU verification failed: {msg}")
             print("Falling back to CPU — reinstalling PyTorch...")
-            _install_torch(python, TORCH_INDEX_CPU)
+            _install_torch(uv, python, TORCH_INDEX_CPU)
             print("\nReady. Running on CPU (GPU unavailable).")
     else:
         print("\nReady. Running on CPU.")

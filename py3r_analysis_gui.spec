@@ -19,7 +19,11 @@ hidden_imports = (
 a = Analysis(
     ["app/main.py"],
     pathex=["."],
-    binaries=[],
+    binaries=[
+        # uv — used by app.tracking_env_setup to build tracking_env/ on the
+        # target machine, which won't have uv installed.
+        ("vendor/uv.exe", "vendor"),
+    ],
     datas=[
         # Bundle any data files from py3r_behaviour (e.g. bundled test CSVs)
         *collect_data_files("py3r.behaviour"),

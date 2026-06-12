@@ -62,7 +62,7 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
             t.warn,
             "CPU only",
             "Tracking is running on CPU, which is slower.\n"
-            "If you have an NVIDIA GPU, go to Settings → Reinstall tracking environment\n"
+            "If you have an NVIDIA GPU, go to Settings → (Re)install tracking environment\n"
             "to enable CUDA acceleration.",
         )
     if result == "not_installed":
@@ -70,7 +70,7 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
             t.error,
             "Not installed",
             "The tracking environment has not been set up yet.\n"
-            "Open Settings and click Reinstall tracking environment.",
+            "Open Settings and click (Re)install tracking environment.",
         )
     return (t.error, "Status unknown", "Could not determine tracking environment status.")
 
@@ -181,7 +181,7 @@ class SettingsDialog(QDialog):
         status_row.addWidget(self._status_lbl, stretch=1)
         layout.addLayout(status_row)
 
-        self._reinstall_btn = QPushButton("Reinstall tracking environment")
+        self._reinstall_btn = QPushButton("(Re)install tracking environment")
         self._reinstall_btn.setObjectName("secondaryButton")
         self._reinstall_btn.clicked.connect(self._start_reinstall)
         layout.addWidget(self._reinstall_btn)
@@ -274,7 +274,7 @@ class SettingsDialog(QDialog):
 
     def _on_reinstall_done(self, success: bool) -> None:
         self._reinstall_btn.setEnabled(True)
-        self._reinstall_btn.setText("Reinstall tracking environment")
+        self._reinstall_btn.setText("(Re)install tracking environment")
         if success:
             self._log.setTextColor(QColor(_T.success))
             self._log.insertPlainText("\nDone.\n")

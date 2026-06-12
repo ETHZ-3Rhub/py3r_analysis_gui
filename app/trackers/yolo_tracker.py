@@ -56,7 +56,7 @@ def _find_python() -> Path:
         )
     raise RuntimeError(
         "tracking_env not found.\n"
-        "Open Settings and click Reinstall tracking environment to create it."
+        "Open Settings and click (Re)install tracking environment to create it."
     )
 
 

@@ -12,7 +12,7 @@ import itertools
 import os
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, QObject, Qt
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QColor, QTextCursor
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -39,7 +39,13 @@ from app.confirm_dialog import ask, grumpy_teacher, pipeline_reference_image, wa
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
 from app.options_dialog import AdvancedOptionsDialog
 from app.runner import PipelineRunner
-from app.settings_dialog import EnvCheckWorker, SettingsDialog, get_version, parse_env_result
+from app.settings_dialog import (
+    EnvCheckWorker,
+    SettingsDialog,
+    _ReinstallWorker,
+    get_version,
+    parse_env_result,
+)
 from app.theme import get_theme as _get_theme
 
 _T = _get_theme()  # cached at import for inline widget-creation calls
@@ -81,6 +87,9 @@ class MainWindow(QWidget):
         self._env_status: str = "checking"  # mirrors EnvCheckWorker result strings
         self._last_source_is_csv: bool | None = None  # None until a source is first chosen
         self._current_options: dict = {}
+        self._tracking_install_worker: _ReinstallWorker | None = None
+        self._install_timer: QTimer | None = None
+        self._install_start_time: datetime.datetime | None = None
 
         # Shared filter so tooltips still show on disabled widgets (gated
         # sections, the Analyse button) — Qt suppresses them by default.
@@ -111,6 +120,10 @@ class MainWindow(QWidget):
         if self._env_check_worker.isRunning():
             self._env_check_worker.done.disconnect(self._on_env_status)
             self._env_check_worker.wait()
+        if self._tracking_install_worker is not None and self._tracking_install_worker.isRunning():
+            self._tracking_install_worker.done.disconnect(self._on_tracking_install_done)
+            self._tracking_install_worker.terminate()
+            self._tracking_install_worker.wait()
         super().closeEvent(event)
 
     # ── Left panel ────────────────────────────────────────────────────────────
@@ -347,6 +360,10 @@ class MainWindow(QWidget):
             return
         is_csv = self._csv_radio.isChecked()
 
+        if not is_csv and not self._offer_tracking_install_if_needed():
+            self._revert_source_selection()
+            return
+
         if self._last_source_is_csv is not None and self._last_source_is_csv != is_csv:
             if any(self._group_panel.groups().values()):
                 if not ask(
@@ -371,24 +388,30 @@ class MainWindow(QWidget):
         self._set_gated_enabled(self._groups_section, True)
         self._refresh_run_button()
 
-    def _update_video_radio_availability(self) -> None:
-        """'Video files' requires a working tracking environment — grey the
-        option out (with a tooltip explaining why) until one is available,
-        rather than letting the user pick it and only then telling them it
-        won't work."""
-        if self._env_status == "checking":
-            self._video_radio.setEnabled(False)
-            self._video_radio.setToolTip("Checking tracking environment…")
-        elif self._env_status in ("not_installed", "error"):
-            self._video_radio.setEnabled(False)
-            self._video_radio.setToolTip(
-                "Tracking environment is not set up.\n"
-                "Open Settings to install it, or choose\n"
-                "'Pre-tracked CSV files' if your files are already tracked."
-            )
+    def _revert_source_selection(self) -> None:
+        """Undo a source selection the user backed out of (e.g. declined
+        tracking setup) — back to whatever was selected before, or nothing
+        if this was the first choice."""
+        self._source_group.blockSignals(True)
+        if self._last_source_is_csv is None:
+            # Exclusive QButtonGroups won't let setChecked(False) leave zero
+            # buttons checked — temporarily relax exclusivity to allow it.
+            self._source_group.setExclusive(False)
+            self._video_radio.setChecked(False)
+            self._source_group.setExclusive(True)
+        elif self._last_source_is_csv:
+            self._csv_radio.setChecked(True)
         else:
-            self._video_radio.setEnabled(True)
-            self._video_radio.setToolTip("")
+            self._video_radio.setChecked(True)
+        self._source_group.blockSignals(False)
+
+    def _update_video_radio_availability(self) -> None:
+        """'Video files' is always selectable — if the tracking environment
+        isn't ready yet, picking it offers to set it up in the background
+        (see _offer_tracking_install_if_needed) rather than greying the
+        option out and sending the user on a scavenger hunt to Settings."""
+        self._video_radio.setEnabled(True)
+        self._video_radio.setToolTip("")
 
     # ── Comparison management ─────────────────────────────────────────────────
     def _all_pairs(self) -> None:
@@ -661,14 +684,19 @@ class MainWindow(QWidget):
         if not self._out_edit.text().strip():
             reasons.append("No output folder set.")
 
-        # Hard block: tracking env not installed (only matters when actually tracking)
+        # Hard block: tracking env not ready (only matters when actually tracking)
         skip = self._csv_radio.isChecked()
-        if not skip and self._env_status in ("not_installed", "error"):
-            reasons.append(
-                "Tracking environment is not set up.\n"
-                "     Open Settings to install it, or choose\n"
-                "     'Pre-tracked CSV files' as the source to skip tracking."
-            )
+        if not skip and not self._env_ready():
+            if self._env_status == "installing":
+                reasons.append("Tracking environment is installing — please wait for it to finish.")
+            elif self._env_status == "checking":
+                reasons.append("Checking tracking environment…")
+            else:
+                reasons.append(
+                    "Tracking environment is not set up.\n"
+                    "     Select 'Video files' as the source to set it up, or\n"
+                    "     choose 'Pre-tracked CSV files' to skip tracking."
+                )
 
         # Hard block: any group with zero relevant files
         ext_label = "CSV" if skip else "video"
@@ -844,16 +872,84 @@ class MainWindow(QWidget):
             self._log_line(line, colour=_T.error)
         self._reset_controls()
 
-    def _on_env_status(self, result: str) -> None:
-        self._env_status = result
-        colour, label, tooltip = parse_env_result(result)
+    def _env_ready(self) -> bool:
+        return self._env_status == "cpu" or self._env_status.startswith("cuda:")
+
+    def _set_env_display(self, colour: str, label: str, tooltip: str) -> None:
         self._env_dot.setStyleSheet(f"color: {colour}; font-size: 13px;")
         self._env_lbl.setText(f"Tracking: {label}")
         self._env_lbl.setStyleSheet(f"color: {colour}; font-size: 11px;")
         self._env_lbl.setToolTip(tooltip)
         self._env_dot.setToolTip(tooltip)
+
+    def _on_env_status(self, result: str) -> None:
+        self._env_status = result
+        colour, label, tooltip = parse_env_result(result)
+        self._set_env_display(colour, label, tooltip)
         self._update_video_radio_availability()
         self._refresh_run_button()
+
+    # ── Tracking environment setup ───────────────────────────────────────────
+    def _offer_tracking_install_if_needed(self) -> bool:
+        """If tracking isn't set up, offer to install it in the background.
+
+        Returns False only if the user declined — callers should treat that
+        as "don't proceed with selecting this source"."""
+        if self._env_status not in ("not_installed", "error"):
+            return True
+        if self._tracking_install_worker is not None:
+            return True
+
+        if ask(
+            self,
+            "Set up tracking",
+            "Tracking videos requires a one-time setup that downloads PyTorch "
+            "and other dependencies — about 2.5GB if you have an NVIDIA GPU, "
+            "or about 250MB if not.\n\n"
+            "This runs in the background, so you can carry on setting up your "
+            "analysis while it installs — tracking just won't be available "
+            "until it finishes.",
+            yes_label="Set up now",
+            no_label="Not now",
+        ):
+            self._start_tracking_install()
+            return True
+        return False
+
+    def _start_tracking_install(self) -> None:
+        self._install_start_time = datetime.datetime.now()
+        self._install_timer = QTimer(self)
+        self._install_timer.timeout.connect(self._update_install_elapsed)
+        self._install_timer.start(1000)
+        self._update_install_elapsed()
+
+        self._tracking_install_worker = _ReinstallWorker()
+        self._tracking_install_worker.done.connect(self._on_tracking_install_done)
+        self._tracking_install_worker.start()
+
+    def _update_install_elapsed(self) -> None:
+        elapsed = int((datetime.datetime.now() - self._install_start_time).total_seconds())
+        m, s = divmod(elapsed, 60)
+        self._env_status = "installing"
+        self._set_env_display(
+            _T.muted,
+            f"Installing… {m}m {s:02d}s",
+            "Setting up the tracking environment for your hardware. This can "
+            "take several minutes.",
+        )
+        self._refresh_run_button()
+
+    def _on_tracking_install_done(self, success: bool) -> None:
+        self._install_timer.stop()
+        self._install_timer = None
+        self._tracking_install_worker.deleteLater()
+        self._tracking_install_worker = None
+        if success:
+            self._env_check_worker = EnvCheckWorker()
+            self._env_check_worker.done.connect(self._on_env_status)
+            self._env_check_worker.start()
+        else:
+            self._on_env_status("error")
 
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
@@ -911,8 +1007,9 @@ class MainWindow(QWidget):
                 w._vs_lbl.setStyleSheet(f"color: {_T.muted}; font-size: 11px;")
         if hasattr(self, "_env_dot"):
             if self._env_status == "checking":
-                self._env_dot.setStyleSheet(f"color: {_T.muted}; font-size: 13px;")
-                self._env_lbl.setStyleSheet(f"color: {_T.muted}; font-size: 11px;")
+                self._set_env_display(_T.muted, "Checking…", "")
+            elif self._env_status == "installing":
+                self._update_install_elapsed()
             else:
                 self._on_env_status(self._env_status)
         self.setStyleSheet(f"""
@@ -973,6 +1070,20 @@ class MainWindow(QWidget):
                 font-size: 12px;
             }}
             QPushButton#removeButton:hover {{ color: {_T.error}; }}
+            QRadioButton::indicator {{
+                width: 14px;
+                height: 14px;
+                border-radius: 8px;
+                border: 2px solid {_T.muted};
+                background-color: transparent;
+            }}
+            QRadioButton::indicator:checked {{
+                border: 2px solid {_T.accent};
+                background-color: {_T.accent};
+            }}
+            QRadioButton::indicator:disabled {{
+                border: 2px solid {_T.sep};
+            }}
             QComboBox {{
                 background-color: {_T.display};
                 color: {_T.text};
