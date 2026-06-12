@@ -15,6 +15,8 @@ import sys
 import tempfile
 import threading
 import traceback
+from datetime import datetime
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from types import ModuleType
 
@@ -64,20 +66,26 @@ class PipelineRunner(QThread):
             kill_tree(self._current_proc.pid)
 
     def run(self) -> None:
+        self._csv_files: dict[str, list[Path]] = {}
+        error: str | None = None
         try:
             self.log.emit(f"Starting {self._arena.NAME}…")
             self._run_arena()
             if not self._cancelled:
                 self.finished.emit(str(self._output_dir))
         except Exception:
+            error = traceback.format_exc()
             if not self._cancelled:
-                self.error.emit(traceback.format_exc())
+                self.error.emit(error)
+        finally:
+            if not self._cancelled:
+                self._write_report(error)
 
     # ── Orchestration ──────────────────────────────────────────────────────────
 
     def _run_arena(self) -> None:
         arena = self._arena
-        csv_files: dict[str, list[Path]] = {}
+        csv_files = self._csv_files
         n_groups = len(self._groups)
 
         for i, (group_name, files) in enumerate(self._groups.items()):
@@ -244,6 +252,74 @@ class PipelineRunner(QThread):
     def _warn(self, msg: str) -> None:
         self._warnings.append(msg)
         self.warning.emit(msg)
+
+    def _write_report(self, error: str | None) -> None:
+        try:
+            app_version = _pkg_version("py3r-analysis-gui")
+        except Exception:
+            app_version = "unknown"
+
+        csv_files = self._csv_files
+        arena = self._arena
+        lines: list[str] = []
+        lines.append("py3r Analysis — run report")
+        lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
+        lines.append(f"App version: {app_version}")
+        lines.append(f"Pipeline: {arena.NAME} (v{getattr(arena, 'VERSION', 'unknown')})")
+        lines.append("")
+
+        if error:
+            lines.append("Status: FAILED")
+            lines.append("")
+            lines.append("Error:")
+            lines.extend(f"  {line}" for line in error.splitlines())
+        elif self._warnings:
+            lines.append("Status: completed with warnings")
+        else:
+            lines.append("Status: completed successfully")
+        lines.append("")
+
+        if self._warnings:
+            lines.append("Warnings:")
+            for w in self._warnings:
+                lines.append(f"  • {w}")
+            lines.append("")
+
+        lines.append("Options:")
+        if self._options:
+            for name, value in self._options.items():
+                lines.append(f"  {name}: {value}")
+        else:
+            lines.append("  (none)")
+        lines.append("")
+
+        lines.append("Comparisons:")
+        if self._comparisons:
+            for a, b in self._comparisons:
+                lines.append(f"  {a} vs {b}")
+        else:
+            lines.append("  (none)")
+        lines.append("")
+
+        lines.append("Groups (input files):")
+        for group_name, files in self._groups.items():
+            lines.append(f"  {group_name}:")
+            for f in files:
+                lines.append(f"    {f}")
+        lines.append("")
+
+        if self._skip_tracking:
+            lines.append("Tracking: skipped — input files used directly as tracking CSVs")
+        else:
+            lines.append("Tracking: yes")
+            lines.append("")
+            lines.append("Tracking output CSVs:")
+            for group_name, files in csv_files.items():
+                lines.append(f"  {group_name}:")
+                for f in files:
+                    lines.append(f"    {f}")
+
+        (self._output_dir / "report.txt").write_text("\n".join(lines) + "\n")
 
     def _write_warning_file(self) -> None:
         path = self._output_dir / "WARNING_THERE WERE PROCESSING ERRORS!!!.txt"

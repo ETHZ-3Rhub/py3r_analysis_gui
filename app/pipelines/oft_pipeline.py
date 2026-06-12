@@ -219,7 +219,7 @@ def run(
     _export_figures(sc_grouped, group_names, comparisons, figures_dir)
 
     print("Running BFA…")
-    _export_bfa(sc_grouped, bfa_dir, n_clusters)
+    _export_bfa(sc_grouped, bfa_dir, n_clusters, comparisons)
 
     print("Pipeline complete.")
 
@@ -451,6 +451,7 @@ def _export_bfa(
     sc_grouped: p3b.SummaryCollection,
     bfa_dir: Path,
     n_clusters: int,
+    comparisons: list[tuple[str, str]],
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -459,6 +460,7 @@ def _export_bfa(
         bfa_results = sc_grouped.bfa(
             column=_CLUSTER_COL,
             all_states=list(range(n_clusters)),
+            pairs=comparisons or None,
             random_state=_BFA_RANDOM_STATE,
         )
         bfa_stats = p3b.SummaryCollection.bfa_stats(bfa_results)
