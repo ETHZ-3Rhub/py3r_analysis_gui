@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app.proc_utils import NO_WINDOW
+
 # PyTorch index URLs — cu128 requires driver >= 570 (Blackwell/sm_120),
 # cu124 requires driver >= 525, cu118 requires driver >= 450.
 TORCH_INDEX_CU128 = "https://download.pytorch.org/whl/cu128"
@@ -51,6 +53,7 @@ def _nvidia_driver_version() -> tuple[int, int] | None:
             ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
             capture_output=True,
             text=True,
+            creationflags=NO_WINDOW,
         )
         if r.returncode != 0:
             return None
@@ -98,7 +101,7 @@ except Exception as e:
 
 def _run(*cmd: str) -> None:
     print(f"\n$ {' '.join(cmd)}")
-    subprocess.run(list(cmd), check=True)
+    subprocess.run(list(cmd), check=True, creationflags=NO_WINDOW)
 
 
 def _install_torch(uv: str, python: str, index_url: str) -> None:
@@ -117,7 +120,9 @@ def _install_torch(uv: str, python: str, index_url: str) -> None:
 
 def _verify_cuda(python: str) -> tuple[bool, str]:
     """Smoke-test the installed torch. Returns (gpu_ok, message)."""
-    r = subprocess.run([python, "-c", _CUDA_SMOKE_TEST], capture_output=True, text=True)
+    r = subprocess.run(
+        [python, "-c", _CUDA_SMOKE_TEST], capture_output=True, text=True, creationflags=NO_WINDOW
+    )
     for line in (r.stdout + r.stderr).splitlines():
         if line.startswith("CUDA_OK:"):
             return True, line[len("CUDA_OK:") :]

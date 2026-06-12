@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.proc_utils import NO_WINDOW
 from app.theme import all_themes, update_theme
 from app.theme import get_theme as _get_theme
 
@@ -102,6 +103,7 @@ class EnvCheckWorker(QThread):
                 capture_output=True,
                 text=True,
                 timeout=30,
+                creationflags=NO_WINDOW,
             )
             self.done.emit(r.stdout.strip() if r.returncode == 0 else "error")
         except Exception:
@@ -125,6 +127,7 @@ class _ReinstallWorker(QThread):
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                creationflags=NO_WINDOW,
             )
             for raw in proc.stdout:
                 self.output.emit(raw.decode("utf-8", errors="replace"))

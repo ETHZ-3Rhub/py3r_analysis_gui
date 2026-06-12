@@ -29,6 +29,9 @@ a = Analysis(
         *collect_data_files("py3r.behaviour"),
         ("assets/icon.ico", "assets"),
         ("assets/icon.png", "assets"),
+        # track.py is run as a script in tracking_env's interpreter, not
+        # imported — PyInstaller won't pick it up automatically.
+        ("app/trackers/track.py", "app/trackers"),
     ],
     hiddenimports=hidden_imports,
     hookspath=[],
