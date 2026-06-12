@@ -61,6 +61,11 @@ def _flat(
 
 _SEMANTIC = dict(error="#f38ba8", warn="#fab387", success="#a6e3a1")
 
+# Mid-tone semantic colours, legible on both the dark "LCD" displays and a
+# light gold/silver faceplate — for themes whose panel is light (3R Special,
+# Hifi), where the pastel _SEMANTIC tones are too low-contrast on the panel.
+_SEMANTIC_DUAL = dict(error="#c0392b", warn="#cc7a00", success="#5a8f4f")
+
 MOCHA = Theme(
     name="Catppuccin Mocha",
     **_flat(
@@ -177,7 +182,7 @@ THREE_R_SPECIAL = Theme(
     sep="#b8b270",  # slightly darker gold for faceplate separators
     title="#e040ab",  # magenta section titles on gold
     selection_bg="rgba(224, 64, 171, 70)",
-    **_SEMANTIC,
+    **_SEMANTIC_DUAL,
 )
 
 # 3R Special but silver — brushed aluminium faceplate, same Blueprint LCD + magenta accent
@@ -194,7 +199,7 @@ HIFI = Theme(
     sep="#b0b0be",  # medium silver separator
     title="#e040ab",  # magenta section titles on silver
     selection_bg="rgba(224, 64, 171, 70)",
-    **_SEMANTIC,
+    **_SEMANTIC_DUAL,
 )
 
 _ALL: dict[str, Theme] = {

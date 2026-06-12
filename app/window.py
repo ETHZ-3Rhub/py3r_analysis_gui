@@ -48,6 +48,7 @@ _BADGE_WIDTH = 44
 _REMOVE_BTN_WIDTH = 28
 _COMP_PLACEHOLDER = "— select —"
 _SPINNER_CHARS = "|/-\\"
+_MAX_AUTO_PAIR_GROUPS = 6  # beyond this, "all pairs" stops auto-populating and is disabled
 
 
 class _TooltipOnDisabled(QObject):
@@ -179,9 +180,17 @@ class MainWindow(QWidget):
         )
         comp_col = self._comp_section.layout()
 
+        comp_title_row = QHBoxLayout()
+        comp_title_row.setSpacing(6)
         comp_label = QLabel("Comparisons")
         comp_label.setObjectName("sectionTitle")
-        comp_col.addWidget(comp_label)
+        comp_title_row.addWidget(comp_label)
+        self._comp_auto_warning = QLabel("⚠ not all pairs added")
+        self._comp_auto_warning.setStyleSheet(f"color: {_T.warn}; font-size: 11px;")
+        self._comp_auto_warning.setVisible(False)
+        comp_title_row.addWidget(self._comp_auto_warning)
+        comp_title_row.addStretch()
+        comp_col.addLayout(comp_title_row)
 
         self._comp_list = QListWidget()
         self._comp_list.setObjectName("groupList")
@@ -197,6 +206,9 @@ class MainWindow(QWidget):
             btn = QPushButton(label)
             btn.setObjectName("secondaryButton")
             btn.clicked.connect(slot)
+            if label == "All pairs":
+                self._all_pairs_btn = btn
+                btn.installEventFilter(self._btn_tooltip_filter)
             comp_btns.addWidget(btn)
         comp_col.addLayout(comp_btns)
 
@@ -380,9 +392,13 @@ class MainWindow(QWidget):
 
     # ── Comparison management ─────────────────────────────────────────────────
     def _all_pairs(self) -> None:
+        groups = self._group_panel.groups()
+        if len(groups) > _MAX_AUTO_PAIR_GROUPS:
+            return  # button should be disabled in this state, but guard anyway
+
         while self._comp_list.count():
             self._comp_list.takeItem(0)
-        for a, b in itertools.combinations(self._group_panel.groups(), 2):
+        for a, b in itertools.combinations(groups, 2):
             self._add_comp_row(a, b)
 
     def _remove_all_comparisons(self) -> None:
@@ -418,6 +434,7 @@ class MainWindow(QWidget):
         vs_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         vs_lbl.setFixedWidth(20)
         layout.addWidget(vs_lbl)
+        row_widget._vs_lbl = vs_lbl
 
         combo_b = QComboBox()
         combo_b.setObjectName("compCombo")
@@ -458,13 +475,31 @@ class MainWindow(QWidget):
         """Comparisons only mean something once there's something to pair —
         grey the whole section out (with an explanatory tooltip) until at
         least two groups exist, rather than showing empty, clickable controls."""
-        self._set_gated_enabled(self._comp_section, len(self._group_panel.groups()) >= 2)
+        groups = self._group_panel.groups()
+        self._set_gated_enabled(self._comp_section, len(groups) >= 2)
+
+        too_many = len(groups) > _MAX_AUTO_PAIR_GROUPS
+        self._all_pairs_btn.setEnabled(not too_many)
+        self._comp_auto_warning.setVisible(too_many)
+        if too_many:
+            n_pairs = len(groups) * (len(groups) - 1) // 2
+            tooltip = (
+                f"{len(groups)} groups → {n_pairs} pairs. Auto-pairing stops above "
+                f'{_MAX_AUTO_PAIR_GROUPS} groups — add pairs manually with "+ Add".'
+            )
+            self._all_pairs_btn.setToolTip(tooltip)
+            self._comp_auto_warning.setToolTip(tooltip)
+        else:
+            self._all_pairs_btn.setToolTip("")
 
     def _sync_comp_add(self, new_name: str) -> None:
         for w in self._comp_rows():
             w._combo_a.addItem(new_name)
             w._combo_b.addItem(new_name)
-        for existing_name in [n for n in self._group_panel.groups() if n != new_name]:
+        groups = self._group_panel.groups()
+        if len(groups) > _MAX_AUTO_PAIR_GROUPS:
+            return
+        for existing_name in [n for n in groups if n != new_name]:
             self._add_comp_row(existing_name, new_name)
 
     def _sync_comp_remove(self, name: str) -> None:
@@ -504,7 +539,15 @@ class MainWindow(QWidget):
         """Warn and revert if this row now duplicates an existing pair."""
         a = row_widget._combo_a.currentText()
         b = row_widget._combo_b.currentText()
-        if a == _COMP_PLACEHOLDER or b == _COMP_PLACEHOLDER or a == b:
+        if a == _COMP_PLACEHOLDER or b == _COMP_PLACEHOLDER:
+            return
+        if a == b:
+            QMessageBox.warning(
+                self,
+                "Invalid comparison",
+                "A group can't be compared against itself.",
+            )
+            changed_combo.setCurrentText(_COMP_PLACEHOLDER)
             return
         for w in self._comp_rows():
             if w is row_widget:
@@ -861,6 +904,17 @@ class MainWindow(QWidget):
             self._group_panel.refresh_theme()
         for sep in self._separators:
             sep.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
+        if hasattr(self, "_comp_auto_warning"):
+            self._comp_auto_warning.setStyleSheet(f"color: {_T.warn}; font-size: 11px;")
+        if hasattr(self, "_comp_list"):
+            for w in self._comp_rows():
+                w._vs_lbl.setStyleSheet(f"color: {_T.muted}; font-size: 11px;")
+        if hasattr(self, "_env_dot"):
+            if self._env_status == "checking":
+                self._env_dot.setStyleSheet(f"color: {_T.muted}; font-size: 13px;")
+                self._env_lbl.setStyleSheet(f"color: {_T.muted}; font-size: 11px;")
+            else:
+                self._on_env_status(self._env_status)
         self.setStyleSheet(f"""
             QWidget {{
                 background-color: {_T.bg};
