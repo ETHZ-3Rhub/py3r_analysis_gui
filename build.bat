@@ -14,5 +14,15 @@ if %ERRORLEVEL% neq 0 (
     echo Build failed.
     exit /b %ERRORLEVEL%
 )
+
+echo.
+echo Copying model weights...
+xcopy "..\BohacekLabPoseModels\pose_estimation" "dist\py3r_analysis\models" /E /I /Y
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo Failed to copy model weights.
+    exit /b %ERRORLEVEL%
+)
+
 echo.
 echo Build complete: dist\py3r_analysis\py3r_analysis.exe
