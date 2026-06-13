@@ -85,6 +85,12 @@ class MainWindow(QWidget):
         self._arenas = arena_pkg.discover()
         self._runner: PipelineRunner | None = None
         self._env_status: str = "checking"  # mirrors EnvCheckWorker result strings
+        self._env_check_worker: EnvCheckWorker | None = None  # the current (latest) checker
+        # Every env checker still running. A new check supersedes the previous
+        # one, but the old QThread may still be mid-subprocess — we keep a
+        # strong reference here so the GC can't free a live QThread (which
+        # aborts the process), retiring each on its own `finished` signal.
+        self._env_workers: set[EnvCheckWorker] = set()
         self._last_source_is_csv: bool | None = None  # None until a source is first chosen
         self._current_options: dict = {}
         self._tracking_install_worker: _ReinstallWorker | None = None
@@ -107,9 +113,7 @@ class MainWindow(QWidget):
         self._refresh_run_button()
 
         # Kick off tracking env status check
-        self._env_check_worker = EnvCheckWorker()
-        self._env_check_worker.done.connect(self._on_env_status)
-        self._env_check_worker.start()
+        self._kick_env_check()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Qt aborts (SIGABRT) if a QThread is destroyed while still running —
@@ -117,9 +121,15 @@ class MainWindow(QWidget):
         sure any in-flight worker threads are stopped and joined first."""
         if self._runner is not None:
             self._cancel_run()
-        if self._env_check_worker.isRunning():
-            self._env_check_worker.done.disconnect(self._on_env_status)
-            self._env_check_worker.wait()
+        # Join every env checker still running (more than one can be in flight
+        # if checks were kicked in quick succession). Stop listening first so a
+        # late result can't touch a half-torn-down window.
+        for worker in list(self._env_workers):
+            try:
+                worker.done.disconnect(self._on_env_status)
+            except TypeError:
+                pass  # already disconnected
+            worker.wait()
         if self._tracking_install_worker is not None and self._tracking_install_worker.isRunning():
             self._tracking_install_worker.done.disconnect(self._on_tracking_install_done)
             self._tracking_install_worker.terminate()
@@ -882,7 +892,32 @@ class MainWindow(QWidget):
         self._env_lbl.setToolTip(tooltip)
         self._env_dot.setToolTip(tooltip)
 
+    def _kick_env_check(self) -> None:
+        """(Re)start the tracking-env status check, superseding any previous
+        one. The old checker (if still mid-subprocess) is left to finish on its
+        own and retired via `_finalize_env_worker`; its now-stale result is
+        ignored by `_on_env_status`. Held in `_env_workers` meanwhile so the GC
+        can't destroy a running QThread."""
+        worker = EnvCheckWorker()
+        self._env_workers.add(worker)
+        worker.done.connect(self._on_env_status)
+        worker.finished.connect(lambda: self._finalize_env_worker(worker))
+        self._env_check_worker = worker
+        worker.start()
+
+    def _finalize_env_worker(self, worker: EnvCheckWorker) -> None:
+        self._env_workers.discard(worker)
+        worker.deleteLater()
+
     def _on_env_status(self, result: str) -> None:
+        # Slot for EnvCheckWorker.done. Ignore a late result from a checker
+        # that's since been superseded, so a slow stale reply can't clobber
+        # fresh status (e.g. the check kicked right after an install finishes).
+        if self.sender() is not self._env_check_worker:
+            return
+        self._apply_env_status(result)
+
+    def _apply_env_status(self, result: str) -> None:
         self._env_status = result
         colour, label, tooltip = parse_env_result(result)
         self._set_env_display(colour, label, tooltip)
@@ -945,19 +980,15 @@ class MainWindow(QWidget):
         self._tracking_install_worker.deleteLater()
         self._tracking_install_worker = None
         if success:
-            self._env_check_worker = EnvCheckWorker()
-            self._env_check_worker.done.connect(self._on_env_status)
-            self._env_check_worker.start()
+            self._kick_env_check()
         else:
-            self._on_env_status("error")
+            self._apply_env_status("error")
 
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
         self._apply_stylesheet()
         # Refresh status after settings dialog closes (user may have reinstalled)
-        self._env_check_worker = EnvCheckWorker()
-        self._env_check_worker.done.connect(self._on_env_status)
-        self._env_check_worker.start()
+        self._kick_env_check()
 
     def _open_results(self) -> None:
         if not self._last_output:
@@ -1011,7 +1042,7 @@ class MainWindow(QWidget):
             elif self._env_status == "installing":
                 self._update_install_elapsed()
             else:
-                self._on_env_status(self._env_status)
+                self._apply_env_status(self._env_status)
         self.setStyleSheet(f"""
             QWidget {{
                 background-color: {_T.bg};
