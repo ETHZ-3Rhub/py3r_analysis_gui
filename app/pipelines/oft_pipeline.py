@@ -32,8 +32,6 @@ _CORNERS = ["tl", "tr", "br", "bl"]
 _CORNER_LINES = [("tl", "tr"), ("tr", "br"), ("br", "bl"), ("bl", "tl")]
 _BODY_CENTRE = "bodycentre"
 
-_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
-
 _ANIM_MOUSE_POINTS = [
     "nose",
     "headcentre",
@@ -96,19 +94,12 @@ _PERIPHERY_SCALE = 0.8
 _CORNER_SCALE = 0.2
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def _sanitize_group_name(name: str) -> str:
-    """Mirror of from_groups() internal sanitization — used to reverse handle stems."""
-    sanitized = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
-    return sanitized or "group"
-
-
 # ── Entry point ───────────────────────────────────────────────────────────────
 def run(
-    group_csv_files: dict[str, list[Path]],
+    manifest: list[tuple[str, str, Path]],
     output_dir: Path,
     comparisons: list[tuple[str, str]] | None = None,
-    group_video_files: dict[str, list[Path]] | None = None,
+    video_paths: dict[str, Path] | None = None,
     numbins: int | None = None,
     n_clusters: int = _N_CLUSTERS,
 ) -> None:
@@ -116,16 +107,18 @@ def run(
 
     Parameters
     ----------
-    group_csv_files:
-        ``{group_name: [Path, ...]}`` — each group's per-animal YOLO3R CSVs.
+    manifest:
+        ``[(handle, group_name, csv_path), ...]`` — every recording's unique
+        handle (assigned by the GUI), its group, and its YOLO3R CSV.
     output_dir:
         Root output folder.  Sub-folders are created automatically.
     comparisons:
         List of ``(group_a, group_b)`` pairs for statistical annotations and BFA plots.
         Empty or None → pipeline runs without pairwise stats.
-    group_video_files:
-        ``{group_name: [Path, ...]}`` — source videos for QC animation overlay.
-        None → animations render without video background.
+    video_paths:
+        ``{handle: Path}`` — source video for handles that have one, used for
+        QC animation overlay. None or missing handle → animation renders
+        without video background.
     numbins:
         Split each animal's session into this many equal-frame-count bins and
         write per-bin summary CSVs alongside the whole-session results.
@@ -136,6 +129,7 @@ def run(
     matplotlib.use("Agg")  # non-interactive backend — safe in QThread
 
     comparisons = comparisons or []
+    video_paths = video_paths or {}
 
     qc_dir = output_dir / "qc" / "trajectories"
     features_dir = output_dir / "features"
@@ -145,11 +139,18 @@ def run(
     for d in [qc_dir, features_dir, summaries_dir, figures_dir, bfa_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
-    group_names = list(group_csv_files.keys())
+    group_names = list(dict.fromkeys(group for _, group, _ in manifest))
 
     # ── Load ──────────────────────────────────────────────────────────────────
     print("Loading tracking data…")
-    tc_all = p3b.TrackingCollection.from_groups(group_csv_files, fps=_FPS)
+    tc_all = p3b.TrackingCollection.from_yolo3r(
+        {handle: str(path) for handle, _group, path in manifest}, fps=_FPS
+    )
+    tc_all.each.strip_column_names()
+    for handle, group_name, _path in manifest:
+        tc_all[handle].tags[_GROUP_TAG] = group_name
+        if handle in video_paths:
+            tc_all[handle].meta["video_path"] = str(video_paths[handle])
 
     # ── Preprocess ────────────────────────────────────────────────────────────
     print("Preprocessing…")
@@ -184,7 +185,7 @@ def run(
     _cluster(fc, n_clusters)
 
     print("Rendering QC animations…")
-    _export_animations(fc, group_names, group_video_files or {}, output_dir)
+    _export_animations(fc, group_names, output_dir)
 
     print("Saving features…")
     fc.save(str(features_dir), data_format="parquet", overwrite=True)
@@ -307,7 +308,6 @@ def _compute_features(fc: p3b.FeaturesCollection) -> None:
 def _export_animations(
     fc: p3b.FeaturesCollection,
     group_names: list[str],
-    group_video_files: dict[str, list[Path]],
     output_dir: Path,
 ) -> None:
     anim_dir = output_dir / "qc" / "animations"
@@ -321,19 +321,7 @@ def _export_animations(
             continue
 
         feat = next(iter(group_fc.values()))
-
-        video_path = None
-        if group_name in group_video_files:
-            safe = _sanitize_group_name(group_name)
-            video_stem = feat.handle.removesuffix(f"_{safe}")
-            video_path = next(
-                (
-                    p
-                    for p in group_video_files[group_name]
-                    if p.stem == video_stem and p.suffix.lower() in _VIDEO_EXTS
-                ),
-                None,
-            )
+        video_path = feat.meta.get("video_path")
 
         out_path = anim_dir / f"{group_name}.mp4"
         print(f"  {group_name} ({'with video' if video_path else 'no video'})…")

@@ -86,8 +86,11 @@ def _find_models_dir() -> Path:
     )
 
 
-def track(video: Path, output_dir: Path, **kwargs) -> subprocess.Popen:
-    """Launch track.py for a single video. Returns the Popen handle.
+def track(video: Path, output_csv: Path, **kwargs) -> subprocess.Popen:
+    """Launch track.py for a single video, writing to *output_csv*. Returns the
+    Popen handle. The caller owns the output filename (the GUI assigns a
+    globally-unique handle per recording — see app/naming.py — so two videos
+    that share a stem can't overwrite each other here).
 
     kwargs (from arena TRACKER_ARGS):
         models:  list of model config dicts, each with keys:
@@ -102,8 +105,6 @@ def track(video: Path, output_dir: Path, **kwargs) -> subprocess.Popen:
 
     model_configs: list[dict] = kwargs["models"]
     device: str = kwargs.get("device", "auto")
-
-    output_csv = output_dir / f"{video.stem}.csv"
 
     cmd = [
         str(python),
