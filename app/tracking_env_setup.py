@@ -14,7 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 from app.proc_utils import NO_WINDOW
 
@@ -183,8 +183,8 @@ def setup(tracking_env: Path) -> int:
 
 
 class _ReinstallWorker(QThread):
-    output = pyqtSignal(str)
-    done = pyqtSignal(bool)  # True = success
+    output = Signal(str)
+    done = Signal(bool)  # True = success
 
     def run(self) -> None:
         from app.trackers.yolo_tracker import tracking_env_dir

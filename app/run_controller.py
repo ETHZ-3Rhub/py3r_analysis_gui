@@ -7,9 +7,9 @@ import datetime
 from collections.abc import Callable
 from pathlib import Path
 
-from PyQt6.QtCore import QObject
-from PyQt6.QtGui import QColor, QTextCursor
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QObject
+from PySide6.QtGui import QColor, QTextCursor
+from PySide6.QtWidgets import (
     QComboBox,
     QLineEdit,
     QMessageBox,

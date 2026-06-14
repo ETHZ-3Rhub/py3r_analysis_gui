@@ -26,9 +26,9 @@ import csv
 import re
 from pathlib import Path
 
-from PyQt6.QtCore import QModelIndex, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QMouseEvent, QPalette
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QModelIndex, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QMouseEvent, QPalette
+from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QDialog,
@@ -73,7 +73,7 @@ class _ClickableLabel(QLabel):
     group's name opens it for renaming immediately (there's no row-selection
     state to protect against accidental clicks anymore)."""
 
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
         self.clicked.emit()
@@ -334,10 +334,10 @@ class _ManifestDialog(QDialog):
 class GroupManifestPanel(QWidget):
     """Define named groups, each holding an explicit list of file paths."""
 
-    group_added = pyqtSignal(str)
-    group_removed = pyqtSignal(str)
-    group_renamed = pyqtSignal(str, str)  # old_name, new_name
-    files_changed = pyqtSignal()  # a group's manifest changed — refresh counts/badges
+    group_added = Signal(str)
+    group_removed = Signal(str)
+    group_renamed = Signal(str, str)  # old_name, new_name
+    files_changed = Signal()  # a group's manifest changed — refresh counts/badges
 
     def __init__(self) -> None:
         super().__init__()

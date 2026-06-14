@@ -28,7 +28,7 @@ Two separate environments are needed:
 
 | Environment | Purpose | Key dependencies |
 |---|---|---|
-| `py3r_gui` | GUI + analysis | PyQt6, py3r_behaviour, py3r_analysis_gui |
+| `py3r_gui` | GUI + analysis | PySide6, py3r_behaviour, py3r_analysis_gui |
 | `tracking_env` | Tracking | PyTorch, ultralytics |
 
 Create the tracking environment by running the GUI and using
