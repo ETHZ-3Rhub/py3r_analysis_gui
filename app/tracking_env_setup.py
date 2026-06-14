@@ -1,13 +1,10 @@
-"""Set up a local tracking environment for development and testing.
+"""Create/refresh a tracking_env/ venv: PyTorch (CUDA build matched to the
+installed driver, or CPU fallback) + pinned ultralytics/lap.
 
-Creates <repo_root>/tracking_env/ using uv, installs PyTorch (CUDA build matched
-to the installed driver, or CPU fallback), then installs ultralytics.
-
-Usage:
-    python scripts/setup_tracking_env.py
-
-The app will automatically find tracking_env/ when run from the repo root —
-no environment variables needed.
+Invoked via `--setup-tracking-env <dir>` (see app/main.py) by the in-app
+"Reinstall tracking environment" button — a frozen exe can't run an
+arbitrary .py script directly, so this is dispatched through the same
+entry point instead.
 """
 
 from __future__ import annotations
@@ -17,8 +14,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).parent.parent
-TRACKING_ENV = REPO_ROOT / "tracking_env"
+from PyQt6.QtCore import QThread, pyqtSignal
+
+from app.proc_utils import NO_WINDOW
 
 # PyTorch index URLs — cu128 requires driver >= 570 (Blackwell/sm_120),
 # cu124 requires driver >= 525, cu118 requires driver >= 450.
@@ -32,11 +30,20 @@ ULTRALYTICS_VERSION = "8.4.60"
 LAP_VERSION = "0.5.13"
 
 
-def _check_uv() -> None:
-    if not shutil.which("uv"):
-        sys.exit(
-            "uv not found. Install it from https://docs.astral.sh/uv/getting-started/installation/"
-        )
+def _uv_exe() -> str:
+    """Path to the uv binary: bundled copy in a frozen app, else PATH."""
+    if getattr(sys, "frozen", False):
+        candidate = Path(sys._MEIPASS) / "vendor" / "uv.exe"
+        if candidate.exists():
+            return str(candidate)
+
+    found = shutil.which("uv")
+    if found:
+        return found
+
+    sys.exit(
+        "uv not found. Install it from https://docs.astral.sh/uv/getting-started/installation/"
+    )
 
 
 def _nvidia_driver_version() -> tuple[int, int] | None:
@@ -48,6 +55,7 @@ def _nvidia_driver_version() -> tuple[int, int] | None:
             ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
             capture_output=True,
             text=True,
+            creationflags=NO_WINDOW,
         )
         if r.returncode != 0:
             return None
@@ -73,10 +81,10 @@ def _pick_torch_index() -> tuple[str, str]:
     return TORCH_INDEX_CPU, f"CPU (driver {major} too old for CUDA builds - upgrade to >= 450)"
 
 
-def _python_exe() -> Path:
+def _python_exe(tracking_env: Path) -> Path:
     if sys.platform == "win32":
-        return TRACKING_ENV / "Scripts" / "python.exe"
-    return TRACKING_ENV / "bin" / "python"
+        return tracking_env / "Scripts" / "python.exe"
+    return tracking_env / "bin" / "python"
 
 
 _CUDA_SMOKE_TEST = """
@@ -95,12 +103,12 @@ except Exception as e:
 
 def _run(*cmd: str) -> None:
     print(f"\n$ {' '.join(cmd)}")
-    subprocess.run(list(cmd), check=True)
+    subprocess.run(list(cmd), check=True, creationflags=NO_WINDOW)
 
 
-def _install_torch(python: str, index_url: str) -> None:
+def _install_torch(uv: str, python: str, index_url: str) -> None:
     _run(
-        "uv",
+        uv,
         "pip",
         "install",
         "--python",
@@ -114,7 +122,9 @@ def _install_torch(python: str, index_url: str) -> None:
 
 def _verify_cuda(python: str) -> tuple[bool, str]:
     """Smoke-test the installed torch. Returns (gpu_ok, message)."""
-    r = subprocess.run([python, "-c", _CUDA_SMOKE_TEST], capture_output=True, text=True)
+    r = subprocess.run(
+        [python, "-c", _CUDA_SMOKE_TEST], capture_output=True, text=True, creationflags=NO_WINDOW
+    )
     for line in (r.stdout + r.stderr).splitlines():
         if line.startswith("CUDA_OK:"):
             return True, line[len("CUDA_OK:") :]
@@ -125,27 +135,29 @@ def _verify_cuda(python: str) -> tuple[bool, str]:
     return False, (r.stdout + r.stderr).strip() or "unknown error"
 
 
-def main() -> None:
-    _check_uv()
+def setup(tracking_env: Path) -> int:
+    """Create/refresh *tracking_env* in place. Returns a process exit code."""
+    uv = _uv_exe()
 
     torch_index, torch_label = _pick_torch_index()
     wants_cuda = torch_index != TORCH_INDEX_CPU
+    print(f"Tracking env:  {tracking_env}")
     print(f"PyTorch build: {torch_label}")
     print(f"ultralytics:   {ULTRALYTICS_VERSION}")
     print(f"lap:           {LAP_VERSION}")
 
-    _run("uv", "venv", str(TRACKING_ENV), "--python", "3.12", "--clear")
+    _run(uv, "venv", str(tracking_env), "--python", "3.12", "--clear")
 
-    python = str(_python_exe())
+    python = str(_python_exe(tracking_env))
 
     # Install PyTorch first from the machine-specific index so we get the right
     # CUDA build. ultralytics will see torch already satisfied and won't replace it.
-    _install_torch(python, torch_index)
+    _install_torch(uv, python, torch_index)
 
     # Pin ultralytics and lap exactly — these are part of the app's reproducibility
     # guarantee. See ULTRALYTICS_VERSION / LAP_VERSION constants above.
     _run(
-        "uv",
+        uv,
         "pip",
         "install",
         "--python",
@@ -162,11 +174,37 @@ def main() -> None:
         else:
             print(f"GPU verification failed: {msg}")
             print("Falling back to CPU — reinstalling PyTorch...")
-            _install_torch(python, TORCH_INDEX_CPU)
+            _install_torch(uv, python, TORCH_INDEX_CPU)
             print("\nReady. Running on CPU (GPU unavailable).")
     else:
         print("\nReady. Running on CPU.")
 
+    return 0
 
-if __name__ == "__main__":
-    main()
+
+class _ReinstallWorker(QThread):
+    output = pyqtSignal(str)
+    done = pyqtSignal(bool)  # True = success
+
+    def run(self) -> None:
+        from app.trackers.yolo_tracker import tracking_env_dir
+
+        target = tracking_env_dir()
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--setup-tracking-env", str(target)]
+        else:
+            cmd = [sys.executable, "-m", "app.main", "--setup-tracking-env", str(target)]
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                creationflags=NO_WINDOW,
+            )
+            for raw in proc.stdout:
+                self.output.emit(raw.decode("utf-8", errors="replace"))
+            proc.wait()
+            self.done.emit(proc.returncode == 0)
+        except Exception as exc:
+            self.output.emit(f"Error: {exc}\n")
+            self.done.emit(False)

@@ -30,6 +30,14 @@ from app.proc_utils import popen_grouped
 _TRACK_SCRIPT = Path(__file__).parent / "track.py"
 
 
+def tracking_env_dir() -> Path:
+    """Where tracking_env/ lives (or should be created): <exe_dir>/tracking_env
+    in a packaged app, <repo_root>/tracking_env in development."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "tracking_env"
+    return Path(__file__).parent.parent.parent / "tracking_env"
+
+
 def _find_python() -> Path:
     if override := os.environ.get("PY3R_TRACKER_PYTHON"):
         return Path(override)
@@ -37,22 +45,18 @@ def _find_python() -> Path:
     subdir = "Scripts" if platform.system() == "Windows" else "bin"
     exe = "python.exe" if platform.system() == "Windows" else "python"
 
+    candidate = tracking_env_dir() / subdir / exe
+    if candidate.exists():
+        return candidate
+
     if getattr(sys, "frozen", False):
-        candidate = Path(sys.executable).parent / "tracking_env" / subdir / exe
-        if candidate.exists():
-            return candidate
         raise RuntimeError(
             f"Tracking Python not found at {candidate}\n"
             "The tracking environment may not have been installed correctly."
         )
-
-    repo_root = Path(__file__).parent.parent.parent
-    local = repo_root / "tracking_env" / subdir / exe
-    if local.exists():
-        return local
-
     raise RuntimeError(
-        "tracking_env not found.\n" "Run python scripts/setup_tracking_env.py to create it."
+        "tracking_env not found.\n"
+        "Open Settings and click (Re)install tracking environment to create it."
     )
 
 
@@ -82,8 +86,11 @@ def _find_models_dir() -> Path:
     )
 
 
-def track(video: Path, output_dir: Path, **kwargs) -> subprocess.Popen:
-    """Launch track.py for a single video. Returns the Popen handle.
+def track(video: Path, output_csv: Path, **kwargs) -> subprocess.Popen:
+    """Launch track.py for a single video, writing to *output_csv*. Returns the
+    Popen handle. The caller owns the output filename (the GUI assigns a
+    globally-unique handle per recording — see app/naming.py — so two videos
+    that share a stem can't overwrite each other here).
 
     kwargs (from arena TRACKER_ARGS):
         models:  list of model config dicts, each with keys:
@@ -98,8 +105,6 @@ def track(video: Path, output_dir: Path, **kwargs) -> subprocess.Popen:
 
     model_configs: list[dict] = kwargs["models"]
     device: str = kwargs.get("device", "auto")
-
-    output_csv = output_dir / f"{video.stem}.csv"
 
     cmd = [
         str(python),

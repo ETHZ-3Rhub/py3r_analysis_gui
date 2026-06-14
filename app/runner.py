@@ -22,6 +22,7 @@ from types import ModuleType
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from app import naming
 from app.proc_utils import kill_tree, popen_grouped
 
 _HEARTBEAT_INTERVAL = 1.0  # seconds of silence before emitting a heartbeat tick
@@ -88,50 +89,62 @@ class PipelineRunner(QThread):
         csv_files = self._csv_files
         n_groups = len(self._groups)
 
+        handles = naming.assign_handles(self._groups)
+        handle_iter = iter(handles)
+
+        tracking_dir = self._output_dir / "tracking"
+
+        manifest: list[tuple[str, str, Path]] = []
+        video_paths: dict[str, Path] = {}
+
         for i, (group_name, files) in enumerate(self._groups.items()):
             if self._cancelled:
                 return
 
             if self._skip_tracking:
                 csv_files[group_name] = files
+                for path in files:
+                    handle, _group, _path = next(handle_iter)
+                    manifest.append((handle, group_name, path))
                 continue
 
             self.log.emit(f"Group {i + 1}/{n_groups}: {group_name}")
-            csv_out = self._output_dir / "tracking" / group_name
-            csv_out.mkdir(parents=True, exist_ok=True)
 
             if not files:
                 self._warn(f"{group_name}: no video files added")
                 continue
 
-            tracked_any = False
+            tracking_dir.mkdir(parents=True, exist_ok=True)
+
+            tracked_files: list[Path] = []
             n_videos = len(files)
             for j, video in enumerate(files):
                 if self._cancelled:
                     return
 
+                handle, _group, _path = next(handle_iter)
+                output_csv = tracking_dir / f"{handle}.csv"
+
                 self.log.emit(f"  Tracking {video.name} ({j + 1}/{n_videos})…")
                 try:
-                    proc = arena.TRACKER.track(video, csv_out, **arena.TRACKER_ARGS)
+                    proc = arena.TRACKER.track(video, output_csv, **arena.TRACKER_ARGS)
                     self._current_proc = proc
                     self._drain_proc(proc)
                     self._current_proc = None
                     if proc.returncode != 0:
                         raise RuntimeError(f"exit code {proc.returncode}")
-                    tracked_any = True
+                    tracked_files.append(output_csv)
+                    manifest.append((handle, group_name, output_csv))
+                    video_paths[handle] = video
                 except Exception as exc:
                     self._warn(f"{group_name} / {video.name}: tracking failed — {exc}")
 
-            if tracked_any:
-                csv_files[group_name] = sorted(
-                    p
-                    for p in csv_out.iterdir()
-                    if p.is_file() and not p.name.startswith(".") and p.suffix.lower() == ".csv"
-                )
+            if tracked_files:
+                csv_files[group_name] = tracked_files
             else:
                 self._warn(f"{group_name}: no videos tracked successfully, skipping pipeline")
 
-        if not csv_files:
+        if not manifest:
             raise RuntimeError("No groups were tracked successfully — cannot run pipeline.")
 
         if self._cancelled:
@@ -139,7 +152,7 @@ class PipelineRunner(QThread):
 
         self.log.emit("Running analysis pipeline…")
         try:
-            self._run_pipeline(csv_files)
+            self._run_pipeline(manifest, video_paths)
         except Exception as exc:
             self._warn(f"Pipeline error: {exc}")
 
@@ -148,16 +161,17 @@ class PipelineRunner(QThread):
 
         self.log.emit("Done.")
 
-    def _run_pipeline(self, csv_files: dict[str, list[Path]]) -> None:
+    def _run_pipeline(
+        self, manifest: list[tuple[str, str, Path]], video_paths: dict[str, Path]
+    ) -> None:
         arena = self._arena
 
         available = {
-            "group_csv_files": csv_files,
+            "manifest": manifest,
+            "video_paths": video_paths,
             "output_dir": self._output_dir,
             "comparisons": self._comparisons,
         }
-        if not self._skip_tracking:
-            available["group_video_files"] = self._groups
 
         pipeline_inputs = getattr(arena, "PIPELINE_INPUTS", {})
         kwargs = {
@@ -265,7 +279,7 @@ class PipelineRunner(QThread):
         lines.append("py3r Analysis — run report")
         lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
         lines.append(f"App version: {app_version}")
-        lines.append(f"Pipeline: {arena.NAME} (v{getattr(arena, 'VERSION', 'unknown')})")
+        lines.append(f"Pipeline: {arena.NAME}")
         lines.append("")
 
         if error:
@@ -319,10 +333,10 @@ class PipelineRunner(QThread):
                 for f in files:
                     lines.append(f"    {f}")
 
-        (self._output_dir / "report.txt").write_text("\n".join(lines) + "\n")
+        (self._output_dir / "py3r_analysis_report.txt").write_text("\n".join(lines) + "\n")
 
     def _write_warning_file(self) -> None:
-        path = self._output_dir / "WARNING_THERE WERE PROCESSING ERRORS!!!.txt"
+        path = self._output_dir / "py3r_analysis_ERRORS.txt"
         with path.open("w") as f:
             f.write(
                 f"{len(self._warnings)} issue(s) occurred during processing.\n"

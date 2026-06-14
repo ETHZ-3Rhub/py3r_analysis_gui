@@ -2,7 +2,6 @@ from app.pipelines import oft_pipeline
 from app.trackers import yolo_tracker as tracker
 
 NAME = "Open Field Test"
-VERSION = "0.1.0"
 ARENA_IMAGE = "oft_arena.png"
 TRACKER = tracker
 TRACKER_ARGS = {
@@ -22,10 +21,10 @@ TRACKER_ARGS = {
 }
 PIPELINE = oft_pipeline.run
 PIPELINE_INPUTS = {
-    "group_csv_files": "group_csv_files",
+    "manifest": "manifest",
     "output_dir": "output_dir",
     "comparisons": "comparisons",
-    "group_video_files": "group_video_files",
+    "video_paths": "video_paths",
 }
 OPTIONS = [
     {"name": "numbins", "type": int, "default": None, "label": "Time bins", "min": 2, "max": 20},

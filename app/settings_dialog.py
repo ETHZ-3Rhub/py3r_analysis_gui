@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import platform
 import subprocess
-import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -21,8 +20,10 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.proc_utils import NO_WINDOW
 from app.theme import all_themes, update_theme
 from app.theme import get_theme as _get_theme
+from app.tracking_env_setup import _ReinstallWorker
 
 _T = _get_theme()  # cached at import for inline widget-creation calls
 
@@ -39,14 +40,12 @@ def get_version() -> str:
 def _find_tracking_python() -> Path | None:
     if override := os.environ.get("PY3R_TRACKER_PYTHON"):
         return Path(override)
+    from app.trackers.yolo_tracker import tracking_env_dir
+
     subdir = "Scripts" if platform.system() == "Windows" else "bin"
     exe = "python.exe" if platform.system() == "Windows" else "python"
-    if getattr(sys, "frozen", False):
-        candidate = Path(sys.executable).parent / "tracking_env" / subdir / exe
-        return candidate if candidate.exists() else None
-    repo_root = Path(__file__).parent.parent
-    local = repo_root / "tracking_env" / subdir / exe
-    return local if local.exists() else None
+    candidate = tracking_env_dir() / subdir / exe
+    return candidate if candidate.exists() else None
 
 
 def parse_env_result(result: str) -> tuple[str, str, str]:
@@ -64,7 +63,7 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
             t.warn,
             "CPU only",
             "Tracking is running on CPU, which is slower.\n"
-            "If you have an NVIDIA GPU, go to Settings → Reinstall tracking environment\n"
+            "If you have an NVIDIA GPU, go to Settings → (Re)install tracking environment\n"
             "to enable CUDA acceleration.",
         )
     if result == "not_installed":
@@ -72,7 +71,7 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
             t.error,
             "Not installed",
             "The tracking environment has not been set up yet.\n"
-            "Open Settings and click Reinstall tracking environment.",
+            "Open Settings and click (Re)install tracking environment.",
         )
     return (t.error, "Status unknown", "Could not determine tracking environment status.")
 
@@ -104,31 +103,11 @@ class EnvCheckWorker(QThread):
                 capture_output=True,
                 text=True,
                 timeout=30,
+                creationflags=NO_WINDOW,
             )
             self.done.emit(r.stdout.strip() if r.returncode == 0 else "error")
         except Exception:
             self.done.emit("error")
-
-
-class _ReinstallWorker(QThread):
-    output = pyqtSignal(str)
-    done = pyqtSignal(bool)  # True = success
-
-    def run(self) -> None:
-        script = Path(__file__).parent.parent / "scripts" / "setup_tracking_env.py"
-        try:
-            proc = subprocess.Popen(
-                [sys.executable, str(script)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
-            for raw in proc.stdout:
-                self.output.emit(raw.decode("utf-8", errors="replace"))
-            proc.wait()
-            self.done.emit(proc.returncode == 0)
-        except Exception as exc:
-            self.output.emit(f"Error: {exc}\n")
-            self.done.emit(False)
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +156,7 @@ class SettingsDialog(QDialog):
         status_row.addWidget(self._status_lbl, stretch=1)
         layout.addLayout(status_row)
 
-        self._reinstall_btn = QPushButton("Reinstall tracking environment")
+        self._reinstall_btn = QPushButton("(Re)install tracking environment")
         self._reinstall_btn.setObjectName("secondaryButton")
         self._reinstall_btn.clicked.connect(self._start_reinstall)
         layout.addWidget(self._reinstall_btn)
@@ -270,7 +249,7 @@ class SettingsDialog(QDialog):
 
     def _on_reinstall_done(self, success: bool) -> None:
         self._reinstall_btn.setEnabled(True)
-        self._reinstall_btn.setText("Reinstall tracking environment")
+        self._reinstall_btn.setText("(Re)install tracking environment")
         if success:
             self._log.setTextColor(QColor(_T.success))
             self._log.insertPlainText("\nDone.\n")
