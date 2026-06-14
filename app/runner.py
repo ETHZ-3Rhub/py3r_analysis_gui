@@ -333,10 +333,10 @@ class PipelineRunner(QThread):
                 for f in files:
                     lines.append(f"    {f}")
 
-        (self._output_dir / "report.txt").write_text("\n".join(lines) + "\n")
+        (self._output_dir / "py3r_analysis_report.txt").write_text("\n".join(lines) + "\n")
 
     def _write_warning_file(self) -> None:
-        path = self._output_dir / "WARNING_THERE WERE PROCESSING ERRORS!!!.txt"
+        path = self._output_dir / "py3r_analysis_ERRORS.txt"
         with path.open("w") as f:
             f.write(
                 f"{len(self._warnings)} issue(s) occurred during processing.\n"
