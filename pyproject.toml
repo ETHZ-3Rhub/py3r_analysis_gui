@@ -9,7 +9,7 @@ description = "Simple GUI for yolo3r tracking and py3r behaviour analysis pipeli
 authors = [{ name = "Tom Lorimer" }]
 requires-python = ">=3.11"
 dependencies = [
-    "PyQt6>=6.6,<7.0",
+    "PySide6>=6.6,<7.0",
     "openpyxl>=3.1,<4.0",
     "numpy>=2.0",
     "pandas>=2.0,<3.0",

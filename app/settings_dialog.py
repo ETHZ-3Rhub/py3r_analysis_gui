@@ -7,9 +7,9 @@ import platform
 import subprocess
 from pathlib import Path
 
-from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFrame,
@@ -84,7 +84,7 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
 class EnvCheckWorker(QThread):
     """Emits one of: "cuda:<version>", "cpu", "not_installed", "error"."""
 
-    done = pyqtSignal(str)
+    done = Signal(str)
 
     def run(self) -> None:
         python = _find_tracking_python()
@@ -116,19 +116,24 @@ class EnvCheckWorker(QThread):
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, env_panel, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setMinimumWidth(480)
+        self._env_panel = env_panel
         self._check_worker: EnvCheckWorker | None = None
-        self._reinstall_worker: _ReinstallWorker | None = None
+        self._connected_worker: _ReinstallWorker | None = None
+        self._reinstalling = False
         self._separators: list[QFrame] = []
-        self._status_state = (
-            "checking"  # "checking" | "installing" | "failed" | EnvCheckWorker result
-        )
+        self._status_state = "checking"  # "checking" | "installing" | EnvCheckWorker result
         self._build_ui()
         self._apply_stylesheet()
-        self._start_env_check()
+        self._env_panel.status_changed.connect(self._on_env_panel_status_changed)
+        self.finished.connect(self._on_finished)
+        if self._env_panel.is_installing():
+            self._enter_installing_ui()
+        else:
+            self._start_env_check()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -188,17 +193,6 @@ class SettingsDialog(QDialog):
         theme_row.addWidget(self._theme_combo, stretch=1)
         layout.addLayout(theme_row)
 
-        layout.addWidget(self._sep())
-
-        # ── Close ─────────────────────────────────────────────────────────────
-        close_row = QHBoxLayout()
-        close_row.addStretch()
-        close_btn = QPushButton("Close")
-        close_btn.setObjectName("secondaryButton")
-        close_btn.clicked.connect(self.accept)
-        close_row.addWidget(close_btn)
-        layout.addLayout(close_row)
-
     # ── Env check ─────────────────────────────────────────────────────────────
 
     def _start_env_check(self) -> None:
@@ -221,8 +215,6 @@ class SettingsDialog(QDialog):
         t = _get_theme()
         if self._status_state == "checking" or self._status_state == "installing":
             colour = t.muted
-        elif self._status_state == "failed":
-            colour = t.error
         else:
             colour = parse_env_result(self._status_state)[0]
         self._status_dot.setStyleSheet(f"color: {colour}; font-size: 16px;")
@@ -232,32 +224,58 @@ class SettingsDialog(QDialog):
 
     def _start_reinstall(self) -> None:
         self._log.clear()
+        self._enter_installing_ui()
+        self._env_panel.start_install()
+        self._connect_to_install_worker()
+
+    def _enter_installing_ui(self) -> None:
+        self._reinstalling = True
         self._log.setVisible(True)
         self._reinstall_btn.setEnabled(False)
         self._reinstall_btn.setText("Installing…")
         self._apply_status("installing", "Installing…", "")
+        self._connect_to_install_worker()
 
-        self._reinstall_worker = _ReinstallWorker()
-        self._reinstall_worker.output.connect(self._on_reinstall_output)
-        self._reinstall_worker.done.connect(self._on_reinstall_done)
-        self._reinstall_worker.start()
+    def _connect_to_install_worker(self) -> None:
+        worker = self._env_panel.install_worker()
+        if worker is not None and worker is not self._connected_worker:
+            worker.output.connect(self._on_reinstall_output)
+            self._connected_worker = worker
 
     def _on_reinstall_output(self, text: str) -> None:
         self._log.setTextColor(QColor(_T.muted))
         self._log.insertPlainText(text)
         self._log.ensureCursorVisible()
 
-    def _on_reinstall_done(self, success: bool) -> None:
-        self._reinstall_btn.setEnabled(True)
-        self._reinstall_btn.setText("(Re)install tracking environment")
-        if success:
-            self._log.setTextColor(QColor(_T.success))
-            self._log.insertPlainText("\nDone.\n")
-            self._start_env_check()
-        else:
-            self._log.setTextColor(QColor(_T.error))
-            self._log.insertPlainText("\nInstallation failed — see output above.\n")
-            self._apply_status("failed", "Installation failed", "")
+    def _on_env_panel_status_changed(self) -> None:
+        status = self._env_panel.status()
+        if status in ("installing", "verifying"):
+            label = "Verifying…" if status == "verifying" else "Installing…"
+            self._apply_status("installing", label, "")
+            return
+
+        if self._reinstalling:
+            self._reinstalling = False
+            self._reinstall_btn.setEnabled(True)
+            self._reinstall_btn.setText("(Re)install tracking environment")
+            if status == "cpu" or status.startswith("cuda:"):
+                self._log.setTextColor(QColor(_T.success))
+                self._log.insertPlainText("\nDone.\n")
+            else:
+                self._log.setTextColor(QColor(_T.error))
+                self._log.insertPlainText("\nInstallation failed — see output above.\n")
+
+        self._connected_worker = None
+        _, label, tooltip = parse_env_result(status)
+        self._apply_status(status, label, tooltip)
+
+    def _on_finished(self) -> None:
+        self._env_panel.status_changed.disconnect(self._on_env_panel_status_changed)
+        if self._connected_worker is not None:
+            try:
+                self._connected_worker.output.disconnect(self._on_reinstall_output)
+            except TypeError:
+                pass  # already disconnected
 
     # ── Theme ─────────────────────────────────────────────────────────────────
 

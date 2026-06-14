@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import os
 
-from PyQt6.QtGui import QCloseEvent
-from PyQt6.QtWidgets import (
+from PySide6.QtGui import QCloseEvent
+from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QFileDialog,
@@ -341,7 +341,7 @@ class MainWindow(QWidget):
         options = getattr(arena_mod, "OPTIONS", []) if arena_mod else []
         if not options:
             return
-        from PyQt6.QtWidgets import QDialog
+        from PySide6.QtWidgets import QDialog
 
         dlg = AdvancedOptionsDialog(options, self._current_options, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -352,10 +352,8 @@ class MainWindow(QWidget):
         self._run_controller.refresh_run_button()
 
     def _open_settings(self) -> None:
-        SettingsDialog(self).exec()
+        SettingsDialog(self._env_panel, self).exec()
         self._apply_stylesheet()
-        # Refresh status after settings dialog closes (user may have reinstalled)
-        self._env_panel.kick_env_check()
 
     def _open_results(self) -> None:
         if not self._run_controller.last_output:

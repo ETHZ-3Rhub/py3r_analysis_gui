@@ -5,8 +5,8 @@ default)."""
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QEvent, QObject
-from PyQt6.QtWidgets import QToolTip, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QObject
+from PySide6.QtWidgets import QToolTip, QVBoxLayout, QWidget
 
 
 class TooltipOnDisabled(QObject):

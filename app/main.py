@@ -28,14 +28,14 @@ def main() -> None:
         sys.exit(setup(Path(sys.argv[2])))
 
     if sys.platform == "win32":
-        # Python 3.8+ no longer searches PATH for DLLs; PyQt6 normally registers
+        # Python 3.8+ no longer searches PATH for DLLs; PySide6 normally registers
         # its own Qt6/bin directory but this can fail on some Windows setups.
-        _qt_bin = Path(sys.prefix) / "Lib" / "site-packages" / "PyQt6" / "Qt6" / "bin"
+        _qt_bin = Path(sys.prefix) / "Lib" / "site-packages" / "PySide6" / "Qt6" / "bin"
         if _qt_bin.exists():
             os.add_dll_directory(str(_qt_bin))
 
-    from PyQt6.QtGui import QIcon
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QApplication
 
     from app.window import MainWindow
 

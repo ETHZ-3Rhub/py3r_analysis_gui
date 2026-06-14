@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import datetime
 
-from PyQt6.QtCore import QTimer, pyqtSignal
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QWidget
+from PySide6.QtCore import QTimer, Signal
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 from app.confirm_dialog import ask
 from app.settings_dialog import EnvCheckWorker, parse_env_result
@@ -21,7 +21,7 @@ class TrackingEnvPanel(QWidget):
     # Emitted whenever the tracking-env status changes (including while
     # "installing" ticks over) — listeners should re-check anything gated on
     # env readiness (run button, video-source availability).
-    status_changed = pyqtSignal()
+    status_changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -57,6 +57,19 @@ class TrackingEnvPanel(QWidget):
 
     def env_ready(self) -> bool:
         return self._env_status == "cpu" or self._env_status.startswith("cuda:")
+
+    def is_installing(self) -> bool:
+        return self._tracking_install_worker is not None
+
+    def install_worker(self) -> _ReinstallWorker | None:
+        """The in-flight reinstall worker, if any — for SettingsDialog to
+        observe (e.g. connect to `output`) without owning it."""
+        return self._tracking_install_worker
+
+    def start_install(self) -> None:
+        """Start a reinstall if one isn't already running (no-op otherwise)."""
+        if self._tracking_install_worker is None:
+            self._start_tracking_install()
 
     def shutdown(self) -> None:
         """Stop and join any in-flight worker threads. Qt aborts (SIGABRT) if

@@ -20,7 +20,7 @@ from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from types import ModuleType
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 from app import naming
 from app.proc_utils import kill_tree, popen_grouped
@@ -29,12 +29,12 @@ _HEARTBEAT_INTERVAL = 1.0  # seconds of silence before emitting a heartbeat tick
 
 
 class PipelineRunner(QThread):
-    log = pyqtSignal(str)
-    warning = pyqtSignal(str)
-    subprocess_output = pyqtSignal(str)  # raw chunks from tracking subprocess
-    heartbeat = pyqtSignal()  # emitted on silence, to drive a "still working" spinner
-    finished = pyqtSignal(str)
-    error = pyqtSignal(str)
+    log = Signal(str)
+    warning = Signal(str)
+    subprocess_output = Signal(str)  # raw chunks from tracking subprocess
+    heartbeat = Signal()  # emitted on silence, to drive a "still working" spinner
+    finished = Signal(str)
+    error = Signal(str)
 
     def __init__(
         self,
