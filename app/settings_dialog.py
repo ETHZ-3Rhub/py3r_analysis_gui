@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import platform
 import subprocess
-import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -24,6 +23,7 @@ from PyQt6.QtWidgets import (
 from app.proc_utils import NO_WINDOW
 from app.theme import all_themes, update_theme
 from app.theme import get_theme as _get_theme
+from app.tracking_env_setup import _ReinstallWorker
 
 _T = _get_theme()  # cached at import for inline widget-creation calls
 
@@ -108,34 +108,6 @@ class EnvCheckWorker(QThread):
             self.done.emit(r.stdout.strip() if r.returncode == 0 else "error")
         except Exception:
             self.done.emit("error")
-
-
-class _ReinstallWorker(QThread):
-    output = pyqtSignal(str)
-    done = pyqtSignal(bool)  # True = success
-
-    def run(self) -> None:
-        from app.trackers.yolo_tracker import tracking_env_dir
-
-        target = tracking_env_dir()
-        if getattr(sys, "frozen", False):
-            cmd = [sys.executable, "--setup-tracking-env", str(target)]
-        else:
-            cmd = [sys.executable, "-m", "app.main", "--setup-tracking-env", str(target)]
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                creationflags=NO_WINDOW,
-            )
-            for raw in proc.stdout:
-                self.output.emit(raw.decode("utf-8", errors="replace"))
-            proc.wait()
-            self.done.emit(proc.returncode == 0)
-        except Exception as exc:
-            self.output.emit(f"Error: {exc}\n")
-            self.done.emit(False)
 
 
 # ---------------------------------------------------------------------------

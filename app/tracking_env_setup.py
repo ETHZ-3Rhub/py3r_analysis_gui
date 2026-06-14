@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from PyQt6.QtCore import QThread, pyqtSignal
+
 from app.proc_utils import NO_WINDOW
 
 # PyTorch index URLs — cu128 requires driver >= 570 (Blackwell/sm_120),
@@ -178,3 +180,31 @@ def setup(tracking_env: Path) -> int:
         print("\nReady. Running on CPU.")
 
     return 0
+
+
+class _ReinstallWorker(QThread):
+    output = pyqtSignal(str)
+    done = pyqtSignal(bool)  # True = success
+
+    def run(self) -> None:
+        from app.trackers.yolo_tracker import tracking_env_dir
+
+        target = tracking_env_dir()
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--setup-tracking-env", str(target)]
+        else:
+            cmd = [sys.executable, "-m", "app.main", "--setup-tracking-env", str(target)]
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                creationflags=NO_WINDOW,
+            )
+            for raw in proc.stdout:
+                self.output.emit(raw.decode("utf-8", errors="replace"))
+            proc.wait()
+            self.done.emit(proc.returncode == 0)
+        except Exception as exc:
+            self.output.emit(f"Error: {exc}\n")
+            self.done.emit(False)

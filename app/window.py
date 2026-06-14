@@ -42,11 +42,11 @@ from app.runner import PipelineRunner
 from app.settings_dialog import (
     EnvCheckWorker,
     SettingsDialog,
-    _ReinstallWorker,
     get_version,
     parse_env_result,
 )
 from app.theme import get_theme as _get_theme
+from app.tracking_env_setup import _ReinstallWorker
 
 _T = _get_theme()  # cached at import for inline widget-creation calls
 
