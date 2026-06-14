@@ -279,7 +279,7 @@ class PipelineRunner(QThread):
         lines.append("py3r Analysis — run report")
         lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
         lines.append(f"App version: {app_version}")
-        lines.append(f"Pipeline: {arena.NAME} (v{getattr(arena, 'VERSION', 'unknown')})")
+        lines.append(f"Pipeline: {arena.NAME}")
         lines.append("")
 
         if error:

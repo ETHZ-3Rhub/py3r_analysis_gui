@@ -2,7 +2,6 @@ from app.pipelines import oft_pipeline
 from app.trackers import yolo_tracker as tracker
 
 NAME = "Open Field Test"
-VERSION = "0.1.0"
 ARENA_IMAGE = "oft_arena.png"
 TRACKER = tracker
 TRACKER_ARGS = {
