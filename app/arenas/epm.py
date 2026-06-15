@@ -31,7 +31,7 @@ OPTIONS = [
     {
         "name": "n_clusters",
         "type": int,
-        "default": 25,
+        "default": 10,
         "label": "Behaviour clusters (k)",
         "min": 5,
         "max": 50,

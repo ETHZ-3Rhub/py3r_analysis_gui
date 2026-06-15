@@ -18,9 +18,8 @@ from app.pipelines import _shared
 
 # ── Constants (proprietary hardware — do not expose to GUI) ───────────────────
 _FPS = 30
-# Placeholder pending a real measurement of the EPM rig's diagonal.
-_ARENA_DIAGONAL_M = 0.5
-_N_CLUSTERS = 25
+_ARENA_DIAGONAL_M = 0.665
+_N_CLUSTERS = 10
 _CLUSTER_COL = f"kmeans_{_N_CLUSTERS}"
 _GROUP_TAG = "group"
 _BODY_CENTRE = "bodycentre"
