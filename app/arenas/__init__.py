@@ -28,6 +28,8 @@ def discover() -> list[ModuleType]:
     arenas: list[ModuleType] = []
     for _, name, _ in pkgutil.iter_modules([str(here)]):
         mod = importlib.import_module(f"app.arenas.{name}")
+        if not getattr(mod, "READY", True):
+            continue
         if hasattr(mod, "NAME") and hasattr(mod, "TRACKER") and hasattr(mod, "PIPELINE"):
             arenas.append(mod)
     return sorted(arenas, key=lambda m: m.NAME)

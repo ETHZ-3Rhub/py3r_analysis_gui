@@ -11,6 +11,9 @@ def test_main_window_constructs_and_discovers_arenas(qapp):
     arenas = arena_pkg.discover()
     assert arenas, "expected at least one arena to be discovered"
 
+    # LDB's tracker model isn't ready yet (READY = False) — must stay hidden
+    assert "Light-Dark Box" not in [mod.NAME for mod in arenas]
+
     window = MainWindow()
     # combo includes a leading "— select pipeline —" placeholder entry
     assert window._arena_combo.count() == len(arenas) + 1

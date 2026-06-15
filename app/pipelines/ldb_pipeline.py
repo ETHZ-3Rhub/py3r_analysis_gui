@@ -1,10 +1,12 @@
-"""Open Field Test — py3r_behaviour analysis pipeline.
+"""Light-Dark Box — py3r_behaviour analysis pipeline.
 
 Receives per-group folders of YOLO3R tracking CSVs and runs:
     load → preprocess → QC plots → features → clustering → summary → export
 
 Nothing in this file knows about the GUI, the tracker, or any other arena.
 Progress is reported via print() - the caller captures stdout if needed.
+
+Gated behind app/arenas/ldb.py's READY flag — not yet reachable from the GUI.
 """
 
 from __future__ import annotations
@@ -18,15 +20,31 @@ from app.pipelines import _shared
 
 # ── Constants (proprietary hardware — do not expose to GUI) ───────────────────
 _FPS = 30
-_ARENA_SIZE_M = 0.64
-_N_CLUSTERS = 10
+# Placeholder pending a real measurement of the LDB rig's diagonal.
+_ARENA_DIAGONAL_M = 0.5
+_N_CLUSTERS = 25
 _CLUSTER_COL = f"kmeans_{_N_CLUSTERS}"
 _GROUP_TAG = "group"
-
-# Keypoint names as output by the OFT YOLO3R model (after strip_column_names)
-_CORNERS = ["tl", "tr", "br", "bl"]
-_CORNER_LINES = [("tl", "tr"), ("tr", "br"), ("br", "bl"), ("bl", "tl")]
 _BODY_CENTRE = "bodycentre"
+
+# Maze geometry — box split into light (bottom) / dark (top) halves by the
+# ml-mr divider
+_LDB_CORNERS = ["tl", "tr", "br", "bl"]
+_LIGHT_CORNERS = ["ml", "mr", "br", "bl"]
+_DARK_CORNERS = ["tl", "tr", "mr", "ml"]
+
+# Body points used for the signed distance-to-dark-boundary BFA features
+_BFA_BODY_POINTS = ["nose", "neck", _BODY_CENTRE, "tailbase"]
+
+# Box outline + divider, for the QC trajectory plot
+_CORNERS = ["tl", "tr", "br", "bl", "ml", "mr"]
+_CORNER_LINES = [
+    ("tl", "tr"),
+    ("tr", "br"),
+    ("br", "bl"),
+    ("bl", "tl"),
+    ("ml", "mr"),
+]
 
 _ANIM_MOUSE_POINTS = [
     "nose",
@@ -68,26 +86,32 @@ _ANIM_STYLE = {
                 "nan_color": (80, 80, 80),
             },
         },
-        "tl": {"color": (0, 255, 0), "radius": 5},
-        "tr": {"color": (0, 255, 0), "radius": 5},
-        "br": {"color": (0, 255, 0), "radius": 5},
-        "bl": {"color": (0, 255, 0), "radius": 5},
     },
     "boundaries": {
-        "oft": {"edge_color": (0, 200, 0), "edge_width": 1},
-        "centre": {
-            "edge_color": (0, 150, 255),
+        "light": {
+            "edge_color": (0, 255, 255),
             "edge_width": 1,
-            "fill_color": (0, 100, 200),
+            "fill_color": (200, 200, 0),
+            "fill_alpha": 0.1,
+        },
+        "dark": {
+            "edge_color": (150, 0, 150),
+            "edge_width": 1,
+            "fill_color": (50, 0, 50),
             "fill_alpha": 0.15,
         },
     },
 }
 
-# Zone scale factors
-_CENTRE_SCALE = 0.5
-_PERIPHERY_SCALE = 0.8
-_CORNER_SCALE = 0.2
+_CLASSICAL_METRICS = [
+    "total_distance_bodycentre",
+    "time_true_in_light",
+    "time_true_in_dark",
+    "distance_moved_in_light",
+    "distance_moved_in_dark",
+    "count_onset_in_dark",
+    "latency_first_dark_entry",
+]
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -99,7 +123,7 @@ def run(
     numbins: int | None = None,
     n_clusters: int = _N_CLUSTERS,
 ) -> None:
-    """Full OFT pipeline across all groups.
+    """Full LDB pipeline across all groups.
 
     Parameters
     ----------
@@ -144,7 +168,7 @@ def run(
     print("Preprocessing...")
     _shared.preprocess(tc_all)
     tc_all.each.rescale_by_known_distance(
-        point1="tl", point2="br", distance_in_metres=_ARENA_SIZE_M
+        point1="tl", point2="br", distance_in_metres=_ARENA_DIAGONAL_M
     )
 
     # ── QC trajectory plots ───────────────────────────────────────────────────
@@ -173,12 +197,12 @@ def run(
         fc,
         group_names,
         output_dir,
-        points=_ANIM_MOUSE_POINTS + _CORNERS,
-        lines=_ANIM_BODY_LINES + _CORNER_LINES,
-        boundaries=["oft", "centre"],
+        points=_ANIM_MOUSE_POINTS,
+        lines=_ANIM_BODY_LINES,
+        boundaries=["light", "dark"],
         features={
             "Speed (m/s)": f"speed_of_{_BODY_CENTRE}_in_xy",
-            "In centre": "within_boundary_static_bodycentre_in_centre",
+            "In dark": "in_dark",
             "Cluster": _CLUSTER_COL,
         },
         style=_ANIM_STYLE,
@@ -196,14 +220,14 @@ def run(
     if numbins:
         print(f"Computing {numbins}-bin summaries...")
         _shared.export_binned_summaries(
-            sc, numbins, summaries_dir, "OFT_results", _compute_summaries
+            sc, numbins, summaries_dir, "LDB_results", _compute_summaries
         )
 
     sc_grouped = sc.groupby(tags=[_GROUP_TAG])
 
     # ── Export ────────────────────────────────────────────────────────────────
     print("Exporting tables...")
-    _shared.export_results_table(sc, summaries_dir, "OFT_results.csv")
+    _shared.export_results_table(sc, summaries_dir, "LDB_results.csv")
 
     print("Exporting figures...")
     _shared.export_boxplots(
@@ -211,11 +235,7 @@ def run(
         group_names,
         comparisons,
         figures_dir,
-        metrics=[
-            "total_distance_bodycentre",
-            "time_in_centre",
-            "distance_in_centre",
-        ],
+        metrics=_CLASSICAL_METRICS,
         group_tag=_GROUP_TAG,
     )
 
@@ -229,43 +249,26 @@ def run(
 def _compute_features(fc: p3b.FeaturesCollection) -> None:
     print("  Spatial boundaries...")
 
-    fc.each.define_static_boundary(_CORNERS, name="oft")
-    fc.each.define_static_boundary(
-        _CORNERS, scale_dim1=_CENTRE_SCALE, scale_dim2=_CENTRE_SCALE, name="centre"
-    )
-    fc.each.define_static_boundary(
-        _CORNERS, scale_dim1=_PERIPHERY_SCALE, scale_dim2=_PERIPHERY_SCALE, name="not_periphery"
-    )
-    for c in _CORNERS:
-        fc.each.define_static_boundary(
-            _CORNERS,
-            scale_dim1=_CORNER_SCALE,
-            scale_dim2=_CORNER_SCALE,
-            name=f"{c}_corner",
-            anchor=c,
-        )
+    fc.each.define_static_boundary(_LIGHT_CORNERS, name="light")
+    fc.each.define_static_boundary(_DARK_CORNERS, name="dark")
 
-    in_centre = fc.each.within_boundary(_BODY_CENTRE, "centre")
-    in_centre.store()
+    in_light = fc.each.within_boundary(_BODY_CENTRE, "light")
+    in_dark = fc.each.within_boundary(_BODY_CENTRE, "dark")
+    in_light.store("in_light")
+    in_dark.store("in_dark")
 
-    (
-        fc.each.within_boundary(_BODY_CENTRE, "oft")
-        & ~fc.each.within_boundary(_BODY_CENTRE, "not_periphery")
-    ).store("in_periphery")
-
-    in_corners = {c: fc.each.within_boundary(_BODY_CENTRE, f"{c}_corner") for c in _CORNERS}
-    (in_corners["tl"] | in_corners["tr"] | in_corners["bl"] | in_corners["br"]).store("in_corner")
-    fc.each.compose_state_from_booleans(in_corners).store("corner_state")
+    fc.each.compose_state_from_booleans({"light": in_light, "dark": in_dark}).store("zone_state")
 
     dist_change = fc.each.distance_change(_BODY_CENTRE)
-    (in_centre.astype("Int64") * dist_change).store("dist_change_bodycentre_in_centre")
+    (in_light.astype("Int64") * dist_change).store("dist_change_bodycentre_in_light")
+    (in_dark.astype("Int64") * dist_change).store("dist_change_bodycentre_in_dark")
 
     print("  Kinematic features...")
 
     _shared.compute_body_kinematics(fc)
 
-    for pt in ["nose", "neck", _BODY_CENTRE, "tailbase"]:
-        fc.each.distance_to_boundary(pt, "oft").store()
+    for pt in _BFA_BODY_POINTS:
+        fc.each.distance_to_boundary(pt, "dark", signed=True).store()
 
 
 # ── Clustering ────────────────────────────────────────────────────────────────
@@ -290,9 +293,13 @@ def _cluster(fc: p3b.FeaturesCollection, n_clusters: int) -> None:
 # ── Summary computation ───────────────────────────────────────────────────────
 def _compute_summaries(sc: p3b.SummaryCollection) -> None:
     sc.each.total_distance(_BODY_CENTRE).store()
-    sc.each.time_true("within_boundary_static_bodycentre_in_centre").store("time_in_centre")
-    sc.each.sum_column("dist_change_bodycentre_in_centre").store("distance_in_centre")
-    sc.each.by_state("corner_state", all_states=_CORNERS).mean_column(
+    sc.each.time_true("in_light").store("time_true_in_light")
+    sc.each.time_true("in_dark").store("time_true_in_dark")
+    sc.each.sum_column("dist_change_bodycentre_in_light").store("distance_moved_in_light")
+    sc.each.sum_column("dist_change_bodycentre_in_dark").store("distance_moved_in_dark")
+    sc.each.count_onset("in_dark").store("count_onset_in_dark")
+    sc.each.calculate_latency_nth_onset("in_dark").store("latency_first_dark_entry")
+    sc.each.by_state("zone_state", all_states=["light", "dark", "none"]).mean_column(
         f"speed_of_{_BODY_CENTRE}_in_xy"
-    ).store("mean_speed_by_corner")
+    ).store("mean_speed_by_zone")
     sc.each.time_in_state(_CLUSTER_COL).store("time_in_cluster")
