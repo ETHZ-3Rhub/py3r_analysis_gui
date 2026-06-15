@@ -1,0 +1,62 @@
+Tracking env install log - 2026-06-15T17:13:57.953096
+Tracking env:  /Users/work/Documents/GitHub/py3r_analysis_gui/tracking_env
+uv:            uv 0.11.17 (a33a629d6 2026-05-28 aarch64-apple-darwin)
+PyTorch:       2.12.0 / torchvision 0.27.0 (torch-backend=auto)
+ultralytics:   8.4.60
+lap:           0.5.13
+
+$ /Users/work/Documents/GitHub/py3r_analysis_gui/.venv/bin/uv venv /Users/work/Documents/GitHub/py3r_analysis_gui/tracking_env --python 3.12 --clear
+Using CPython 3.12.4 interpreter at: /opt/miniconda3/bin/python3
+Creating virtual environment at: tracking_env
+Activate with: source tracking_env/bin/activate
+
+$ /Users/work/Documents/GitHub/py3r_analysis_gui/.venv/bin/uv pip install --python /Users/work/Documents/GitHub/py3r_analysis_gui/tracking_env/bin/python torch==2.12.0 torchvision==0.27.0 --torch-backend auto
+Using Python 3.12.4 environment at: tracking_env
+Resolved 13 packages in 685ms
+Prepared 2 packages in 2ms
+Installed 13 packages in 509ms
+ + filelock==3.29.4
+ + fsspec==2026.4.0
+ + jinja2==3.1.6
+ + markupsafe==3.0.3
+ + mpmath==1.3.0
+ + networkx==3.6.1
+ + numpy==2.4.6
+ + pillow==12.2.0
+ + setuptools==81.0.0
+ + sympy==1.14.0
+ + torch==2.12.0
+ + torchvision==0.27.0
+ + typing-extensions==4.15.0
+
+$ /Users/work/Documents/GitHub/py3r_analysis_gui/.venv/bin/uv pip install --python /Users/work/Documents/GitHub/py3r_analysis_gui/tracking_env/bin/python ultralytics==8.4.60 lap==0.5.13
+Using Python 3.12.4 environment at: tracking_env
+Resolved 36 packages in 19ms
+Installed 23 packages in 110ms
+ + certifi==2026.5.20
+ + charset-normalizer==3.4.7
+ + contourpy==1.3.3
+ + cycler==0.12.1
+ + fonttools==4.63.0
+ + idna==3.18
+ + kiwisolver==1.5.0
+ + lap==0.5.13
+ + matplotlib==3.11.0
+ + opencv-python==4.13.0.92
+ + packaging==26.2
+ + polars==1.41.2
+ + polars-runtime-32==1.41.2
+ + psutil==7.2.2
+ + pyparsing==3.3.2
+ + python-dateutil==2.9.0.post0
+ + pyyaml==6.0.3
+ + requests==2.34.2
+ + scipy==1.17.1
+ + six==1.17.0
+ + ultralytics==8.4.60
+ + ultralytics-thop==2.0.20
+ + urllib3==2.7.0
+
+Verifying GPU...
+
+Ready. Running on CPU (no GPU detected).

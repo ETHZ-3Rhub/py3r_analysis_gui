@@ -11,3 +11,11 @@ dependencies:
     # Contains large model weights stored in git-lfs.
     # The build script must run `git lfs pull` after cloning.
     lfs: true
+
+  # Pinned versions for tracking_env, read by app/tracking_env_setup.py.
+  # Bump these together when updating the tracking stack.
+  tracking:
+    torch: "2.12.0"
+    torchvision: "0.27.0"
+    ultralytics: "8.4.60"
+    lap: "0.5.13"

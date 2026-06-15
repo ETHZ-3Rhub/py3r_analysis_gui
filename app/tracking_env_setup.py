@@ -1,5 +1,5 @@
-"""Create/refresh a tracking_env/ venv: PyTorch (CUDA build matched to the
-installed driver, or CPU fallback) + pinned ultralytics/lap.
+"""Create/refresh a tracking_env/ venv: PyTorch (CUDA build auto-detected by
+uv, or CPU fallback) + pinned ultralytics/lap.
 
 Invoked via `--setup-tracking-env <dir>` (see app/main.py) by the in-app
 "Reinstall tracking environment" button — a frozen exe can't run an
@@ -9,25 +9,39 @@ entry point instead.
 
 from __future__ import annotations
 
+import datetime
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
 
+import yaml
 from PySide6.QtCore import QThread, Signal
 
 from app.proc_utils import NO_WINDOW
 
-# PyTorch index URLs — cu128 requires driver >= 570 (Blackwell/sm_120),
-# cu124 requires driver >= 525, cu118 requires driver >= 450.
-TORCH_INDEX_CU128 = "https://download.pytorch.org/whl/cu128"
-TORCH_INDEX_CU124 = "https://download.pytorch.org/whl/cu124"
-TORCH_INDEX_CU118 = "https://download.pytorch.org/whl/cu118"
-TORCH_INDEX_CPU = "https://download.pytorch.org/whl/cpu"
+# Substring -> plain-English diagnosis, checked against combined install
+# output when a step fails. Not a parser - covers the common cases only.
+_KNOWN_ERRORS = [
+    ("Could not connect", "No internet connection - connect and try again."),
+    ("Temporary failure in name resolution", "No internet connection - connect and try again."),
+    ("Network is unreachable", "No internet connection - connect and try again."),
+    ("No space left on device", "Disk is full - free up space and try again."),
+    (
+        "Permission denied",
+        "Permission error - check folder permissions or try running as administrator.",
+    ),
+    (
+        "No matching distribution",
+        "Could not find a matching package version - this may be a temporary "
+        "index issue, try again later.",
+    ),
+]
 
-# Pinned versions — bump these together when updating the tracking stack.
-ULTRALYTICS_VERSION = "8.4.60"
-LAP_VERSION = "0.5.13"
+# Hosts the install actually downloads from - used for the pre-flight
+# connectivity check.
+_CONNECTIVITY_HOSTS = ["pypi.org", "download.pytorch.org"]
 
 
 def _uv_exe() -> str:
@@ -46,39 +60,47 @@ def _uv_exe() -> str:
     )
 
 
-def _nvidia_driver_version() -> tuple[int, int] | None:
-    """Return (major, minor) of the installed NVIDIA driver, or None if not found."""
-    if not shutil.which("nvidia-smi"):
-        return None
+def _uv_version(uv: str) -> str:
     try:
         r = subprocess.run(
-            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
-            capture_output=True,
-            text=True,
-            creationflags=NO_WINDOW,
+            [uv, "--version"], capture_output=True, text=True, creationflags=NO_WINDOW
         )
-        if r.returncode != 0:
-            return None
-        version_str = r.stdout.strip().splitlines()[0].strip()
-        parts = version_str.split(".")
-        return int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+        return (r.stdout.strip() or r.stderr.strip()) or "unknown"
     except Exception:
-        return None
+        return "unknown"
 
 
-def _pick_torch_index() -> tuple[str, str]:
-    """Return (index_url, label) for the best torch build for this machine."""
-    driver = _nvidia_driver_version()
-    if driver is None:
-        return TORCH_INDEX_CPU, "CPU (no NVIDIA GPU detected)"
-    major, _ = driver
-    if major >= 570:
-        return TORCH_INDEX_CU128, f"CUDA 12.8 (driver {major} >= 570)"
-    if major >= 525:
-        return TORCH_INDEX_CU124, f"CUDA 12.4 (driver {major} >= 525)"
-    if major >= 450:
-        return TORCH_INDEX_CU118, f"CUDA 11.8 (driver {major} >= 450)"
-    return TORCH_INDEX_CPU, f"CPU (driver {major} too old for CUDA builds - upgrade to >= 450)"
+def _has_nvidia_gpu() -> bool:
+    return shutil.which("nvidia-smi") is not None
+
+
+def _check_internet(timeout: float = 3.0) -> bool:
+    """Cheap pre-flight reachability check against the hosts the install
+    actually downloads from. Not a reliability oracle - short timeout, no
+    retries."""
+    for host in _CONNECTIVITY_HOSTS:
+        try:
+            socket.create_connection((host, 443), timeout=timeout).close()
+        except OSError:
+            return False
+    return True
+
+
+def _classify_error(text: str) -> str | None:
+    for needle, message in _KNOWN_ERRORS:
+        if needle in text:
+            return message
+    return None
+
+
+def _versions_yaml_path() -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    return base / "versions.yaml"
+
+
+def _load_tracking_versions() -> dict[str, str]:
+    data = yaml.safe_load(_versions_yaml_path().read_text())
+    return data["dependencies"]["tracking"]
 
 
 def _python_exe(tracking_env: Path) -> Path:
@@ -101,22 +123,37 @@ except Exception as e:
 """
 
 
-def _run(*cmd: str) -> None:
-    print(f"\n$ {' '.join(cmd)}")
-    subprocess.run(list(cmd), check=True, creationflags=NO_WINDOW)
+def _run(log, *cmd: str) -> str:
+    """Run *cmd*, tee its combined stdout/stderr to *log* and stdout.
+
+    Returns the combined output. Raises `subprocess.CalledProcessError`
+    (with `.output` set) on non-zero exit.
+    """
+    header = f"\n$ {' '.join(cmd)}"
+    print(header)
+    log.write(header + "\n")
+    r = subprocess.run(list(cmd), capture_output=True, text=True, creationflags=NO_WINDOW)
+    combined = r.stdout + r.stderr
+    print(combined, end="")
+    log.write(combined)
+    log.flush()
+    if r.returncode != 0:
+        raise subprocess.CalledProcessError(r.returncode, cmd, output=combined)
+    return combined
 
 
-def _install_torch(uv: str, python: str, index_url: str) -> None:
-    _run(
+def _install_torch(log, uv: str, python: str, versions: dict[str, str], backend: str) -> str:
+    return _run(
+        log,
         uv,
         "pip",
         "install",
         "--python",
         python,
-        "torch",
-        "torchvision",
-        "--index-url",
-        index_url,
+        f"torch=={versions['torch']}",
+        f"torchvision=={versions['torchvision']}",
+        "--torch-backend",
+        backend,
     )
 
 
@@ -136,55 +173,88 @@ def _verify_cuda(python: str) -> tuple[bool, str]:
 
 
 def setup(tracking_env: Path) -> int:
-    """Create/refresh *tracking_env* in place. Returns a process exit code."""
+    """Create/refresh *tracking_env* in place. Returns a process exit code.
+
+    Writes a full install log to `tracking_env_install.log` beside
+    *tracking_env*. On failure, prints a `DIAGNOSIS: <message>` line with a
+    plain-English summary for `_ReinstallWorker` to surface.
+    """
     uv = _uv_exe()
+    log_path = tracking_env.parent / "tracking_env_install.log"
+    tracking_env.parent.mkdir(parents=True, exist_ok=True)
 
-    torch_index, torch_label = _pick_torch_index()
-    wants_cuda = torch_index != TORCH_INDEX_CPU
-    print(f"Tracking env:  {tracking_env}")
-    print(f"PyTorch build: {torch_label}")
-    print(f"ultralytics:   {ULTRALYTICS_VERSION}")
-    print(f"lap:           {LAP_VERSION}")
+    with open(log_path, "w", encoding="utf-8") as log:
 
-    _run(uv, "venv", str(tracking_env), "--python", "3.12", "--clear")
+        def out(msg: str = "") -> None:
+            print(msg)
+            log.write(msg + "\n")
+            log.flush()
 
-    python = str(_python_exe(tracking_env))
+        out(f"Tracking env install log - {datetime.datetime.now().isoformat()}")
+        out(f"Tracking env:  {tracking_env}")
+        out(f"uv:            {_uv_version(uv)}")
 
-    # Install PyTorch first from the machine-specific index so we get the right
-    # CUDA build. ultralytics will see torch already satisfied and won't replace it.
-    _install_torch(uv, python, torch_index)
+        if not _check_internet():
+            out("\nNo internet connection detected.")
+            out("DIAGNOSIS: No internet connection - connect and try again.")
+            return 1
 
-    # Pin ultralytics and lap exactly — these are part of the app's reproducibility
-    # guarantee. See ULTRALYTICS_VERSION / LAP_VERSION constants above.
-    _run(
-        uv,
-        "pip",
-        "install",
-        "--python",
-        python,
-        f"ultralytics=={ULTRALYTICS_VERSION}",
-        f"lap=={LAP_VERSION}",
-    )
+        versions = _load_tracking_versions()
+        out(
+            f"PyTorch:       {versions['torch']} / torchvision {versions['torchvision']} "
+            "(torch-backend=auto)"
+        )
+        out(f"ultralytics:   {versions['ultralytics']}")
+        out(f"lap:           {versions['lap']}")
 
-    if wants_cuda:
-        print("\nVerifying GPU...")
+        try:
+            _run(log, uv, "venv", str(tracking_env), "--python", "3.12", "--clear")
+            python = str(_python_exe(tracking_env))
+            _install_torch(log, uv, python, versions, "auto")
+            _run(
+                log,
+                uv,
+                "pip",
+                "install",
+                "--python",
+                python,
+                f"ultralytics=={versions['ultralytics']}",
+                f"lap=={versions['lap']}",
+            )
+        except subprocess.CalledProcessError as exc:
+            out(f"\nInstall command failed (exit {exc.returncode}).")
+            diag = _classify_error(exc.output or "") or (
+                "Setup failed - see tracking_env_install.log for details."
+            )
+            out(f"DIAGNOSIS: {diag}")
+            return 1
+
+        out("\nVerifying GPU...")
         ok, msg = _verify_cuda(python)
         if ok:
-            print(f"\nReady. GPU: {msg}")
+            out(f"\nReady. GPU: {msg}")
+        elif _has_nvidia_gpu():
+            out(f"GPU verification failed: {msg}")
+            out("Falling back to CPU - reinstalling PyTorch...")
+            try:
+                _install_torch(log, uv, python, versions, "cpu")
+            except subprocess.CalledProcessError as exc:
+                out(f"\nInstall command failed (exit {exc.returncode}).")
+                diag = _classify_error(exc.output or "") or (
+                    "Setup failed - see tracking_env_install.log for details."
+                )
+                out(f"DIAGNOSIS: {diag}")
+                return 1
+            out("\nReady. Running on CPU (GPU unavailable).")
         else:
-            print(f"GPU verification failed: {msg}")
-            print("Falling back to CPU — reinstalling PyTorch...")
-            _install_torch(uv, python, TORCH_INDEX_CPU)
-            print("\nReady. Running on CPU (GPU unavailable).")
-    else:
-        print("\nReady. Running on CPU.")
+            out("\nReady. Running on CPU (no GPU detected).")
 
-    return 0
+        return 0
 
 
 class _ReinstallWorker(QThread):
     output = Signal(str)
-    done = Signal(bool)  # True = success
+    done = Signal(bool, str)  # success, diagnosis ("" if none)
 
     def run(self) -> None:
         from app.trackers.yolo_tracker import tracking_env_dir
@@ -194,6 +264,7 @@ class _ReinstallWorker(QThread):
             cmd = [sys.executable, "--setup-tracking-env", str(target)]
         else:
             cmd = [sys.executable, "-m", "app.main", "--setup-tracking-env", str(target)]
+        diagnosis = ""
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -202,9 +273,13 @@ class _ReinstallWorker(QThread):
                 creationflags=NO_WINDOW,
             )
             for raw in proc.stdout:
-                self.output.emit(raw.decode("utf-8", errors="replace"))
+                text = raw.decode("utf-8", errors="replace")
+                self.output.emit(text)
+                for line in text.splitlines():
+                    if line.startswith("DIAGNOSIS:"):
+                        diagnosis = line[len("DIAGNOSIS:") :].strip()
             proc.wait()
-            self.done.emit(proc.returncode == 0)
+            self.done.emit(proc.returncode == 0, diagnosis)
         except Exception as exc:
             self.output.emit(f"Error: {exc}\n")
-            self.done.emit(False)
+            self.done.emit(False, str(exc))
