@@ -12,11 +12,17 @@ from __future__ import annotations
 
 import importlib
 import pickle
+import sys
 import traceback
 from pathlib import Path
 
 
 def run_worker(payload_path: Path) -> int:
+    # Frozen PyInstaller exes ignore PYTHONUTF8/env vars, so force UTF-8
+    # here to match the parent's utf-8 decode of captured output.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     with open(payload_path, "rb") as f:
         payload = pickle.load(f)
 

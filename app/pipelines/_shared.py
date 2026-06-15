@@ -51,6 +51,50 @@ def preprocess(
     tc.each.smooth_all(window=window, method="mean")
 
 
+# ── Body kinematics ──────────────────────────────────────────────────────────
+def compute_body_kinematics(fc: p3b.FeaturesCollection) -> None:
+    """Speed / azimuth deviation / distance-between / area-of-boundary features
+    over the standard YOLO3R mouse keypoint set. Identical across arenas using
+    this tracker."""
+    for pt in ["nose", "neck", "earr", "earl", "bodycentre", "hipl", "hipr", "tailbase"]:
+        fc.each.speed(pt).store()
+
+    for base, p1, p2 in [
+        ("tailbase", "hipr", "hipl"),
+        ("bodycentre", "tailbase", "neck"),
+        ("neck", "bodycentre", "headcentre"),
+        ("headcentre", "earr", "earl"),
+    ]:
+        fc.each.azimuth_deviation(base, p1, p2).store()
+
+    for p1, p2 in [
+        ("nose", "headcentre"),
+        ("neck", "headcentre"),
+        ("neck", "bodycentre"),
+        ("bcr", "bodycentre"),
+        ("bcl", "bodycentre"),
+        ("tailbase", "bodycentre"),
+        ("tailbase", "hipr"),
+        ("tailbase", "hipl"),
+        ("bcr", "hipr"),
+        ("bcl", "hipl"),
+        ("bcl", "earl"),
+        ("bcr", "earr"),
+        ("nose", "earr"),
+        ("nose", "earl"),
+    ]:
+        fc.each.distance_between(p1, p2).store()
+
+    for boundary_name, pts in [
+        ("mouse_rear", ["tailbase", "hipr", "hipl"]),
+        ("mouse_mid", ["hipr", "hipl", "bcl", "bcr"]),
+        ("mouse_front", ["bcr", "earr", "earl", "bcl"]),
+        ("mouse_face", ["earr", "nose", "earl"]),
+    ]:
+        fc.each.define_dynamic_boundary(pts, name=boundary_name)
+        fc.each.area_of_boundary(boundary_name).store()
+
+
 # ── Output layout ────────────────────────────────────────────────────────────
 def make_output_dirs(output_dir: Path) -> dict[str, Path]:
     """Create and return the standard pipeline output directory layout."""
@@ -119,7 +163,7 @@ def export_animations(
         video_path = feat.tracking.meta.get("video_path")
 
         out_path = anim_dir / f"{group_name}.mp4"
-        print(f"  {group_name} ({'with video' if video_path else 'no video'})…")
+        print(f"  {group_name} ({'with video' if video_path else 'no video'})...")
 
         try:
             has_video = video_path is not None
@@ -162,7 +206,7 @@ def export_binned_summaries(
     whole_df, _ = sc.to_df(include_tags=True, series="separate")
     bin_dfs = {"whole": whole_df}
     for i, bin_sc in enumerate(sc.make_bins(numbins)):
-        print(f"  Bin {i + 1}/{numbins}…")
+        print(f"  Bin {i + 1}/{numbins}...")
         compute_summaries_fn(bin_sc)
         bin_df, _ = bin_sc.to_df(include_tags=True, series="separate")
         bin_dfs[f"bin_{i + 1:02d}"] = bin_df
@@ -198,7 +242,7 @@ def export_boxplots(
     )
 
     for metric in metrics:
-        print(f"  Plotting {metric}…")
+        print(f"  Plotting {metric}...")
         try:
             fig, ax, _ = sc_grouped.snsbox(
                 metric,
@@ -230,7 +274,7 @@ def export_bfa(
     import matplotlib.pyplot as plt
 
     try:
-        print("  Computing BFA transition statistics…")
+        print("  Computing BFA transition statistics...")
         bfa_results = sc_grouped.bfa(
             column=cluster_col,
             all_states=list(range(n_clusters)),
@@ -244,7 +288,7 @@ def export_bfa(
         with open(bfa_dir / "bfa_stats.json", "w") as f:
             json.dump(bfa_stats, f, indent=4)
 
-        print("  Plotting BFA histograms…")
+        print("  Plotting BFA histograms...")
         p3b.SummaryCollection.plot_bfa_results(
             bfa_results,
             add_stats=True,
@@ -256,7 +300,7 @@ def export_bfa(
         plt.close("all")
 
         try:
-            print("  Plotting chord diagrams…")
+            print("  Plotting chord diagrams...")
             sc_grouped.plot_chord(
                 column=cluster_col,
                 all_states=list(range(n_clusters)),
@@ -265,10 +309,10 @@ def export_bfa(
             )
             plt.close("all")
         except ImportError:
-            print("  Note: pycirclize not installed — chord diagrams skipped.")
+            print("  Note: pycirclize not installed - chord diagrams skipped.")
 
         try:
-            print("  Plotting transition UMAP…")
+            print("  Plotting transition UMAP...")
             sc_grouped.plot_transition_umap(
                 column=cluster_col,
                 all_states=list(range(n_clusters)),
@@ -278,7 +322,7 @@ def export_bfa(
             )
             plt.close("all")
         except ImportError:
-            print("  Note: umap-learn not installed — UMAP skipped.")
+            print("  Note: umap-learn not installed - UMAP skipped.")
 
     except Exception as exc:
         print(f"  Warning: BFA failed: {exc}")
