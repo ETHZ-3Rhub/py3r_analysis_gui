@@ -70,7 +70,7 @@ class PipelineRunner(QThread):
         self._csv_files: dict[str, list[Path]] = {}
         error: str | None = None
         try:
-            self.log.emit(f"Starting {self._arena.NAME}…")
+            self.log.emit(f"Starting {self._arena.NAME}...")
             self._run_arena()
             if not self._cancelled:
                 self.finished.emit(str(self._output_dir))
@@ -91,6 +91,7 @@ class PipelineRunner(QThread):
 
         handles = naming.assign_handles(self._groups)
         handle_iter = iter(handles)
+        group_folders = naming.safe_group_folder_names(list(self._groups.keys()))
 
         tracking_dir = self._output_dir / "tracking"
 
@@ -114,7 +115,8 @@ class PipelineRunner(QThread):
                 self._warn(f"{group_name}: no video files added")
                 continue
 
-            tracking_dir.mkdir(parents=True, exist_ok=True)
+            group_tracking_dir = tracking_dir / group_folders[group_name]
+            group_tracking_dir.mkdir(parents=True, exist_ok=True)
 
             tracked_files: list[Path] = []
             n_videos = len(files)
@@ -123,9 +125,9 @@ class PipelineRunner(QThread):
                     return
 
                 handle, _group, _path = next(handle_iter)
-                output_csv = tracking_dir / f"{handle}.csv"
+                output_csv = group_tracking_dir / f"{handle}.csv"
 
-                self.log.emit(f"  Tracking {video.name} ({j + 1}/{n_videos})…")
+                self.log.emit(f"  Tracking {video.name} ({j + 1}/{n_videos})...")
                 try:
                     proc = arena.TRACKER.track(video, output_csv, **arena.TRACKER_ARGS)
                     self._current_proc = proc
@@ -150,7 +152,7 @@ class PipelineRunner(QThread):
         if self._cancelled:
             return
 
-        self.log.emit("Running analysis pipeline…")
+        self.log.emit("Running analysis pipeline...")
         try:
             self._run_pipeline(manifest, video_paths)
         except Exception as exc:

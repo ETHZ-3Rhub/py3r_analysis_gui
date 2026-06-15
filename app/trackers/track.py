@@ -310,7 +310,7 @@ def track(
             writer.writerow(row)
 
     if progress_cb is None:
-        print(f"Done — {frame_count} frames → {output_csv}")
+        print(f"Done - {frame_count} frames -> {output_csv}")
 
 
 def _ffill_arrays(bboxes: np.ndarray, bbox_conf: np.ndarray, kps: np.ndarray) -> None:

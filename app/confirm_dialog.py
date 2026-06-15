@@ -61,7 +61,7 @@ class _ConfirmDialog(QDialog):
         message: str,
         pixmap: QPixmap | None,
         yes_label: str,
-        no_label: str,
+        no_label: str | None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -74,7 +74,7 @@ class _ConfirmDialog(QDialog):
         message: str,
         pixmap: QPixmap | None,
         yes_label: str,
-        no_label: str,
+        no_label: str | None,
     ) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 20, 20, 16)
@@ -102,17 +102,18 @@ class _ConfirmDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        no_btn = QPushButton(no_label)
-        no_btn.setObjectName("dlgBtn")
-        no_btn.clicked.connect(self.reject)
+        if no_label is not None:
+            no_btn = QPushButton(no_label)
+            no_btn.setObjectName("dlgBtn")
+            no_btn.clicked.connect(self.reject)
+            btn_row.addWidget(no_btn)
+            btn_row.addSpacing(8)
 
         yes_btn = QPushButton(yes_label)
         yes_btn.setObjectName("dlgBtnPrimary")
         yes_btn.setDefault(True)
         yes_btn.clicked.connect(self.accept)
 
-        btn_row.addWidget(no_btn)
-        btn_row.addSpacing(8)
         btn_row.addWidget(yes_btn)
         outer.addLayout(btn_row)
 
@@ -159,3 +160,15 @@ def ask(
     """Show a themed yes/no dialog. Returns True if Yes was clicked."""
     dlg = _ConfirmDialog(parent, title, message, pixmap, yes_label, no_label)
     return dlg.exec() == QDialog.DialogCode.Accepted
+
+
+def info(
+    parent: QWidget | None,
+    title: str,
+    message: str,
+    pixmap: QPixmap | None = None,
+    ok_label: str = "OK",
+) -> None:
+    """Show a themed single-button informational dialog."""
+    dlg = _ConfirmDialog(parent, title, message, pixmap, ok_label, None)
+    dlg.exec()

@@ -113,7 +113,10 @@ def export_animations(
             continue
 
         feat = next(iter(group_fc.values()))
-        video_path = feat.meta.get("video_path")
+        # Features.__init__ doesn't propagate arbitrary tracking meta (only
+        # "usermeta"), but keeps a live ref to the Tracking object — read
+        # video_path through that.
+        video_path = feat.tracking.meta.get("video_path")
 
         out_path = anim_dir / f"{group_name}.mp4"
         print(f"  {group_name} ({'with video' if video_path else 'no video'})…")

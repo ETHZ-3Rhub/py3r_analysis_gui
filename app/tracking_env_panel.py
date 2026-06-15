@@ -11,10 +11,10 @@ import datetime
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
-from app.confirm_dialog import ask
+from app.confirm_dialog import ask, info
 from app.settings_dialog import EnvCheckWorker, parse_env_result
 from app.theme import get_theme as _get_theme
-from app.tracking_env_setup import _ReinstallWorker
+from app.tracking_env_setup import _check_internet, _ReinstallWorker
 
 
 class TrackingEnvPanel(QWidget):
@@ -66,10 +66,15 @@ class TrackingEnvPanel(QWidget):
         observe (e.g. connect to `output`) without owning it."""
         return self._tracking_install_worker
 
-    def start_install(self) -> None:
-        """Start a reinstall if one isn't already running (no-op otherwise)."""
+    def start_install(self) -> bool:
+        """Start a reinstall if one isn't already running (no-op otherwise).
+
+        Returns False if no install is in flight afterwards (e.g. declined
+        by the pre-flight connectivity check) — callers must not show an
+        "installing" UI in that case."""
         if self._tracking_install_worker is None:
             self._start_tracking_install()
+        return self._tracking_install_worker is not None
 
     def shutdown(self) -> None:
         """Stop and join any in-flight worker threads. Qt aborts (SIGABRT) if
@@ -104,7 +109,7 @@ class TrackingEnvPanel(QWidget):
 
         Returns False only if the user declined — callers should treat that
         as "don't proceed with selecting this source"."""
-        if self._env_status not in ("not_installed", "error"):
+        if self._env_status != "not_installed" and not self._env_status.startswith("error"):
             return True
         if self._tracking_install_worker is not None:
             return True
@@ -164,6 +169,15 @@ class TrackingEnvPanel(QWidget):
         self.status_changed.emit()
 
     def _start_tracking_install(self) -> None:
+        if not _check_internet():
+            info(
+                self.window(),
+                "No internet connection",
+                "Tracking setup needs to download dependencies, but no internet "
+                "connection was detected.\n\nConnect and try again.",
+            )
+            return
+
         self._install_start_time = datetime.datetime.now()
         self._install_timer = QTimer(self)
         self._install_timer.timeout.connect(self._update_install_elapsed)
@@ -184,12 +198,11 @@ class TrackingEnvPanel(QWidget):
         self._set_env_display(
             _T.muted,
             f"{verb}… {m}m {s:02d}s",
-            "Setting up the tracking environment for your hardware. This can "
-            "take several minutes.",
+            "Setting up the tracking environment for your hardware. This can take several minutes.",
         )
         self.status_changed.emit()
 
-    def _on_tracking_install_done(self, success: bool) -> None:
+    def _on_tracking_install_done(self, success: bool, diagnosis: str) -> None:
         self._tracking_install_worker.deleteLater()
         self._tracking_install_worker = None
         if success:
@@ -197,4 +210,12 @@ class TrackingEnvPanel(QWidget):
             self._update_install_elapsed()
             self.kick_env_check()
         else:
-            self._apply_env_status("error")
+            self._apply_env_status(f"error:{diagnosis}" if diagnosis else "error")
+            reason = diagnosis or "see the log for details."
+            info(
+                self.window(),
+                "Tracking setup failed",
+                f"Setting up the tracking environment failed:\n\n{reason}\n\n"
+                "You can try again from Settings, or use 'Copy diagnostics' "
+                "there to share details.",
+            )

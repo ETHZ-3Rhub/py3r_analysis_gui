@@ -27,6 +27,7 @@ def popen_grouped(cmd: list[str], **kwargs) -> subprocess.Popen:
         )
     else:
         kwargs.setdefault("start_new_session", True)
+
     return subprocess.Popen(cmd, **kwargs)
 
 

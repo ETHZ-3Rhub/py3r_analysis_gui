@@ -46,7 +46,7 @@ jobs:
           path: _pose_models
 
       - name: Install py3r_behaviour (pinned)
-        run: pip install "py3r-behaviour @ git+https://github.com/ETHZ-INS/py3r_behaviour@${{ steps.refs.outputs.py3r_behaviour }}"
+        run: pip install "py3r-behaviour[viz] @ git+https://github.com/ETHZ-INS/py3r_behaviour@${{ steps.refs.outputs.py3r_behaviour }}"
 
       - name: Install project
         run: |

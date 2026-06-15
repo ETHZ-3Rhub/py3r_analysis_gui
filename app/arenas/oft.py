@@ -10,12 +10,12 @@ TRACKER_ARGS = {
             "model": "environment/environment_main",
             "instances": [{"type": "oft", "max": 1}],
             "stride": (30, "ffill"),
-            "batch": 16,
+            "batch": 32,
         },
         {
             "model": "mouse/mouse_top_main",
             "instances": [{"type": "mouse_top", "max": 1}],
-            "batch": 128,
+            "batch": 32,
         },
     ],
 }

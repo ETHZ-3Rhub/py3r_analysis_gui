@@ -4,7 +4,7 @@
 ::
 :: Requirements:
 ::   pip install pyinstaller
-::   pip install -e .   (and py3r-behaviour installed)
+::   pip install -e .   (and py3r-behaviour[viz] installed)
 ::
 :: Output: dist\py3r_analysis\py3r_analysis.exe
 
