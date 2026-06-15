@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
 import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QFrame,
@@ -23,7 +25,7 @@ from PySide6.QtWidgets import (
 from app.proc_utils import NO_WINDOW
 from app.theme import all_themes, update_theme
 from app.theme import get_theme as _get_theme
-from app.tracking_env_setup import _ReinstallWorker
+from app.tracking_env_setup import _INSTALL_LOG_NAME, _ReinstallWorker, _uv_exe, _uv_version
 
 _T = _get_theme()  # cached at import for inline widget-creation calls
 
@@ -46,6 +48,34 @@ def _find_tracking_python() -> Path | None:
     exe = "python.exe" if platform.system() == "Windows" else "python"
     candidate = tracking_env_dir() / subdir / exe
     return candidate if candidate.exists() else None
+
+
+def _gather_diagnostics() -> str:
+    """Bundle the install log + basic system info for support."""
+    from app.trackers.yolo_tracker import tracking_env_dir
+
+    lines = [
+        f"py3r Analysis  v{get_version()}",
+        f"OS: {platform.platform()}",
+    ]
+    try:
+        usage = shutil.disk_usage(Path.home())
+        lines.append(f"Free disk: {usage.free / (1024**3):.1f} GB")
+    except OSError:
+        pass
+    try:
+        lines.append(f"uv: {_uv_version(_uv_exe())}")
+    except SystemExit:
+        lines.append("uv: not found")
+
+    log_path = tracking_env_dir() / _INSTALL_LOG_NAME
+    lines.append("")
+    if log_path.exists():
+        lines.append(f"--- {log_path} ---")
+        lines.append(log_path.read_text(encoding="utf-8", errors="replace"))
+    else:
+        lines.append("(no install log found)")
+    return "\n".join(lines)
 
 
 def parse_env_result(result: str) -> tuple[str, str, str]:
@@ -72,6 +102,15 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
             "Not installed",
             "The tracking environment has not been set up yet.\n"
             "Open Settings and click (Re)install tracking environment.",
+        )
+    if result.startswith("error:"):
+        reason = result[len("error:") :] or "see the install log for details."
+        return (
+            t.error,
+            "Setup failed",
+            f"Tracking setup failed: {reason}\n"
+            "Open Settings and use 'Copy diagnostics' to share details, or "
+            "try (Re)install tracking environment again.",
         )
     return (t.error, "Status unknown", "Could not determine tracking environment status.")
 
@@ -166,6 +205,11 @@ class SettingsDialog(QDialog):
         self._reinstall_btn.clicked.connect(self._start_reinstall)
         layout.addWidget(self._reinstall_btn)
 
+        self._diag_btn = QPushButton("Copy diagnostics")
+        self._diag_btn.setObjectName("secondaryButton")
+        self._diag_btn.clicked.connect(self._copy_diagnostics)
+        layout.addWidget(self._diag_btn)
+
         self._log = QTextEdit()
         self._log.setReadOnly(True)
         self._log.setObjectName("logBox")
@@ -223,10 +267,15 @@ class SettingsDialog(QDialog):
     # ── Reinstall ─────────────────────────────────────────────────────────────
 
     def _start_reinstall(self) -> None:
+        if not self._env_panel.start_install():
+            return  # declined, e.g. by the pre-flight connectivity check
         self._log.clear()
         self._enter_installing_ui()
-        self._env_panel.start_install()
-        self._connect_to_install_worker()
+
+    def _copy_diagnostics(self) -> None:
+        QApplication.clipboard().setText(_gather_diagnostics())
+        self._diag_btn.setText("Copied!")
+        QTimer.singleShot(1500, lambda: self._diag_btn.setText("Copy diagnostics"))
 
     def _enter_installing_ui(self) -> None:
         self._reinstalling = True

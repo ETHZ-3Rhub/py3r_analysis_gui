@@ -91,6 +91,7 @@ class PipelineRunner(QThread):
 
         handles = naming.assign_handles(self._groups)
         handle_iter = iter(handles)
+        group_folders = naming.safe_group_folder_names(list(self._groups.keys()))
 
         tracking_dir = self._output_dir / "tracking"
 
@@ -114,7 +115,8 @@ class PipelineRunner(QThread):
                 self._warn(f"{group_name}: no video files added")
                 continue
 
-            tracking_dir.mkdir(parents=True, exist_ok=True)
+            group_tracking_dir = tracking_dir / group_folders[group_name]
+            group_tracking_dir.mkdir(parents=True, exist_ok=True)
 
             tracked_files: list[Path] = []
             n_videos = len(files)
@@ -123,7 +125,7 @@ class PipelineRunner(QThread):
                     return
 
                 handle, _group, _path = next(handle_iter)
-                output_csv = tracking_dir / f"{handle}.csv"
+                output_csv = group_tracking_dir / f"{handle}.csv"
 
                 self.log.emit(f"  Tracking {video.name} ({j + 1}/{n_videos})...")
                 try:

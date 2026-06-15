@@ -57,6 +57,8 @@ a = Analysis(
         *statannotations_datas,
         ("assets/icon.ico", "assets"),
         ("assets/icon.png", "assets"),
+        # Pinned tracking-stack versions, read by app.tracking_env_setup.
+        ("versions.yaml", "."),
         # track.py is run as a script in tracking_env's interpreter, not
         # imported — PyInstaller won't pick it up automatically.
         ("app/trackers/track.py", "app/trackers"),
