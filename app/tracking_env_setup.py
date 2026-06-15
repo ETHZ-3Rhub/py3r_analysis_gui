@@ -123,28 +123,30 @@ except Exception as e:
 """
 
 
-def _run(log, *cmd: str) -> str:
-    """Run *cmd*, tee its combined stdout/stderr to *log* and stdout.
+def _run(log_lines: list[str], *cmd: str) -> str:
+    """Run *cmd*, appending its combined stdout/stderr to *log_lines* and
+    printing it.
 
     Returns the combined output. Raises `subprocess.CalledProcessError`
     (with `.output` set) on non-zero exit.
     """
     header = f"\n$ {' '.join(cmd)}"
     print(header)
-    log.write(header + "\n")
+    log_lines.append(header + "\n")
     r = subprocess.run(list(cmd), capture_output=True, text=True, creationflags=NO_WINDOW)
     combined = r.stdout + r.stderr
     print(combined, end="")
-    log.write(combined)
-    log.flush()
+    log_lines.append(combined)
     if r.returncode != 0:
         raise subprocess.CalledProcessError(r.returncode, cmd, output=combined)
     return combined
 
 
-def _install_torch(log, uv: str, python: str, versions: dict[str, str], backend: str) -> str:
+def _install_torch(
+    log_lines: list[str], uv: str, python: str, versions: dict[str, str], backend: str
+) -> str:
     return _run(
-        log,
+        log_lines,
         uv,
         "pip",
         "install",
@@ -172,24 +174,25 @@ def _verify_cuda(python: str) -> tuple[bool, str]:
     return False, (r.stdout + r.stderr).strip() or "unknown error"
 
 
+_INSTALL_LOG_NAME = "install.log"
+
+
 def setup(tracking_env: Path) -> int:
     """Create/refresh *tracking_env* in place. Returns a process exit code.
 
-    Writes a full install log to `tracking_env_install.log` beside
-    *tracking_env*. On failure, prints a `DIAGNOSIS: <message>` line with a
+    Writes a full install log to `tracking_env/install.log` (held in memory
+    and written at the end, since `uv venv --clear` wipes the directory
+    first). On failure, prints a `DIAGNOSIS: <message>` line with a
     plain-English summary for `_ReinstallWorker` to surface.
     """
     uv = _uv_exe()
-    log_path = tracking_env.parent / "tracking_env_install.log"
-    tracking_env.parent.mkdir(parents=True, exist_ok=True)
+    log_lines: list[str] = []
 
-    with open(log_path, "w", encoding="utf-8") as log:
+    def out(msg: str = "") -> None:
+        print(msg)
+        log_lines.append(msg + "\n")
 
-        def out(msg: str = "") -> None:
-            print(msg)
-            log.write(msg + "\n")
-            log.flush()
-
+    try:
         out(f"Tracking env install log - {datetime.datetime.now().isoformat()}")
         out(f"Tracking env:  {tracking_env}")
         out(f"uv:            {_uv_version(uv)}")
@@ -208,11 +211,11 @@ def setup(tracking_env: Path) -> int:
         out(f"lap:           {versions['lap']}")
 
         try:
-            _run(log, uv, "venv", str(tracking_env), "--python", "3.12", "--clear")
+            _run(log_lines, uv, "venv", str(tracking_env), "--python", "3.12", "--clear")
             python = str(_python_exe(tracking_env))
-            _install_torch(log, uv, python, versions, "auto")
+            _install_torch(log_lines, uv, python, versions, "auto")
             _run(
-                log,
+                log_lines,
                 uv,
                 "pip",
                 "install",
@@ -224,7 +227,7 @@ def setup(tracking_env: Path) -> int:
         except subprocess.CalledProcessError as exc:
             out(f"\nInstall command failed (exit {exc.returncode}).")
             diag = _classify_error(exc.output or "") or (
-                "Setup failed - see tracking_env_install.log for details."
+                f"Setup failed - see tracking_env/{_INSTALL_LOG_NAME} for details."
             )
             out(f"DIAGNOSIS: {diag}")
             return 1
@@ -237,11 +240,11 @@ def setup(tracking_env: Path) -> int:
             out(f"GPU verification failed: {msg}")
             out("Falling back to CPU - reinstalling PyTorch...")
             try:
-                _install_torch(log, uv, python, versions, "cpu")
+                _install_torch(log_lines, uv, python, versions, "cpu")
             except subprocess.CalledProcessError as exc:
                 out(f"\nInstall command failed (exit {exc.returncode}).")
                 diag = _classify_error(exc.output or "") or (
-                    "Setup failed - see tracking_env_install.log for details."
+                    f"Setup failed - see tracking_env/{_INSTALL_LOG_NAME} for details."
                 )
                 out(f"DIAGNOSIS: {diag}")
                 return 1
@@ -250,6 +253,11 @@ def setup(tracking_env: Path) -> int:
             out("\nReady. Running on CPU (no GPU detected).")
 
         return 0
+    finally:
+        # tracking_env may not exist if `uv venv` itself failed (or we never
+        # got that far, e.g. offline) - make sure it does before writing.
+        tracking_env.mkdir(parents=True, exist_ok=True)
+        (tracking_env / _INSTALL_LOG_NAME).write_text("".join(log_lines), encoding="utf-8")
 
 
 class _ReinstallWorker(QThread):

@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from app.proc_utils import NO_WINDOW
 from app.theme import all_themes, update_theme
 from app.theme import get_theme as _get_theme
-from app.tracking_env_setup import _ReinstallWorker, _uv_exe, _uv_version
+from app.tracking_env_setup import _INSTALL_LOG_NAME, _ReinstallWorker, _uv_exe, _uv_version
 
 _T = _get_theme()  # cached at import for inline widget-creation calls
 
@@ -68,7 +68,7 @@ def _gather_diagnostics() -> str:
     except SystemExit:
         lines.append("uv: not found")
 
-    log_path = tracking_env_dir().parent / "tracking_env_install.log"
+    log_path = tracking_env_dir() / _INSTALL_LOG_NAME
     lines.append("")
     if log_path.exists():
         lines.append(f"--- {log_path} ---")
