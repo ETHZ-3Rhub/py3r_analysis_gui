@@ -63,6 +63,43 @@ def _sanitize(name: str) -> str:
     return cleaned or "x"
 
 
+_RESERVED_WINDOWS_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def safe_group_folder_names(group_names: list[str]) -> dict[str, str]:
+    """Map each group name to a filesystem-safe, collision-free folder name.
+
+    Applies the same charset collapse as ``_sanitize``, additionally strips
+    residual trailing ``.``/``_`` (Windows trims trailing dots/spaces from
+    folder names) and guards against Windows-reserved device names, then
+    breaks any collisions between distinct group names with a numeric suffix.
+    """
+    folders = []
+    for name in group_names:
+        folder = _sanitize(name).rstrip("._") or "x"
+        if folder.upper() in _RESERVED_WINDOWS_NAMES:
+            folder += "_"
+        folders.append(folder)
+
+    counts = Counter(folders)
+    seen: dict[str, int] = {}
+    result: dict[str, str] = {}
+    for name, folder in zip(group_names, folders, strict=True):
+        if counts[folder] > 1:
+            seen[folder] = seen.get(folder, 0) + 1
+            folder = f"{folder}_{seen[folder]}"
+        result[name] = folder
+
+    return result
+
+
 def assign_handles(groups: dict[str, list[Path]]) -> list[tuple[str, str, Path]]:
     """Map every file in *groups* to a globally-unique, filename-safe handle.
 
