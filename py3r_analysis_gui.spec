@@ -12,11 +12,18 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 # __init__.py exports (e.g. TrackingCollection) resolve correctly when frozen.
 py3r_datas, py3r_binaries, py3r_hiddenimports = collect_all("py3r.behaviour")
 
+# py3r_behaviour's [viz] extras - separate top-level packages, not picked up
+# by collect_all("py3r.behaviour") above.
+umap_datas, umap_binaries, umap_hiddenimports = collect_all("umap")
+pycirclize_datas, pycirclize_binaries, pycirclize_hiddenimports = collect_all("pycirclize")
+
 # Pull in all arena and pipeline modules so the auto-discovery works at runtime
 hidden_imports = (
     collect_submodules("app.arenas")
     + collect_submodules("app.pipelines")
     + py3r_hiddenimports
+    + umap_hiddenimports
+    + pycirclize_hiddenimports
     + ["py3r"]
     # Add other heavyweight deps that PyInstaller may miss:
     + ["pyarrow", "sklearn", "shapely", "cv2"]
@@ -30,10 +37,14 @@ a = Analysis(
         # target machine, which won't have uv installed.
         ("vendor/uv.exe", "vendor"),
         *py3r_binaries,
+        *umap_binaries,
+        *pycirclize_binaries,
     ],
     datas=[
         # Bundle any data files from py3r_behaviour (e.g. bundled test CSVs)
         *py3r_datas,
+        *umap_datas,
+        *pycirclize_datas,
         ("assets/icon.ico", "assets"),
         ("assets/icon.png", "assets"),
         # track.py is run as a script in tracking_env's interpreter, not
@@ -47,7 +58,6 @@ a = Analysis(
     excludes=[
         # Exclude heavy deps we don't use in the GUI
         "pytest", "nbmake", "nbformat", "mkdocs",
-        "umap", "pycirclize",
     ],
     noarchive=False,
 )

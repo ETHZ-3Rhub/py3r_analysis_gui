@@ -27,6 +27,16 @@ def popen_grouped(cmd: list[str], **kwargs) -> subprocess.Popen:
         )
     else:
         kwargs.setdefault("start_new_session", True)
+
+    # Force UTF-8 mode in the child (if it's Python): on Windows, stdout would
+    # otherwise be encoded in the console codepage (cp1252/cp850), which
+    # doesn't round-trip through our utf-8 decode of captured output and
+    # shows up as U+FFFD replacement glyphs in the log panel.
+    env = kwargs.get("env")
+    env = dict(env) if env is not None else dict(os.environ)
+    env.setdefault("PYTHONUTF8", "1")
+    kwargs["env"] = env
+
     return subprocess.Popen(cmd, **kwargs)
 
 
