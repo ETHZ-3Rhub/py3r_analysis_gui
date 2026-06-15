@@ -70,7 +70,7 @@ class PipelineRunner(QThread):
         self._csv_files: dict[str, list[Path]] = {}
         error: str | None = None
         try:
-            self.log.emit(f"Starting {self._arena.NAME}…")
+            self.log.emit(f"Starting {self._arena.NAME}...")
             self._run_arena()
             if not self._cancelled:
                 self.finished.emit(str(self._output_dir))
@@ -125,7 +125,7 @@ class PipelineRunner(QThread):
                 handle, _group, _path = next(handle_iter)
                 output_csv = tracking_dir / f"{handle}.csv"
 
-                self.log.emit(f"  Tracking {video.name} ({j + 1}/{n_videos})…")
+                self.log.emit(f"  Tracking {video.name} ({j + 1}/{n_videos})...")
                 try:
                     proc = arena.TRACKER.track(video, output_csv, **arena.TRACKER_ARGS)
                     self._current_proc = proc
@@ -150,7 +150,7 @@ class PipelineRunner(QThread):
         if self._cancelled:
             return
 
-        self.log.emit("Running analysis pipeline…")
+        self.log.emit("Running analysis pipeline...")
         try:
             self._run_pipeline(manifest, video_paths)
         except Exception as exc:
