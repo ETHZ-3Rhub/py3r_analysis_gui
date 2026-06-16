@@ -1,4 +1,4 @@
-"""Open Field Test — py3r_behaviour analysis pipeline.
+"""Elevated Plus Maze — py3r_behaviour analysis pipeline.
 
 Receives per-group folders of YOLO3R tracking CSVs and runs:
     load → preprocess → QC plots → features → clustering → summary → export
@@ -18,15 +18,42 @@ from app.pipelines import _shared
 
 # ── Constants (proprietary hardware — do not expose to GUI) ───────────────────
 _FPS = 30
-_ARENA_SIZE_M = 0.64
+_ARENA_DIAGONAL_M = 0.665
 _N_CLUSTERS = 10
 _CLUSTER_COL = f"kmeans_{_N_CLUSTERS}"
 _GROUP_TAG = "group"
-
-# Keypoint names as output by the OFT YOLO3R model (after strip_column_names)
-_CORNERS = ["tl", "tr", "br", "bl"]
-_CORNER_LINES = [("tl", "tr"), ("tr", "br"), ("br", "bl"), ("bl", "tl")]
 _BODY_CENTRE = "bodycentre"
+
+# Maze geometry — corner points per arm (ordered for polygon winding)
+_OPEN_ARMS = ["top", "bottom"]
+_CLOSED_ARMS = ["left", "right"]
+_ARM_CORNERS = {
+    "top": ["ctl", "ctr", "tr", "tl"],
+    "bottom": ["cbl", "cbr", "br", "bl"],
+    "left": ["lt", "ctl", "cbl", "lb"],
+    "right": ["ctr", "rt", "rb", "cbr"],
+}
+_CENTRE_CORNERS = ["ctl", "ctr", "cbr", "cbl"]
+
+# Body points used for the signed distance-to-arm-boundary BFA features
+_BFA_BODY_POINTS = ["nose", "neck", _BODY_CENTRE, "tailbase"]
+
+# 12 unique maze corner points + outline edges, for the QC trajectory plot
+_CORNERS = ["tl", "tr", "ctl", "ctr", "cbl", "cbr", "bl", "br", "lt", "lb", "rt", "rb"]
+_CORNER_LINES = [
+    ("tl", "tr"),
+    ("tr", "ctr"),
+    ("ctr", "rt"),
+    ("rt", "rb"),
+    ("rb", "cbr"),
+    ("cbr", "br"),
+    ("br", "bl"),
+    ("bl", "cbl"),
+    ("cbl", "lb"),
+    ("lb", "lt"),
+    ("lt", "ctl"),
+    ("ctl", "tl"),
+]
 
 _ANIM_MOUSE_POINTS = [
     "nose",
@@ -68,13 +95,12 @@ _ANIM_STYLE = {
                 "nan_color": (80, 80, 80),
             },
         },
-        "tl": {"color": (0, 255, 0), "radius": 5},
-        "tr": {"color": (0, 255, 0), "radius": 5},
-        "br": {"color": (0, 255, 0), "radius": 5},
-        "bl": {"color": (0, 255, 0), "radius": 5},
     },
     "boundaries": {
-        "oft": {"edge_color": (0, 200, 0), "edge_width": 1},
+        "top_arm": {"edge_color": (0, 255, 0), "edge_width": 1},
+        "bottom_arm": {"edge_color": (0, 255, 0), "edge_width": 1},
+        "left_arm": {"edge_color": (255, 0, 0), "edge_width": 1},
+        "right_arm": {"edge_color": (255, 0, 0), "edge_width": 1},
         "centre": {
             "edge_color": (0, 150, 255),
             "edge_width": 1,
@@ -84,10 +110,16 @@ _ANIM_STYLE = {
     },
 }
 
-# Zone scale factors
-_CENTRE_SCALE = 0.5
-_PERIPHERY_SCALE = 0.8
-_CORNER_SCALE = 0.2
+_CLASSICAL_METRICS = [
+    "total_distance_bodycentre",
+    "time_true_in_open",
+    "time_true_in_closed",
+    "time_true_in_centre",
+    "distance_moved_in_open",
+    "distance_moved_in_closed",
+    "count_onset_in_open",
+    "latency_first_open_entry",
+]
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -99,7 +131,7 @@ def run(
     numbins: int | None = None,
     n_clusters: int = _N_CLUSTERS,
 ) -> None:
-    """Full OFT pipeline across all groups.
+    """Full EPM pipeline across all groups.
 
     Parameters
     ----------
@@ -144,7 +176,7 @@ def run(
     print("Preprocessing...")
     _shared.preprocess(tc_all)
     tc_all.each.rescale_by_known_distance(
-        point1="tl", point2="br", distance_in_metres=_ARENA_SIZE_M
+        point1="tl", point2="br", distance_in_metres=_ARENA_DIAGONAL_M
     )
 
     # ── QC trajectory plots ───────────────────────────────────────────────────
@@ -173,12 +205,13 @@ def run(
         fc,
         group_names,
         output_dir,
-        points=_ANIM_MOUSE_POINTS + _CORNERS,
-        lines=_ANIM_BODY_LINES + _CORNER_LINES,
-        boundaries=["oft", "centre"],
+        points=_ANIM_MOUSE_POINTS,
+        lines=_ANIM_BODY_LINES,
+        boundaries=["top_arm", "bottom_arm", "left_arm", "right_arm", "centre"],
         features={
             "Speed (m/s)": f"speed_of_{_BODY_CENTRE}_in_xy",
-            "In centre": "within_boundary_static_bodycentre_in_centre",
+            "In open": "in_open",
+            "In closed": "in_closed",
             "Cluster": _CLUSTER_COL,
         },
         style=_ANIM_STYLE,
@@ -196,14 +229,14 @@ def run(
     if numbins:
         print(f"Computing {numbins}-bin summaries...")
         _shared.export_binned_summaries(
-            sc, numbins, summaries_dir, "OFT_results", _compute_summaries
+            sc, numbins, summaries_dir, "EPM_results", _compute_summaries
         )
 
     sc_grouped = sc.groupby(tags=[_GROUP_TAG])
 
     # ── Export ────────────────────────────────────────────────────────────────
     print("Exporting tables...")
-    _shared.export_results_table(sc, summaries_dir, "OFT_results.csv")
+    _shared.export_results_table(sc, summaries_dir, "EPM_results.csv")
 
     print("Exporting figures...")
     _shared.export_boxplots(
@@ -211,11 +244,7 @@ def run(
         group_names,
         comparisons,
         figures_dir,
-        metrics=[
-            "total_distance_bodycentre",
-            "time_in_centre",
-            "distance_in_centre",
-        ],
+        metrics=_CLASSICAL_METRICS,
         group_tag=_GROUP_TAG,
     )
 
@@ -229,43 +258,37 @@ def run(
 def _compute_features(fc: p3b.FeaturesCollection) -> None:
     print("  Spatial boundaries...")
 
-    fc.each.define_static_boundary(_CORNERS, name="oft")
-    fc.each.define_static_boundary(
-        _CORNERS, scale_dim1=_CENTRE_SCALE, scale_dim2=_CENTRE_SCALE, name="centre"
-    )
-    fc.each.define_static_boundary(
-        _CORNERS, scale_dim1=_PERIPHERY_SCALE, scale_dim2=_PERIPHERY_SCALE, name="not_periphery"
-    )
-    for c in _CORNERS:
-        fc.each.define_static_boundary(
-            _CORNERS,
-            scale_dim1=_CORNER_SCALE,
-            scale_dim2=_CORNER_SCALE,
-            name=f"{c}_corner",
-            anchor=c,
-        )
+    for arm, corners in _ARM_CORNERS.items():
+        fc.each.define_static_boundary(corners, name=f"{arm}_arm")
+    fc.each.define_static_boundary(_CENTRE_CORNERS, name="centre")
 
+    in_open = fc.each.within_boundary(
+        _BODY_CENTRE, f"{_OPEN_ARMS[0]}_arm"
+    ) | fc.each.within_boundary(_BODY_CENTRE, f"{_OPEN_ARMS[1]}_arm")
+    in_closed = fc.each.within_boundary(
+        _BODY_CENTRE, f"{_CLOSED_ARMS[0]}_arm"
+    ) | fc.each.within_boundary(_BODY_CENTRE, f"{_CLOSED_ARMS[1]}_arm")
     in_centre = fc.each.within_boundary(_BODY_CENTRE, "centre")
-    in_centre.store()
 
-    (
-        fc.each.within_boundary(_BODY_CENTRE, "oft")
-        & ~fc.each.within_boundary(_BODY_CENTRE, "not_periphery")
-    ).store("in_periphery")
+    in_open.store("in_open")
+    in_closed.store("in_closed")
+    in_centre.store("in_centre")
 
-    in_corners = {c: fc.each.within_boundary(_BODY_CENTRE, f"{c}_corner") for c in _CORNERS}
-    (in_corners["tl"] | in_corners["tr"] | in_corners["bl"] | in_corners["br"]).store("in_corner")
-    fc.each.compose_state_from_booleans(in_corners).store("corner_state")
+    fc.each.compose_state_from_booleans(
+        {"centre": in_centre, "open": in_open, "closed": in_closed}
+    ).store("zone_state")
 
     dist_change = fc.each.distance_change(_BODY_CENTRE)
-    (in_centre.astype("Int64") * dist_change).store("dist_change_bodycentre_in_centre")
+    (in_open.astype("Int64") * dist_change).store("dist_change_bodycentre_in_open")
+    (in_closed.astype("Int64") * dist_change).store("dist_change_bodycentre_in_closed")
 
     print("  Kinematic features...")
 
     _shared.compute_body_kinematics(fc)
 
-    for pt in ["nose", "neck", _BODY_CENTRE, "tailbase"]:
-        fc.each.distance_to_boundary(pt, "oft").store()
+    for arm in ["top", "bottom", "left", "right"]:
+        for pt in _BFA_BODY_POINTS:
+            fc.each.distance_to_boundary(pt, f"{arm}_arm", signed=True).store()
 
 
 # ── Clustering ────────────────────────────────────────────────────────────────
@@ -290,9 +313,15 @@ def _cluster(fc: p3b.FeaturesCollection, n_clusters: int) -> None:
 # ── Summary computation ───────────────────────────────────────────────────────
 def _compute_summaries(sc: p3b.SummaryCollection) -> None:
     sc.each.total_distance(_BODY_CENTRE).store()
-    sc.each.time_true("within_boundary_static_bodycentre_in_centre").store("time_in_centre")
-    sc.each.sum_column("dist_change_bodycentre_in_centre").store("distance_in_centre")
-    sc.each.by_state("corner_state", all_states=_CORNERS).mean_column(
+    sc.each.time_true("in_open").store("time_true_in_open")
+    sc.each.time_true("in_closed").store("time_true_in_closed")
+    sc.each.time_true("in_centre").store("time_true_in_centre")
+    sc.each.sum_column("dist_change_bodycentre_in_open").store("distance_moved_in_open")
+    sc.each.sum_column("dist_change_bodycentre_in_closed").store("distance_moved_in_closed")
+    sc.each.count_onset("in_open").store("count_onset_in_open")
+    sc.each.calculate_latency_nth_onset("in_open").store("latency_first_open_entry")
+    sc.each.mean_column(f"speed_of_{_BODY_CENTRE}_in_xy").store("mean_speed")
+    sc.each.by_state("zone_state", all_states=["centre", "open", "closed", "none"]).mean_column(
         f"speed_of_{_BODY_CENTRE}_in_xy"
-    ).store("mean_speed_by_corner")
+    ).store("mean_speed_by_zone")
     sc.each.time_in_state(_CLUSTER_COL).store("time_in_cluster")

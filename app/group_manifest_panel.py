@@ -22,12 +22,13 @@ group — kept out of the main view so the always-visible list stays simple.
 
 from __future__ import annotations
 
+import csv
 import re
 from pathlib import Path
 
-from PyQt6.QtCore import QModelIndex, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QMouseEvent, QPalette
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QModelIndex, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QMouseEvent, QPalette
+from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QDialog,
@@ -50,6 +51,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.confirm_dialog import ask, grumpy_teacher, warning_face
+from app.theme import get_theme as _get_theme
+
 # --- REVIEWED 2026-06-08: kept deliberately, not oversights -----------------
 # `_ElideLeftDelegate`, `_PathSortItem` and `_PlainTextSortItem` below are the
 # most "custom Qt internals"-heavy code in this file. Considered ripping them
@@ -69,7 +73,7 @@ class _ClickableLabel(QLabel):
     group's name opens it for renaming immediately (there's no row-selection
     state to protect against accidental clicks anymore)."""
 
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
         self.clicked.emit()
@@ -148,11 +152,6 @@ class _PlainTextSortItem(QTableWidgetItem):
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
 CSV_EXTS = {".csv"}
 
-_COL_TEXT = "#cdd6f4"
-_COL_MUTED = "#6c7086"
-_COL_ERROR = "#f38ba8"
-_COL_WARN = "#fab387"
-_COL_SUCCESS = "#a6e3a1"
 
 _BADGE_WIDTH = 44
 _REMOVE_BTN_WIDTH = 28
@@ -171,6 +170,24 @@ _FOLDER_TEXT_COLOURS = [
     "#74c7ec",  # sapphire
     "#a6adc8",  # overlay (dimmer, 8th+ folders)
 ]
+
+
+# Columns present in every YOLO3R tracking CSV produced by a pixel-rescaled
+# (i.e. compatible) version of this pipeline — used to filter out unrelated
+# CSVs (shopping lists, metadata exports, ...) accidentally added in "skip
+# tracking" mode. max_dim.x/y specifically guards against older, non-rescaled
+# YOLO3R-shaped CSVs that would otherwise produce an aspect-ratio error.
+_YOLO3R_HEADER_MARKERS = {"frame_index", "max_dim.x", "max_dim.y"}
+
+
+def _looks_like_yolo3r_csv(path: Path) -> bool:
+    """Cheap structural check on a CSV's header row only."""
+    try:
+        with path.open(newline="", encoding="utf-8", errors="ignore") as f:
+            header = next(csv.reader(f), None)
+    except OSError:
+        return False
+    return header is not None and _YOLO3R_HEADER_MARKERS.issubset(header)
 
 
 def _natural_key(s: str) -> list[int | str]:
@@ -286,6 +303,7 @@ class _ManifestDialog(QDialog):
             # Right-aligned so the elided ("…/closest/dir/") tail consistently
             # hugs the same edge the eliding cuts toward.
             path_item = _PathSortItem(parent_text, sort_key=full)
+            path_item.setData(Qt.ItemDataRole.UserRole, full)
             path_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             path_item.setToolTip(str(path.parent))
             path_item.setForeground(bg)
@@ -304,12 +322,12 @@ class _ManifestDialog(QDialog):
             self._refresh_table()
 
     def _remove_selected(self) -> None:
-        rows = sorted({idx.row() for idx in self._table.selectedIndexes()}, reverse=True)
+        rows = {idx.row() for idx in self._table.selectedIndexes()}
         if not rows:
             return
+        to_remove = {Path(self._table.item(row, 0).data(Qt.ItemDataRole.UserRole)) for row in rows}
         manifest = self._panel._manifests[self._group_name]
-        for row in rows:
-            del manifest[row]
+        self._panel._manifests[self._group_name] = [p for p in manifest if p not in to_remove]
         self._refresh_table()
         self._panel._on_manifest_changed(self._group_name)
 
@@ -317,10 +335,10 @@ class _ManifestDialog(QDialog):
 class GroupManifestPanel(QWidget):
     """Define named groups, each holding an explicit list of file paths."""
 
-    group_added = pyqtSignal(str)
-    group_removed = pyqtSignal(str)
-    group_renamed = pyqtSignal(str, str)  # old_name, new_name
-    files_changed = pyqtSignal()  # a group's manifest changed — refresh counts/badges
+    group_added = Signal(str)
+    group_removed = Signal(str)
+    group_renamed = Signal(str, str)  # old_name, new_name
+    files_changed = Signal()  # a group's manifest changed — refresh counts/badges
 
     def __init__(self) -> None:
         super().__init__()
@@ -340,6 +358,23 @@ class GroupManifestPanel(QWidget):
         drives both the file picker's extension filter and the badge label."""
         self._file_exts = exts
         self._refresh_all_badges()
+
+    def _filter_valid_csvs(self, paths: list[Path]) -> tuple[list[Path], int]:
+        """In CSV ("skip tracking") mode, drop files that don't look like
+        YOLO3R tracking output. Returns (valid_paths, n_skipped)."""
+        if self._file_exts != CSV_EXTS:
+            return paths, 0
+        valid = [p for p in paths if _looks_like_yolo3r_csv(p)]
+        return valid, len(paths) - len(valid)
+
+    def _warn_skipped_csvs(self, n_skipped: int) -> None:
+        noun = "file" if n_skipped == 1 else "files"
+        QMessageBox.information(
+            self,
+            "Some files skipped",
+            f"{n_skipped} {noun} don't look like YOLO3R tracking output "
+            "(unexpected column headers) and were skipped.",
+        )
 
     def clear_all_files(self) -> None:
         """Empty every group's file list, keeping the group names/structure intact."""
@@ -415,15 +450,29 @@ class GroupManifestPanel(QWidget):
             paths = []
             has_subdirs = False
 
+        paths, n_skipped = self._filter_valid_csvs(paths)
+
         if not paths:
-            QMessageBox.information(
-                self,
-                "No matching files",
-                f'"{folder_path.name}" contains no {_ext_label(self._file_exts)} files '
-                "(subfolders are not scanned).\n"
-                "Pick a different folder, or add files manually instead.",
-            )
+            if n_skipped:
+                QMessageBox.information(
+                    self,
+                    "No matching files",
+                    f'"{folder_path.name}" contains {n_skipped} CSV file(s), but none look '
+                    "like YOLO3R tracking output (unexpected column headers). "
+                    "Pick a different folder, or add files manually instead.",
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "No matching files",
+                    f'"{folder_path.name}" contains no {_ext_label(self._file_exts)} files '
+                    "(subfolders are not scanned). "
+                    "Pick a different folder, or add files manually instead.",
+                )
             return
+
+        if n_skipped:
+            self._warn_skipped_csvs(n_skipped)
 
         if has_subdirs:
             msg = QMessageBox(self)
@@ -449,7 +498,12 @@ class GroupManifestPanel(QWidget):
         )
         if not files:
             return
-        self._create_group(default_name="Group", paths=[Path(f) for f in files])
+        paths, n_skipped = self._filter_valid_csvs([Path(f) for f in files])
+        if n_skipped:
+            self._warn_skipped_csvs(n_skipped)
+        if not paths:
+            return
+        self._create_group(default_name="Group", paths=paths)
 
     def _create_group(self, default_name: str, paths: list[Path]) -> None:
         """Groups are always born holding files — naming comes after, as a
@@ -478,14 +532,16 @@ class GroupManifestPanel(QWidget):
         row.setContentsMargins(4, 2, 4, 2)
         row.setSpacing(6)
 
+        t = _get_theme()
+
         name_lbl = _ClickableLabel(name)
-        name_lbl.setStyleSheet(f"color: {_COL_TEXT}; padding: 3px 4px;")
+        name_lbl.setStyleSheet(f"color: {t.text}; padding: 3px 4px;")
         name_lbl.clicked.connect(lambda: self._begin_rename(item_widget))
 
         name_edit = QLineEdit(name)
         name_edit.setFrame(False)
         name_edit.setStyleSheet(
-            f"background: transparent; color: {_COL_TEXT}; padding: 3px 4px; border: none;"
+            f"background: transparent; color: {t.text}; padding: 3px 4px; border: none;"
         )
         name_edit.editingFinished.connect(lambda: self._commit_rename(item_widget))
         name_edit.hide()
@@ -498,7 +554,7 @@ class GroupManifestPanel(QWidget):
         badge_lbl = QLabel("…")
         badge_lbl.setFixedWidth(_BADGE_WIDTH)
         badge_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge_lbl.setStyleSheet(f"color: {_COL_MUTED}; font-size: 11px; font-weight: bold;")
+        badge_lbl.setStyleSheet(f"color: {t.muted}; font-size: 11px; font-weight: bold;")
         row.addWidget(badge_lbl)
 
         files_btn = QPushButton("Edit")
@@ -561,14 +617,13 @@ class GroupManifestPanel(QWidget):
 
     def _remove_group(self, item_widget: QWidget) -> None:
         name = item_widget._name
-        if (
-            self._manifests[name]
-            and QMessageBox.question(
-                self,
-                "Remove group",
-                f'"{name}" contains {len(self._manifests[name])} file(s). Remove it anyway?',
-            )
-            != QMessageBox.StandardButton.Yes
+        if self._manifests[name] and not ask(
+            self,
+            "Remove group",
+            f'"{name}" contains {len(self._manifests[name])} file(s). Remove it anyway?',
+            warning_face(),
+            yes_label="Remove",
+            no_label="Cancel",
         ):
             return
 
@@ -588,17 +643,18 @@ class GroupManifestPanel(QWidget):
     # ── File-count badges ────────────────────────────────────────────────────
 
     def _update_group_badge(self, item_widget: QWidget) -> None:
+        t = _get_theme()
         count = len(self._manifests[item_widget._name])
         ext_label = _ext_label(self._file_exts)
 
         if count == 0:
-            colour, text = _COL_ERROR, "0 ⚠"
+            colour, text = t.error, "0 ⚠"
             tip = f"No {ext_label} files added yet."
         elif count < 5:
-            colour, text = _COL_WARN, f"{count} ⚠"
+            colour, text = t.warn, f"{count} ⚠"
             tip = f"Only {count} {ext_label} file(s) — results may be underpowered (expected ≥ 5)."
         else:
-            colour, text = _COL_SUCCESS, str(count)
+            colour, text = t.success, str(count)
             tip = f"{count} {ext_label} file(s)."
 
         item_widget._badge_lbl.setText(text)
@@ -612,6 +668,21 @@ class GroupManifestPanel(QWidget):
             widget = self._group_list.itemWidget(self._group_list.item(i))
             if widget is not None:
                 self._update_group_badge(widget)
+
+    def refresh_theme(self) -> None:
+        """Re-apply theme colours to existing group rows after a theme
+        change — group widgets are built once and styled at creation time,
+        so they don't pick up new theme tokens automatically."""
+        t = _get_theme()
+        for i in range(self._group_list.count()):
+            widget = self._group_list.itemWidget(self._group_list.item(i))
+            if widget is None:
+                continue
+            widget._name_lbl.setStyleSheet(f"color: {t.text}; padding: 3px 4px;")
+            widget._name_edit.setStyleSheet(
+                f"background: transparent; color: {t.text}; padding: 3px 4px; border: none;"
+            )
+            self._update_group_badge(widget)
 
     def _badge_widget_for(self, name: str) -> QWidget | None:
         for i in range(self._group_list.count()):
@@ -630,6 +701,9 @@ class GroupManifestPanel(QWidget):
     def _add_paths(self, group_name: str, paths: list[Path]) -> bool:
         """Shared add routine for both entry points — same dedup, same
         feedback. Returns True if anything was actually added."""
+        paths, n_skipped = self._filter_valid_csvs(paths)
+        if n_skipped:
+            self._warn_skipped_csvs(n_skipped)
         if not paths:
             return False
 
@@ -637,20 +711,31 @@ class GroupManifestPanel(QWidget):
         existing_in_group = set(manifest)
         added = 0
 
-        for path in paths:
-            if path in existing_in_group:
-                continue  # within-group duplicate: silent skip
+        # Pre-scan for files already claimed by other groups, so we can ask
+        # about all of them in a single dialog instead of one per file.
+        new_paths = [p for p in paths if p not in existing_in_group]
+        duplicates = {
+            p for p in new_paths if self._group_containing(p, exclude=group_name) is not None
+        }
 
-            other_group = self._group_containing(path, exclude=group_name)
-            if other_group is not None:
-                reply = QMessageBox.question(
-                    self,
-                    "File already in another group",
-                    f'This file is already in group "{other_group}":\n\n{path}\n\n'
-                    f'Add it to "{group_name}" too?',
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    continue
+        add_duplicates = True
+        if duplicates:
+            count = len(duplicates)
+            noun = "file" if count == 1 else "files"
+            add_duplicates = ask(
+                self,
+                "File already in another group",
+                f"{count} {noun} you're adding to \"{group_name}\" "
+                f"{'is' if count == 1 else 'are'} already in another group.\n\n"
+                f"Add {'it' if count == 1 else 'them'} anyway?",
+                grumpy_teacher(),
+                yes_label="Add anyway",
+                no_label="Skip",
+            )
+
+        for path in new_paths:
+            if path in duplicates and not add_duplicates:
+                continue
 
             manifest.append(path)
             existing_in_group.add(path)

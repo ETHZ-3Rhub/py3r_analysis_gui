@@ -28,13 +28,11 @@ Two separate environments are needed:
 
 | Environment | Purpose | Key dependencies |
 |---|---|---|
-| `py3r_gui` | GUI + analysis | PyQt6, py3r_behaviour, py3r_analysis_gui |
+| `py3r_gui` | GUI + analysis | PySide6, py3r_behaviour, py3r_analysis_gui |
 | `tracking_env` | Tracking | PyTorch, ultralytics |
 
-Create the tracking environment with:
-```bash
-python scripts/setup_tracking_env.py
-```
+Create the tracking environment by running the GUI and using
+Settings → Reinstall tracking environment.
 
 The GUI calls `tracking_env/Scripts/python.exe` (Windows) or
 `tracking_env/bin/python` (Unix) as a subprocess to run

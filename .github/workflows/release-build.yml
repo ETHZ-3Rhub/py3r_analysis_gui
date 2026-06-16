@@ -1,0 +1,82 @@
+name: Release build
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read pinned refs
+        id: refs
+        shell: python
+        run: |
+          import os, re
+          from pathlib import Path
+          text = Path("RELEASE_REFS.md").read_text()
+          refs = {}
+          for line in text.splitlines():
+              m = re.match(r"^(py3r_behaviour|pose_models):\s*(\S+)$", line.strip())
+              if m:
+                  refs[m.group(1)] = m.group(2)
+          for key in ("py3r_behaviour", "pose_models"):
+              if key not in refs:
+                  raise SystemExit(f"missing '{key}' pin in RELEASE_REFS.md")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"py3r_behaviour={refs['py3r_behaviour']}\n")
+              f.write(f"pose_models={refs['pose_models']}\n")
+
+      - name: Checkout BohacekLabPoseModels
+        uses: actions/checkout@v4
+        with:
+          repository: ETHZ-INS/BohacekLabPoseModels
+          ref: ${{ steps.refs.outputs.pose_models }}
+          token: ${{ secrets.POSE_MODELS_PAT }}
+          lfs: true
+          path: _pose_models
+
+      - name: Install py3r_behaviour (pinned)
+        run: pip install "py3r-behaviour[viz] @ git+https://github.com/ETHZ-INS/py3r_behaviour@${{ steps.refs.outputs.py3r_behaviour }}"
+
+      - name: Install project
+        run: |
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Fetch uv.exe
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path vendor | Out-Null
+          Invoke-WebRequest -Uri https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip -OutFile vendor\uv.zip
+          Expand-Archive -Path vendor\uv.zip -DestinationPath vendor -Force
+          Remove-Item vendor\uv.zip, vendor\uvw.exe, vendor\uvx.exe -ErrorAction SilentlyContinue
+          if (-not (Test-Path vendor\uv.exe)) { throw "uv.exe not found after extraction" }
+
+      - name: Build with PyInstaller
+        run: pyinstaller py3r_analysis_gui.spec --clean --noconfirm
+
+      - name: Copy model weights
+        shell: cmd
+        run: xcopy "_pose_models\pose_estimation" "dist\py3r_analysis\models" /E /I /Y
+
+      - name: Zip artifact
+        shell: powershell
+        run: |
+          $tag = "${{ github.ref_name }}"
+          Compress-Archive -Path dist\py3r_analysis -DestinationPath "py3r_analysis-$tag.zip"
+
+      - name: Upload to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "py3r_analysis-${{ github.ref_name }}.zip" --clobber
