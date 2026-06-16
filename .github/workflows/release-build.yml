@@ -42,6 +42,7 @@ jobs:
         with:
           repository: ETHZ-INS/BohacekLabPoseModels
           ref: ${{ steps.refs.outputs.pose_models }}
+          token: ${{ secrets.POSE_MODELS_PAT }}
           lfs: true
           path: _pose_models
 
