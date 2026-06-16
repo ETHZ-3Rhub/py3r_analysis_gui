@@ -303,6 +303,7 @@ class _ManifestDialog(QDialog):
             # Right-aligned so the elided ("…/closest/dir/") tail consistently
             # hugs the same edge the eliding cuts toward.
             path_item = _PathSortItem(parent_text, sort_key=full)
+            path_item.setData(Qt.ItemDataRole.UserRole, full)
             path_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             path_item.setToolTip(str(path.parent))
             path_item.setForeground(bg)
@@ -321,12 +322,12 @@ class _ManifestDialog(QDialog):
             self._refresh_table()
 
     def _remove_selected(self) -> None:
-        rows = sorted({idx.row() for idx in self._table.selectedIndexes()}, reverse=True)
+        rows = {idx.row() for idx in self._table.selectedIndexes()}
         if not rows:
             return
+        to_remove = {Path(self._table.item(row, 0).data(Qt.ItemDataRole.UserRole)) for row in rows}
         manifest = self._panel._manifests[self._group_name]
-        for row in rows:
-            del manifest[row]
+        self._panel._manifests[self._group_name] = [p for p in manifest if p not in to_remove]
         self._refresh_table()
         self._panel._on_manifest_changed(self._group_name)
 

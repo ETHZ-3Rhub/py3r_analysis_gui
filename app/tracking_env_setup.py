@@ -10,6 +10,7 @@ entry point instead.
 from __future__ import annotations
 
 import datetime
+import os
 import shutil
 import socket
 import subprocess
@@ -192,9 +193,24 @@ def setup(tracking_env: Path) -> int:
         print(msg)
         log_lines.append(msg + "\n")
 
+    # Install the base Python *inside the app directory* (alongside
+    # tracking_env), not in uv's default %LOCALAPPDATA%\uv\python. That default
+    # location may be unwritable, redirected, or quota'd under locked-down /
+    # roaming Windows profiles, and can be wiped by IT cleanup - either of which
+    # leaves the thin venv with a dangling `home=`. The app dir is already
+    # proven writable (we build tracking_env into it), so it's the safe home.
+    # UV_MANAGED_PYTHON forces a uv-managed Python here rather than borrowing a
+    # system interpreter we don't control (which would reintroduce the same
+    # external-base fragility). Set on os.environ - setup() runs in its own
+    # `--setup-tracking-env` subprocess, so this can't leak into the GUI.
+    python_install_dir = tracking_env.parent / "uv_python"
+    os.environ["UV_PYTHON_INSTALL_DIR"] = str(python_install_dir)
+    os.environ["UV_MANAGED_PYTHON"] = "1"
+
     try:
         out(f"Tracking env install log - {datetime.datetime.now().isoformat()}")
         out(f"Tracking env:  {tracking_env}")
+        out(f"Python base:   {python_install_dir} (uv-managed)")
         out(f"uv:            {_uv_version(uv)}")
 
         if not _check_internet():
