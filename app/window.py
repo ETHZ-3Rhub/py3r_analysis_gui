@@ -269,8 +269,8 @@ class MainWindow(QWidget):
                 if not ask(
                     self,
                     "Switch source?",
-                    "Switching source clears every group's file list, since the\n"
-                    "files no longer match the new type. Continue?",
+                    "Switching source clears every group's file list, since the files "
+                    "no longer match the new type. Continue?",
                     grumpy_teacher(),
                     yes_label="Clear and switch",
                     no_label="Cancel",
@@ -323,16 +323,18 @@ class MainWindow(QWidget):
         self._current_options = {}
 
         arena_mod = self._arena_combo.currentData()
-        if arena_mod is not None and not ask(
-            self,
-            "Confirm pipeline",
-            f"Does your arena look like this?\n\n({arena_mod.NAME})",
-            pipeline_reference_image(arena_mod),
-            yes_label="Yes",
-            no_label="No",
-        ):
-            self._arena_combo.setCurrentIndex(0)
-            return
+        if arena_mod is not None:
+            ref_img = pipeline_reference_image(arena_mod)
+            if ref_img is not None and not ask(
+                self,
+                "Confirm pipeline",
+                f"Does your arena look like this?\n\n({arena_mod.NAME})",
+                ref_img,
+                yes_label="Yes",
+                no_label="No",
+            ):
+                self._arena_combo.setCurrentIndex(0)
+                return
 
         self._run_controller.refresh_run_button()
 
