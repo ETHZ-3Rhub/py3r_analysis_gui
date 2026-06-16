@@ -458,7 +458,7 @@ class GroupManifestPanel(QWidget):
                     self,
                     "No matching files",
                     f'"{folder_path.name}" contains {n_skipped} CSV file(s), but none look '
-                    "like YOLO3R tracking output (unexpected column headers).\n"
+                    "like YOLO3R tracking output (unexpected column headers). "
                     "Pick a different folder, or add files manually instead.",
                 )
             else:
@@ -466,7 +466,7 @@ class GroupManifestPanel(QWidget):
                     self,
                     "No matching files",
                     f'"{folder_path.name}" contains no {_ext_label(self._file_exts)} files '
-                    "(subfolders are not scanned).\n"
+                    "(subfolders are not scanned). "
                     "Pick a different folder, or add files manually instead.",
                 )
             return

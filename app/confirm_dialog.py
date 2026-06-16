@@ -39,18 +39,30 @@ def _load(filename: str | None) -> QPixmap:
 
 def grumpy_teacher() -> QPixmap:
     """'Are you sure?' — destructive / irreversible action."""
-    return _load("grumpy_teacher.png")
+    return _load("disapproving.png")
 
 
 def warning_face() -> QPixmap:
     """'Proceed anyway?' — soft warnings before a run."""
-    return _load("warning_face.png")
+    return _load("disapproving.png")
 
 
-def pipeline_reference_image(pipeline_mod) -> QPixmap:
-    """Reference photo of the arena a pipeline expects, shown when
-    confirming the user picked the right pipeline for their setup."""
-    return _load(getattr(pipeline_mod, "ARENA_IMAGE", None))
+def pipeline_reference_image(pipeline_mod) -> QPixmap | None:
+    """Reference photo of the arena a pipeline expects. Returns None if the
+    pipeline module has no ARENA_IMAGE attribute or the file doesn't exist."""
+    filename = getattr(pipeline_mod, "ARENA_IMAGE", None)
+    if not filename:
+        return None
+    path = _IMG_DIR / filename
+    if not path.exists():
+        return None
+    px = QPixmap(str(path))
+    return px.scaled(
+        _IMG_SIZE,
+        _IMG_SIZE,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
 
 
 class _ConfirmDialog(QDialog):
