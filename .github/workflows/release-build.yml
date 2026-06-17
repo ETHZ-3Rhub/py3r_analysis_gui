@@ -1,9 +1,11 @@
 name: Release build
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and upload (e.g. v1.2.3)"
+        required: true
 
 permissions:
   contents: write
@@ -73,10 +75,10 @@ jobs:
       - name: Zip artifact
         shell: powershell
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "${{ inputs.tag }}"
           Compress-Archive -Path dist\py3r_analysis -DestinationPath "py3r_analysis-$tag.zip"
 
       - name: Upload to draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "py3r_analysis-${{ github.ref_name }}.zip" --clobber
+        run: gh release upload "${{ inputs.tag }}" "py3r_analysis-${{ inputs.tag }}.zip" --clobber
