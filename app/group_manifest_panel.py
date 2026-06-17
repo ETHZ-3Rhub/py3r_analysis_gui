@@ -404,6 +404,19 @@ class GroupManifestPanel(QWidget):
         groups_label.setObjectName("sectionTitle")
         layout.addWidget(groups_label)
 
+        csv_row = QHBoxLayout()
+        csv_row.setContentsMargins(0, 0, 0, 0)
+        csv_btn = QPushButton("Import from CSV…")
+        csv_btn.setObjectName("settingsButton")
+        csv_btn.setToolTip(
+            "Open the CSV wizard — match filenames against a metadata spreadsheet\n"
+            "to assign group membership automatically (e.g. after unblinding)."
+        )
+        csv_btn.clicked.connect(self._import_from_csv)
+        csv_row.addStretch()
+        csv_row.addWidget(csv_btn)
+        layout.addLayout(csv_row)
+
         self._group_list = QListWidget()
         self._group_list.setObjectName("manifestGroupList")
         layout.addWidget(self._group_list, stretch=1)
@@ -504,6 +517,29 @@ class GroupManifestPanel(QWidget):
         if not paths:
             return
         self._create_group(default_name="Group", paths=paths)
+
+    def _import_from_csv(self) -> None:
+        from app.csv_import_dialog import CsvImportDialog
+
+        dlg = CsvImportDialog(self._file_exts, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._bulk_add_groups(dlg.result_groups())
+
+    def _bulk_add_groups(self, groups: dict[str, list[Path]]) -> None:
+        for name, paths in groups.items():
+            self._add_group_direct(name, paths)
+
+    def _add_group_direct(self, name: str, paths: list[Path]) -> None:
+        """Like _create_group but skips the rename prompt — used for CSV import."""
+        base = name
+        suffix = 2
+        while name in self._manifests:
+            name = f"{base} {suffix}"
+            suffix += 1
+        self._manifests[name] = []
+        self._build_group_item(name)
+        self.group_added.emit(name)
+        self._add_paths(name, paths)
 
     def _create_group(self, default_name: str, paths: list[Path]) -> None:
         """Groups are always born holding files — naming comes after, as a
