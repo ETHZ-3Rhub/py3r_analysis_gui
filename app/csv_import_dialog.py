@@ -35,9 +35,6 @@ from PySide6.QtWidgets import (
 
 from app.theme import get_theme as _get_theme
 
-_BOTH = -1  # sentinel: include all conflict options
-
-
 # ── Tooltip-on-disabled shim (same pattern as app/gating.py) ─────────────────
 
 
@@ -48,6 +45,23 @@ class _TooltipOnDisabled(QObject):
             if tip:
                 QToolTip.showText(event.globalPos(), tip, obj)  # type: ignore[attr-defined]
             return True
+        return super().eventFilter(obj, event)
+
+
+class _FocusActivatesRadio(QObject):
+    """When an associated widget receives focus, check a radio button.
+
+    Used so that clicking into the spinbox/text-field activates its paired radio
+    automatically, without the user needing to click the radio first.
+    """
+
+    def __init__(self, radio: QRadioButton, parent: QObject) -> None:
+        super().__init__(parent)
+        self._radio = radio
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
+        if event.type() == QEvent.Type.FocusIn:
+            self._radio.setChecked(True)
         return super().eventFilter(obj, event)
 
 
@@ -169,7 +183,8 @@ class _Match:
 class _Conflict:
     label: str
     options: list[_Match]
-    selection: int | None = None  # None=unresolved, _BOTH=all, 0..n-1=single pick
+    # None = unresolved; frozenset() = excluded; frozenset({0,2,...}) = include those indices
+    selection: frozenset | None = None
 
 
 @dataclass
@@ -259,13 +274,10 @@ def _build_result_groups(
     for m in clean_matches:
         groups.setdefault(m.group_name, []).append(m.path)
     for c in conflicts:
-        if c.selection is None:
-            continue
-        if c.selection == _BOTH:
-            for m in c.options:
-                groups.setdefault(m.group_name, []).append(m.path)
-        else:
-            m = c.options[c.selection]
+        if not isinstance(c.selection, frozenset) or len(c.selection) == 0:
+            continue  # unresolved or explicitly excluded
+        for idx in c.selection:
+            m = c.options[idx]
             groups.setdefault(m.group_name, []).append(m.path)
     return groups
 
@@ -388,6 +400,7 @@ class CsvImportWidget(QWidget):
         self._added_files: list[Path] = []
         self._conflicts: list[_Conflict] = []
         self._last_result: _MatchResult | None = None
+        self._expanded_groups: set[str] = set()
         self._tooltip_filter = _TooltipOnDisabled(self)
 
         self._build_ui()
@@ -403,7 +416,10 @@ class CsvImportWidget(QWidget):
             and self._last_result is not None
             and bool(
                 self._last_result.clean_matches
-                or any(c.selection is not None for c in self._conflicts)
+                or any(
+                    isinstance(c.selection, frozenset) and len(c.selection) > 0
+                    for c in self._conflicts
+                )
             )
         )
 
@@ -415,9 +431,28 @@ class CsvImportWidget(QWidget):
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
+        t = _get_theme()
+
+        def _header(text: str, tooltip: str = "") -> QLabel:
+            lbl = QLabel(text)
+            lbl.setStyleSheet(
+                f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+            )
+            if tooltip:
+                lbl.setToolTip(tooltip)
+            return lbl
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(10)
+        outer.setSpacing(8)
+
+        outer.addWidget(
+            _header(
+                "Load manifest / protocol",
+                "A manifest CSV maps each recording to a group. Load the CSV your "
+                "protocol or unblinding sheet produced.",
+            )
+        )
 
         # CSV load row
         csv_row = QHBoxLayout()
@@ -430,6 +465,14 @@ class CsvImportWidget(QWidget):
         csv_row.addWidget(load_btn)
         csv_row.addWidget(self._csv_name_lbl, stretch=1)
         outer.addLayout(csv_row)
+
+        outer.addWidget(
+            _header(
+                "Match manifest / protocol to filenames",
+                "Tell the wizard which column contains the ID to match against your "
+                "filenames, and which column(s) define the group each recording belongs to.",
+            )
+        )
 
         # Column selection: match col + group cols, even split
         col_row = QHBoxLayout()
@@ -458,71 +501,99 @@ class CsvImportWidget(QWidget):
 
         outer.addLayout(col_row)
 
-        # Match controls — row 1: min match + zeros
-        ctrl_row1 = QHBoxLayout()
-        ctrl_row1.setSpacing(8)
+        # Line A — number of characters to match
+        match_len_row = QHBoxLayout()
+        match_len_row.setSpacing(8)
+        match_len_lbl = QLabel("Number of characters to match:")
+        match_len_lbl.setToolTip("Controls how much of the CSV ID must appear in the filename.")
+        match_len_row.addWidget(match_len_lbl)
 
-        ctrl_row1.addWidget(QLabel("Min match chars:"))
+        self._all_radio = QRadioButton("All")
+        self._all_radio.setChecked(True)
+        self._all_radio.setToolTip(
+            "The full ID from the CSV must be found in the filename. Safest — "
+            "use this unless you have a reason to allow partial matches."
+        )
+        self._all_radio.installEventFilter(self._tooltip_filter)
+        self._atleast_radio = QRadioButton("At least")
+        self._atleast_radio.setToolTip(
+            "The matched substring must be at least this many characters long. "
+            "Lower values allow more partial matches but risk false positives."
+        )
+        self._atleast_radio.installEventFilter(self._tooltip_filter)
+        matchlen_group = QButtonGroup(self)
+        matchlen_group.addButton(self._all_radio)
+        matchlen_group.addButton(self._atleast_radio)
+
         self._min_spin = QSpinBox()
         self._min_spin.setRange(1, 999)
         self._min_spin.setValue(3)
         self._min_spin.setEnabled(False)
         self._min_spin.valueChanged.connect(self._refresh)
         self._min_spin.installEventFilter(self._tooltip_filter)
-        ctrl_row1.addWidget(self._min_spin)
+        self._min_spin.installEventFilter(_FocusActivatesRadio(self._atleast_radio, self))
 
-        self._full_check = QCheckBox("Full")
-        self._full_check.setChecked(True)
-        self._full_check.setToolTip(
-            "Require the entire match-column value to appear in the filename."
+        self._all_radio.toggled.connect(self._on_matchlen_radio_changed)
+        match_len_row.addWidget(self._all_radio)
+        match_len_row.addWidget(self._atleast_radio)
+        match_len_row.addWidget(self._min_spin)
+        match_len_row.addStretch()
+        outer.addLayout(match_len_row)
+
+        # Line B — separator characters
+        sep_row = QHBoxLayout()
+        sep_row.setSpacing(8)
+        sep_lbl = QLabel("Separator characters:")
+        sep_lbl.setToolTip("Controls what counts as a word boundary around the matched text.")
+        sep_row.addWidget(sep_lbl)
+
+        self._nonalpha_radio = QRadioButton("All non-alphanumeric")
+        self._nonalpha_radio.setChecked(True)
+        self._nonalpha_radio.setToolTip(
+            "Prevents partial-word matches — e.g. stops 'OFT1' matching inside "
+            "'OFT10'. Recommended for most datasets."
         )
-        self._full_check.toggled.connect(self._on_full_toggled)
-        self._full_check.installEventFilter(self._tooltip_filter)
-        ctrl_row1.addWidget(self._full_check)
-
-        ctrl_row1.addSpacing(12)
-
-        self._zeros_check = QCheckBox("Tolerate leading zeros")
-        self._zeros_check.setToolTip("Treat '0012' and '12' as equivalent when matching.")
-        self._zeros_check.toggled.connect(self._refresh)
-        self._zeros_check.installEventFilter(self._tooltip_filter)
-        ctrl_row1.addWidget(self._zeros_check)
-
-        ctrl_row1.addStretch()
-        outer.addLayout(ctrl_row1)
-
-        # Match controls — row 2: whole token + boundary chars
-        ctrl_row2 = QHBoxLayout()
-        ctrl_row2.setSpacing(8)
-
-        self._whole_token_check = QCheckBox("Whole token")
-        self._whole_token_check.setChecked(True)
-        self._whole_token_check.setToolTip(
-            "Require the matched text to be surrounded by non-alphanumeric\n"
-            "characters (or start/end of filename) — prevents 'OFT1_1'\n"
-            "matching 'OFT1_11'. Turn off to use custom boundary chars."
+        self._nonalpha_radio.installEventFilter(self._tooltip_filter)
+        self._specify_radio = QRadioButton("Specify:")
+        self._specify_radio.setToolTip(
+            "Only these characters are treated as separators between ID tokens. "
+            "Leave the field empty to apply no separator requirement."
         )
-        self._whole_token_check.toggled.connect(self._on_whole_token_toggled)
-        self._whole_token_check.installEventFilter(self._tooltip_filter)
-        ctrl_row2.addWidget(self._whole_token_check)
+        self._specify_radio.installEventFilter(self._tooltip_filter)
+        sep_group = QButtonGroup(self)
+        sep_group.addButton(self._nonalpha_radio)
+        sep_group.addButton(self._specify_radio)
 
-        ctrl_row2.addSpacing(12)
-
-        boundary_lbl = QLabel("Boundary chars:")
-        ctrl_row2.addWidget(boundary_lbl)
         self._boundary_edit = QLineEdit()
-        self._boundary_edit.setPlaceholderText("e.g. _-. (optional)")
-        self._boundary_edit.setMaximumWidth(160)
-        self._boundary_edit.setToolTip(
-            "When 'Whole token' is off: the character before and after\n"
-            "the matched text must be one of these (or string start/end)."
-        )
+        self._boundary_edit.setPlaceholderText("e.g. _-.")
+        self._boundary_edit.setMaximumWidth(120)
+        self._boundary_edit.setEnabled(False)
         self._boundary_edit.textChanged.connect(self._refresh)
         self._boundary_edit.installEventFilter(self._tooltip_filter)
-        ctrl_row2.addWidget(self._boundary_edit)
+        self._boundary_edit.installEventFilter(_FocusActivatesRadio(self._specify_radio, self))
 
-        ctrl_row2.addStretch()
-        outer.addLayout(ctrl_row2)
+        self._nonalpha_radio.toggled.connect(self._on_separator_radio_changed)
+        sep_row.addWidget(self._nonalpha_radio)
+        sep_row.addWidget(self._specify_radio)
+        sep_row.addWidget(self._boundary_edit)
+        sep_row.addStretch()
+        outer.addLayout(sep_row)
+
+        # Line C — tolerate leading zeros
+        zeros_row = QHBoxLayout()
+        zeros_row.setSpacing(8)
+        self._zeros_check = QCheckBox("Tolerate leading zeros")
+        self._zeros_check.setToolTip(
+            "Treats '001', '01', and '1' as equivalent when matching — useful if "
+            "your CSV IDs and filenames use inconsistent zero-padding."
+        )
+        self._zeros_check.toggled.connect(self._refresh)
+        self._zeros_check.installEventFilter(self._tooltip_filter)
+        zeros_row.addWidget(self._zeros_check)
+        zeros_row.addStretch()
+        outer.addLayout(zeros_row)
+
+        outer.addWidget(_header("Load data"))
 
         # File add row
         files_row = QHBoxLayout()
@@ -547,7 +618,7 @@ class CsvImportWidget(QWidget):
         self._preview_area = QScrollArea()
         self._preview_area.setObjectName("previewArea")
         self._preview_area.setWidgetResizable(True)
-        self._preview_area.setMinimumHeight(200)
+        self._preview_area.setMinimumHeight(160)
         outer.addWidget(self._preview_area, stretch=1)
 
     # ── State management ──────────────────────────────────────────────────────
@@ -560,9 +631,11 @@ class CsvImportWidget(QWidget):
         for widget in (
             self._match_combo,
             self._group_cols_list,
-            self._full_check,
+            self._all_radio,
+            self._atleast_radio,
+            self._nonalpha_radio,
+            self._specify_radio,
             self._zeros_check,
-            self._whole_token_check,
             self._add_folder_btn,
             self._add_files_btn,
         ):
@@ -570,24 +643,24 @@ class CsvImportWidget(QWidget):
             if not csv_loaded:
                 widget.setToolTip(no_csv_tip)
 
-        # Spinner: enabled only when CSV loaded AND Full is unchecked
-        self._min_spin.setEnabled(csv_loaded and not self._full_check.isChecked())
+        # Spinbox: enabled only when CSV loaded AND "At least" radio is selected
+        self._min_spin.setEnabled(csv_loaded and self._atleast_radio.isChecked())
         if not csv_loaded:
             self._min_spin.setToolTip(no_csv_tip)
 
-        # Boundary edit: enabled only when CSV loaded AND Whole token is unchecked
-        self._boundary_edit.setEnabled(csv_loaded and not self._whole_token_check.isChecked())
+        # Boundary edit: enabled only when CSV loaded AND "Specify" radio is selected
+        self._boundary_edit.setEnabled(csv_loaded and self._specify_radio.isChecked())
         if not csv_loaded:
             self._boundary_edit.setToolTip(no_csv_tip)
 
     # ── Event handlers ────────────────────────────────────────────────────────
 
-    def _on_full_toggled(self, checked: bool) -> None:
-        self._min_spin.setEnabled(not checked and bool(self._rows))
+    def _on_matchlen_radio_changed(self, all_checked: bool) -> None:
+        self._min_spin.setEnabled(not all_checked and bool(self._rows))
         self._refresh()
 
-    def _on_whole_token_toggled(self, checked: bool) -> None:
-        self._boundary_edit.setEnabled(not checked and bool(self._rows))
+    def _on_separator_radio_changed(self, nonalpha_checked: bool) -> None:
+        self._boundary_edit.setEnabled(not nonalpha_checked and bool(self._rows))
         self._refresh()
 
     def _load_csv(self) -> None:
@@ -697,9 +770,9 @@ class CsvImportWidget(QWidget):
             match_col,
             group_cols,
             self._added_files,
-            min_chars=None if self._full_check.isChecked() else self._min_spin.value(),
+            min_chars=None if self._all_radio.isChecked() else self._min_spin.value(),
             tolerate_zeros=self._zeros_check.isChecked(),
-            whole_token=self._whole_token_check.isChecked(),
+            whole_token=self._nonalpha_radio.isChecked(),
             boundary_chars=self._boundary_edit.text().strip(),
         )
 
@@ -716,6 +789,13 @@ class CsvImportWidget(QWidget):
 
     def _emit_validity(self) -> None:
         self.validity_changed.emit(self.is_valid())
+
+    def _on_preview_link(self, href: str) -> None:
+        if href.startswith("expand:"):
+            self._expanded_groups.add(href[len("expand:") :])
+        elif href.startswith("collapse:"):
+            self._expanded_groups.discard(href[len("collapse:") :])
+        self._rebuild_preview(self._last_result)
 
     def _rebuild_preview(self, result: _MatchResult | None) -> None:
         t = _get_theme()
@@ -738,36 +818,54 @@ class CsvImportWidget(QWidget):
             self._preview_area.setWidget(content)
             return
 
-        # Tree: group → files (clean matches only)
+        # Tree: group → files (clean matches only), one section per group
         by_group: dict[str, list[_Match]] = {}
         for m in result.clean_matches:
             by_group.setdefault(m.group_name, []).append(m)
 
         if by_group:
-            lines: list[str] = []
             for gname in sorted(by_group):
                 ms = by_group[gname]
-                lines.append(
+                is_expanded = gname in self._expanded_groups
+                visible = ms if is_expanded else ms[:5]
+
+                lines = [
                     f'<b style="color:{t.text};">{gname}</b>'
                     f'<span style="color:{t.muted};">  ({len(ms)} files)</span>'
-                )
-                for m in ms[:5]:
+                ]
+                for m in visible:
                     lines.append(
                         f'<span style="color:{t.muted};">&nbsp;&nbsp;&nbsp;&nbsp;{m.path.name}'
                         f'</span><span style="color:{t.sep};">'
                         f"&nbsp; &larr; &nbsp;{m.id_val}&nbsp;({m.matched_substr})</span>"
                     )
-                if len(ms) > 5:
-                    extra = len(ms) - 5
-                    lines.append(
-                        f'<span style="color:{t.sep};">'
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;... and {extra} more</span>"
+                group_lbl = QLabel("<br>".join(lines))
+                group_lbl.setTextFormat(Qt.TextFormat.RichText)
+                group_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+                group_lbl.setWordWrap(False)
+                layout.addWidget(group_lbl)
+
+                extra = len(ms) - 5
+                if not is_expanded and extra > 0:
+                    noun = "file" if extra == 1 else "files"
+                    more_lbl = QLabel(
+                        f'<a href="expand:{gname}" style="color:{t.sep}; text-decoration:none;">'
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;... and {extra} more {noun}</a>"
                     )
-            tree_lbl = QLabel("<br>".join(lines))
-            tree_lbl.setTextFormat(Qt.TextFormat.RichText)
-            tree_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-            tree_lbl.setWordWrap(False)
-            layout.addWidget(tree_lbl)
+                    more_lbl.setTextFormat(Qt.TextFormat.RichText)
+                    more_lbl.setOpenExternalLinks(False)
+                    more_lbl.linkActivated.connect(self._on_preview_link)
+                    layout.addWidget(more_lbl)
+                elif is_expanded and len(ms) > 5:
+                    less_lbl = QLabel(
+                        f'<a href="collapse:{gname}" style="color:{t.sep}; text-decoration:none;">'
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;show less</a>"
+                    )
+                    less_lbl.setTextFormat(Qt.TextFormat.RichText)
+                    less_lbl.setOpenExternalLinks(False)
+                    less_lbl.linkActivated.connect(self._on_preview_link)
+                    layout.addWidget(less_lbl)
+
         elif self._added_files:
             no_match = QLabel("No matches yet — check your match column and controls.")
             no_match.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
@@ -775,7 +873,7 @@ class CsvImportWidget(QWidget):
 
         # Conflicts
         if self._conflicts:
-            sep = QLabel("Conflicts — pick one or both:")
+            sep = QLabel("Conflicts — resolve each before importing:")
             sep.setStyleSheet(f"color: {t.warn}; font-weight: bold; margin-top: 6px;")
             layout.addWidget(sep)
             for conflict in self._conflicts:
@@ -806,43 +904,69 @@ class CsvImportWidget(QWidget):
 
     def _build_conflict_widget(self, conflict: _Conflict, t) -> QWidget:
         w = QWidget()
-        row = QHBoxLayout(w)
-        row.setContentsMargins(0, 2, 0, 2)
-        row.setSpacing(8)
+        vbox = QVBoxLayout(w)
+        vbox.setContentsMargins(0, 4, 0, 8)
+        vbox.setSpacing(3)
 
         lbl = QLabel(conflict.label + ":")
-        lbl.setStyleSheet(f"color: {t.warn}; font-size: 11px;")
-        row.addWidget(lbl)
+        lbl.setStyleSheet(f"color: {t.warn}; font-size: 11px; font-weight: bold;")
+        vbox.addWidget(lbl)
 
-        btn_group = QButtonGroup(w)
-        btn_group.setExclusive(True)
-        is_file_to_rows = len({m.path for m in conflict.options}) == 1
-        both_id = len(conflict.options)
+        current = conflict.selection
+        is_excluded = current == frozenset()
 
+        file_checks: list[QCheckBox] = []
         for i, opt in enumerate(conflict.options):
-            rb = QRadioButton(opt.id_val if is_file_to_rows else opt.path.name)
-            if conflict.selection == i:
-                rb.setChecked(True)
-            btn_group.addButton(rb, i)
-            row.addWidget(rb)
+            cb_row = QHBoxLayout()
+            cb_row.setContentsMargins(12, 0, 0, 0)
+            cb_row.setSpacing(0)
+            cb = QCheckBox(str(opt.path))
+            cb.setChecked(isinstance(current, frozenset) and i in current)
+            cb.setEnabled(not is_excluded)
+            cb_row.addWidget(cb)
+            cb_row.addStretch()
+            file_checks.append(cb)
+            vbox.addLayout(cb_row)
 
-        both_label = "Both" if len(conflict.options) == 2 else f"All {len(conflict.options)}"
-        both_rb = QRadioButton(both_label)
-        if conflict.selection == _BOTH:
-            both_rb.setChecked(True)
-        btn_group.addButton(both_rb, both_id)
-        row.addWidget(both_rb)
-        row.addStretch()
+        none_row = QHBoxLayout()
+        none_row.setContentsMargins(12, 2, 0, 0)
+        none_row.setSpacing(0)
+        none_cb = QCheckBox("None — exclude all")
+        none_cb.setChecked(is_excluded)
+        none_row.addWidget(none_cb)
+        none_row.addStretch()
+        vbox.addLayout(none_row)
 
-        def on_toggled(
-            btn_id: int,
-            _conflict: _Conflict = conflict,
-            _both_id: int = both_id,
-        ) -> None:
-            _conflict.selection = _BOTH if btn_id == _both_id else btn_id
+        def recompute() -> None:
+            sel = frozenset(i for i, c in enumerate(file_checks) if c.isChecked())
+            if none_cb.isChecked():
+                conflict.selection = frozenset()
+            elif sel:
+                conflict.selection = sel
+            else:
+                conflict.selection = None
             self._emit_validity()
 
-        btn_group.idClicked.connect(on_toggled)
+        def on_file_changed(idx: int) -> None:
+            if file_checks[idx].isChecked():
+                none_cb.blockSignals(True)
+                none_cb.setChecked(False)
+                none_cb.blockSignals(False)
+            recompute()
+
+        def on_none_changed(checked: bool) -> None:
+            for fc in file_checks:
+                if checked:
+                    fc.blockSignals(True)
+                    fc.setChecked(False)
+                    fc.blockSignals(False)
+                fc.setEnabled(not checked)
+            recompute()
+
+        for idx, fc in enumerate(file_checks):
+            fc.stateChanged.connect(lambda _state, i=idx: on_file_changed(i))
+        none_cb.toggled.connect(on_none_changed)
+
         return w
 
 
@@ -855,7 +979,7 @@ class CsvImportDialog(QDialog):
     def __init__(self, file_exts: set[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Import groups from CSV")
-        self.resize(660, 620)
+        self.resize(660, 660)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 16, 16, 14)
