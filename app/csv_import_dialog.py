@@ -149,11 +149,49 @@ def _lcs(a: str, b: str) -> str:
     return b[best_end - best : best_end]
 
 
-def _check_boundary_chars(s: str, start: int, length: int, boundary_chars: str) -> bool:
-    before = start == 0 or s[start - 1] in boundary_chars
-    after_pos = start + length
-    after = after_pos == len(s) or s[after_pos] in boundary_chars
-    return before and after
+def _tokenize_alphanumeric(s: str) -> list[str]:
+    return re.findall(r"[a-zA-Z0-9]+", s)
+
+
+def _is_whole_word_in(s: str, sub: str) -> bool:
+    """Return True if sub appears in s bounded by non-alphanumeric chars or string boundaries."""
+    idx = s.find(sub)
+    while idx != -1:
+        before = idx == 0 or not s[idx - 1].isalnum()
+        after_pos = idx + len(sub)
+        after = after_pos == len(s) or not s[after_pos].isalnum()
+        if before and after:
+            return True
+        idx = s.find(sub, idx + 1)
+    return False
+
+
+def _tokenize_by_strings(s: str, separators: list[str]) -> list[str]:
+    """Split s on separator strings (longer separators first, non-overlapping left-to-right)."""
+    if not separators:
+        return [s] if s else []
+    seps = sorted(separators, key=len, reverse=True)
+    tokens: list[str] = []
+    i = 0
+    chunk_start = 0
+    while i < len(s):
+        matched_sep: str | None = None
+        for sep in seps:
+            if s[i : i + len(sep)] == sep:
+                matched_sep = sep
+                break
+        if matched_sep is not None:
+            token = s[chunk_start:i]
+            if token:
+                tokens.append(token)
+            i += len(matched_sep)
+            chunk_start = i
+        else:
+            i += 1
+    tail = s[chunk_start:]
+    if tail:
+        tokens.append(tail)
+    return tokens
 
 
 def _find_match(
@@ -162,38 +200,41 @@ def _find_match(
     min_chars: int | None,
     tolerate_zeros: bool,
     whole_token: bool,
-    boundary_chars: str,
+    boundary_strings: list[str],
+    case_sensitive: bool = True,
 ) -> str | None:
-    """Return matched substring or None.
+    """Return matched token or None.
 
-    min_chars=None means Full (entire id_val must match). whole_token requires
-    the matched region to be bordered by non-alphanumeric chars or string ends,
-    preventing 'OFT1_1' from matching 'OFT1_11'.
+    For whole_token and boundary_strings modes: tokenizes both strings and
+    returns the longest common token (checked against min_chars). For plain
+    mode: returns the longest common substring via LCS.
     """
-    a = _apply_zero_tolerance(id_val) if tolerate_zeros else id_val
-    b = _apply_zero_tolerance(stem) if tolerate_zeros else stem
-    matched = _lcs(a, b)
-    if not matched:
-        return None
+    a = id_val if case_sensitive else id_val.lower()
+    b = stem if case_sensitive else stem.lower()
+    a = _apply_zero_tolerance(a) if tolerate_zeros else a
+    b = _apply_zero_tolerance(b) if tolerate_zeros else b
     effective_min = len(a) if min_chars is None else min_chars
-    if len(matched) < effective_min:
-        return None
     if whole_token:
-        idx = b.find(matched)
-        while idx != -1:
-            before = idx == 0 or not b[idx - 1].isalnum()
-            after_pos = idx + len(matched)
-            after = after_pos == len(b) or not b[after_pos].isalnum()
-            if before and after:
-                return matched
-            idx = b.find(matched, idx + 1)
-        return None
-    if boundary_chars:
-        idx = b.find(matched)
-        while idx != -1:
-            if _check_boundary_chars(b, idx, len(matched), boundary_chars):
-                return matched
-            idx = b.find(matched, idx + 1)
+        # LCS + whole-word boundary check in both strings. The boundary check in
+        # b prevents 'OFT1' matching inside 'OFT10'; checking a too catches the
+        # case where the LCS is only a substring of the id_val.
+        matched = _lcs(a, b)
+        if not matched or len(matched) < effective_min:
+            return None
+        return matched if _is_whole_word_in(a, matched) and _is_whole_word_in(b, matched) else None
+    if boundary_strings:
+        # Tokenize both strings on the separator strings, find the longest common
+        # token. effective_min uses the longest token in a (not len(a)) so that
+        # IDs containing separators are handled correctly in "all" mode.
+        tokens_a = _tokenize_by_strings(a, boundary_strings)
+        common = set(tokens_a) & set(_tokenize_by_strings(b, boundary_strings))
+        if not common:
+            return None
+        best = max(common, key=len)
+        eff_min = max(len(t) for t in tokens_a) if min_chars is None else min_chars
+        return best if len(best) >= eff_min else None
+    matched = _lcs(a, b)
+    if not matched or len(matched) < effective_min:
         return None
     return matched
 
@@ -265,7 +306,8 @@ def _compute_matches(
     min_chars: int | None,
     tolerate_zeros: bool,
     whole_token: bool,
-    boundary_chars: str,
+    boundary_strings: list[str],
+    case_sensitive: bool = True,
 ) -> _MatchResult:
     if not rows or not files:
         return _MatchResult([], list(files) if files else [], 0, [], False)
@@ -283,7 +325,13 @@ def _compute_matches(
             continue
         for f in files:
             substr = _find_match(
-                id_val, f.stem, min_chars, tolerate_zeros, whole_token, boundary_chars
+                id_val,
+                f.stem,
+                min_chars,
+                tolerate_zeros,
+                whole_token,
+                boundary_strings,
+                case_sensitive,
             )
             if substr is not None:
                 candidate_matches[f].append(
@@ -337,6 +385,21 @@ def _build_result_groups(
             m = c.options[idx]
             groups.setdefault(m.group_name, []).append(m.path)
     return groups
+
+
+def _highlight(full: str, substr: str, accent: str) -> str:
+    """Return HTML with substr bolded in accent colour if found in full (case-insensitive find)."""
+    if not substr:
+        return full
+    idx = full.lower().find(substr.lower())
+    if idx == -1:
+        return full
+    matched_text = full[idx : idx + len(substr)]
+    return (
+        f"{full[:idx]}"
+        f'<b style="color:{accent};">{matched_text}</b>'
+        f"{full[idx + len(substr):]}"
+    )
 
 
 # ── Shared stylesheet helper ──────────────────────────────────────────────────
@@ -433,6 +496,25 @@ def _csv_widget_stylesheet(t) -> str:
         QScrollArea#previewArea > QWidget > QWidget {{
             background-color: {t.display};
         }}
+        QScrollArea#sepChipsArea {{
+            background-color: transparent;
+            border: none;
+        }}
+        QScrollArea#sepChipsArea > QWidget > QWidget {{
+            background-color: transparent;
+        }}
+        QPushButton#sepChip {{
+            background-color: {t.sep};
+            color: {t.text};
+            border: 1px solid {t.muted};
+            border-radius: 10px;
+            padding: 2px 10px;
+            font-size: 11px;
+        }}
+        QPushButton#sepChip:hover {{
+            background-color: {t.muted};
+            color: {t.bg};
+        }}
     """
 
 
@@ -458,6 +540,7 @@ class CsvImportWidget(QWidget):
         self._conflicts: list[_Conflict] = []
         self._last_result: _MatchResult | None = None
         self._expanded_groups: set[str] = set()
+        self._boundary_strings: list[str] = []
         self._tooltip_filter = _TooltipOnDisabled(self)
 
         self._build_ui()
@@ -597,10 +680,10 @@ class CsvImportWidget(QWidget):
         match_len_row.addStretch()
         outer.addLayout(match_len_row)
 
-        # Line B — separator characters
+        # Line B — separator strings
         sep_row = QHBoxLayout()
         sep_row.setSpacing(8)
-        sep_lbl = QLabel("Separator characters:")
+        sep_lbl = QLabel("Separators:")
         sep_lbl.setToolTip("Controls what counts as a word boundary around the matched text.")
         sep_row.addWidget(sep_lbl)
 
@@ -611,34 +694,66 @@ class CsvImportWidget(QWidget):
             "'OFT10'. Recommended for most datasets."
         )
         self._nonalpha_radio.installEventFilter(self._tooltip_filter)
-        self._specify_radio = QRadioButton("specify:")
-        self._specify_radio.setToolTip(
-            "Only these characters are treated as separators between ID tokens. "
-            "Leave the field empty to apply no separator requirement."
+        self._strings_radio = QRadioButton("strings")
+        self._strings_radio.setToolTip(
+            "Only these separator strings define token boundaries. "
+            "Add strings below; leave empty for no boundary requirement."
         )
-        self._specify_radio.installEventFilter(self._tooltip_filter)
+        self._strings_radio.installEventFilter(self._tooltip_filter)
         sep_group = QButtonGroup(self)
         sep_group.addButton(self._nonalpha_radio)
-        sep_group.addButton(self._specify_radio)
+        sep_group.addButton(self._strings_radio)
 
-        self._boundary_edit = QLineEdit()
-        self._boundary_edit.setPlaceholderText("e.g. _-.")
-        self._boundary_edit.setMaximumWidth(120)
-        self._boundary_edit.setEnabled(False)
-        self._boundary_edit.textChanged.connect(self._refresh)
-        self._boundary_edit.installEventFilter(self._tooltip_filter)
-        self._boundary_edit.installEventFilter(_FocusActivatesRadio(self._specify_radio, self))
+        self._sep_edit = QLineEdit()
+        self._sep_edit.setPlaceholderText("separator…")
+        self._sep_edit.setMaximumWidth(120)
+        self._sep_edit.setEnabled(False)
+        self._sep_edit.returnPressed.connect(self._on_add_sep)
+        self._sep_edit.installEventFilter(self._tooltip_filter)
+        self._sep_edit.installEventFilter(_FocusActivatesRadio(self._strings_radio, self))
+
+        self._sep_add_btn = QPushButton("Add")
+        self._sep_add_btn.setObjectName("secondaryButton")
+        self._sep_add_btn.setEnabled(False)
+        self._sep_add_btn.clicked.connect(self._on_add_sep)
+        self._sep_add_btn.installEventFilter(self._tooltip_filter)
 
         self._nonalpha_radio.toggled.connect(self._on_separator_radio_changed)
         sep_row.addWidget(self._nonalpha_radio)
-        sep_row.addWidget(self._specify_radio)
-        sep_row.addWidget(self._boundary_edit)
+        sep_row.addWidget(self._strings_radio)
+        sep_row.addWidget(self._sep_edit)
+        sep_row.addWidget(self._sep_add_btn)
         sep_row.addStretch()
         outer.addLayout(sep_row)
 
-        # Line C — tolerate leading zeros
+        # Chips row (shown only in "strings" mode)
+        self._sep_chips_scroll = QScrollArea()
+        self._sep_chips_scroll.setObjectName("sepChipsArea")
+        self._sep_chips_scroll.setWidgetResizable(True)
+        self._sep_chips_scroll.setFixedHeight(36)
+        self._sep_chips_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._sep_chips_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._sep_chips_scroll.setVisible(False)
+        self._sep_chips_widget = QWidget()
+        self._sep_chips_layout = QHBoxLayout(self._sep_chips_widget)
+        self._sep_chips_layout.setContentsMargins(4, 2, 4, 2)
+        self._sep_chips_layout.setSpacing(4)
+        self._sep_chips_layout.addStretch()
+        self._sep_chips_scroll.setWidget(self._sep_chips_widget)
+        outer.addWidget(self._sep_chips_scroll)
+
+        # Line C — case sensitivity + tolerate leading zeros
         zeros_row = QHBoxLayout()
-        zeros_row.setSpacing(8)
+        zeros_row.setSpacing(16)
+        self._case_check = QCheckBox("Case-sensitive")
+        self._case_check.setChecked(True)
+        self._case_check.setToolTip(
+            "When checked, 'OFT1' and 'oft1' are treated as different — the case "
+            "in the CSV ID and the filename must match. Uncheck to ignore case."
+        )
+        self._case_check.toggled.connect(self._refresh)
+        self._case_check.installEventFilter(self._tooltip_filter)
+        zeros_row.addWidget(self._case_check)
         self._zeros_check = QCheckBox("Tolerate leading zeros")
         self._zeros_check.setToolTip(
             "Treats '001', '01', and '1' as equivalent when matching — useful if "
@@ -691,7 +806,8 @@ class CsvImportWidget(QWidget):
             self._all_radio,
             self._atleast_radio,
             self._nonalpha_radio,
-            self._specify_radio,
+            self._strings_radio,
+            self._case_check,
             self._zeros_check,
             self._add_folder_btn,
             self._add_files_btn,
@@ -705,10 +821,13 @@ class CsvImportWidget(QWidget):
         if not csv_loaded:
             self._min_spin.setToolTip(no_csv_tip)
 
-        # Boundary edit: enabled only when CSV loaded AND "Specify" radio is selected
-        self._boundary_edit.setEnabled(csv_loaded and self._specify_radio.isChecked())
+        # Sep edit + add: enabled only when CSV loaded AND "Strings" radio is selected
+        strings_active = csv_loaded and self._strings_radio.isChecked()
+        self._sep_edit.setEnabled(strings_active)
+        self._sep_add_btn.setEnabled(strings_active)
         if not csv_loaded:
-            self._boundary_edit.setToolTip(no_csv_tip)
+            self._sep_edit.setToolTip(no_csv_tip)
+            self._sep_add_btn.setToolTip(no_csv_tip)
 
     # ── Event handlers ────────────────────────────────────────────────────────
 
@@ -717,8 +836,37 @@ class CsvImportWidget(QWidget):
         self._refresh()
 
     def _on_separator_radio_changed(self, nonalpha_checked: bool) -> None:
-        self._boundary_edit.setEnabled(not nonalpha_checked and bool(self._rows))
+        strings_active = not nonalpha_checked and bool(self._rows)
+        self._sep_edit.setEnabled(strings_active)
+        self._sep_add_btn.setEnabled(strings_active)
+        self._sep_chips_scroll.setVisible(not nonalpha_checked)
         self._refresh()
+
+    def _on_add_sep(self) -> None:
+        sep = self._sep_edit.text()
+        if not sep or sep in self._boundary_strings:
+            return
+        self._boundary_strings.append(sep)
+        self._sep_edit.clear()
+        self._rebuild_chips()
+        self._refresh()
+
+    def _remove_sep(self, sep: str) -> None:
+        if sep in self._boundary_strings:
+            self._boundary_strings.remove(sep)
+        self._rebuild_chips()
+        self._refresh()
+
+    def _rebuild_chips(self) -> None:
+        while self._sep_chips_layout.count() > 1:
+            item = self._sep_chips_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for sep in self._boundary_strings:
+            btn = QPushButton(f"{sep}  ×")
+            btn.setObjectName("sepChip")
+            btn.clicked.connect(lambda checked=False, s=sep: self._remove_sep(s))
+            self._sep_chips_layout.insertWidget(self._sep_chips_layout.count() - 1, btn)
 
     def _load_csv(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -830,7 +978,8 @@ class CsvImportWidget(QWidget):
             min_chars=None if self._all_radio.isChecked() else self._min_spin.value(),
             tolerate_zeros=self._zeros_check.isChecked(),
             whole_token=self._nonalpha_radio.isChecked(),
-            boundary_chars=self._boundary_edit.text().strip(),
+            boundary_strings=self._boundary_strings,
+            case_sensitive=self._case_check.isChecked(),
         )
 
         # Preserve user conflict selections across config changes
@@ -891,10 +1040,12 @@ class CsvImportWidget(QWidget):
                     f'<span style="color:{t.muted};">  ({len(ms)} files)</span>'
                 ]
                 for m in visible:
+                    fname_html = _highlight(m.path.name, m.matched_substr, t.accent)
+                    id_html = _highlight(m.id_val, m.matched_substr, t.accent)
                     lines.append(
-                        f'<span style="color:{t.muted};">&nbsp;&nbsp;&nbsp;&nbsp;{m.path.name}'
+                        f'<span style="color:{t.muted};">&nbsp;&nbsp;&nbsp;&nbsp;{fname_html}'
                         f'</span><span style="color:{t.sep};">'
-                        f"&nbsp; &larr; &nbsp;{m.id_val}&nbsp;({m.matched_substr})</span>"
+                        f"&nbsp; &larr; &nbsp;{id_html}</span>"
                     )
                 group_lbl = QLabel("<br>".join(lines))
                 group_lbl.setTextFormat(Qt.TextFormat.RichText)
