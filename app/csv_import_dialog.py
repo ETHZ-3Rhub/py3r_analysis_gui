@@ -12,7 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -46,6 +46,31 @@ class _TooltipOnDisabled(QObject):
                 QToolTip.showText(event.globalPos(), tip, obj)  # type: ignore[attr-defined]
             return True
         return super().eventFilter(obj, event)
+
+
+class _ElideLeftLabel(QLabel):
+    """QLabel that elides from the left so the filename end is always visible.
+
+    Recomputes the elided display text on every resize. Full path stored as
+    tooltip so the user can always see the complete path on hover.
+    """
+
+    def __init__(self, full_text: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full_text = full_text
+        self.setToolTip(full_text)
+        self.setMinimumWidth(0)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        elided = self.fontMetrics().elidedText(
+            self._full_text, Qt.TextElideMode.ElideLeft, self.width()
+        )
+        QLabel.setText(self, elided)
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().minimumSizeHint()
+        return QSize(0, hint.height())
 
 
 class _FocusActivatesRadio(QObject):
@@ -919,12 +944,14 @@ class CsvImportWidget(QWidget):
         for i, opt in enumerate(conflict.options):
             cb_row = QHBoxLayout()
             cb_row.setContentsMargins(12, 0, 0, 0)
-            cb_row.setSpacing(0)
-            cb = QCheckBox(str(opt.path))
+            cb_row.setSpacing(6)
+            cb = QCheckBox()
             cb.setChecked(isinstance(current, frozenset) and i in current)
             cb.setEnabled(not is_excluded)
+            path_lbl = _ElideLeftLabel(str(opt.path))
+            path_lbl.setStyleSheet(f"color: {t.panel_text};")
             cb_row.addWidget(cb)
-            cb_row.addStretch()
+            cb_row.addWidget(path_lbl, stretch=1)
             file_checks.append(cb)
             vbox.addLayout(cb_row)
 
