@@ -1,20 +1,17 @@
 """Outer dialog for the Advanced loader entry point in GroupManifestPanel.
 
 Mode selector (manifest CSV / directory tree) at top, QStackedWidget for
-content, shared OK/Cancel bar. Directory tree mode is a placeholder stub.
-result_groups() delegates to the active page.
+content, shared OK/Cancel bar. result_groups() delegates to the active page.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
     QHBoxLayout,
-    QLabel,
     QPushButton,
     QRadioButton,
     QStackedWidget,
@@ -23,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.csv_import_dialog import CsvImportWidget, _csv_widget_stylesheet
+from app.directory_tree_widget import DirectoryTreeWidget
 from app.theme import get_theme as _get_theme
 
 
@@ -40,7 +38,7 @@ class AdvancedLoaderDialog(QDialog):
     def result_groups(self) -> dict[str, list[Path]]:
         if self._stack.currentIndex() == 0:
             return self._csv_widget.result_groups()
-        return {}
+        return self._tree_widget.result_groups()
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -69,15 +67,8 @@ class AdvancedLoaderDialog(QDialog):
         self._csv_widget = CsvImportWidget(self._file_exts, self)
         self._stack.addWidget(self._csv_widget)  # page 0
 
-        placeholder = QWidget()
-        ph_layout = QVBoxLayout(placeholder)
-        ph_lbl = QLabel("Coming soon — load groups by walking a directory tree.")
-        ph_lbl.setObjectName("mutedLabel")
-        ph_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ph_layout.addStretch()
-        ph_layout.addWidget(ph_lbl, alignment=Qt.AlignmentFlag.AlignCenter)
-        ph_layout.addStretch()
-        self._stack.addWidget(placeholder)  # page 1
+        self._tree_widget = DirectoryTreeWidget(self._file_exts, self)
+        self._stack.addWidget(self._tree_widget)  # page 1
 
         outer.addWidget(self._stack, stretch=1)
 
@@ -98,6 +89,7 @@ class AdvancedLoaderDialog(QDialog):
 
         # Wiring
         self._csv_widget.validity_changed.connect(self._on_csv_validity_changed)
+        self._tree_widget.validity_changed.connect(self._on_tree_validity_changed)
         self._manifest_radio.toggled.connect(self._on_mode_toggled)
 
     # ── Slots ─────────────────────────────────────────────────────────────────
@@ -108,10 +100,14 @@ class AdvancedLoaderDialog(QDialog):
             self._ok_btn.setEnabled(self._csv_widget.is_valid())
         else:
             self._stack.setCurrentIndex(1)
-            self._ok_btn.setEnabled(False)
+            self._ok_btn.setEnabled(self._tree_widget.is_valid())
 
     def _on_csv_validity_changed(self, valid: bool) -> None:
         if self._stack.currentIndex() == 0:
+            self._ok_btn.setEnabled(valid)
+
+    def _on_tree_validity_changed(self, valid: bool) -> None:
+        if self._stack.currentIndex() == 1:
             self._ok_btn.setEnabled(valid)
 
     def _on_ok(self) -> None:
