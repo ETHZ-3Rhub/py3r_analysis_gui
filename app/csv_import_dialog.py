@@ -1,9 +1,7 @@
-"""Import-groups-from-CSV wizard dialog.
+"""Import-groups-from-CSV wizard.
 
-Opens from the Groups section. User loads a metadata CSV, picks which column
-to match against filenames (longest-common-substring) and which columns define
-group membership, adds the video files, and confirms. Returns the same
-{group_name: [Path, ...]} dict as the normal group flow.
+Primary use: embedded as CsvImportWidget inside AdvancedLoaderDialog.
+Also available standalone via the thin CsvImportDialog wrapper.
 """
 
 from __future__ import annotations
@@ -14,7 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -272,11 +270,114 @@ def _build_result_groups(
     return groups
 
 
-# ── Dialog ────────────────────────────────────────────────────────────────────
+# ── Shared stylesheet helper ──────────────────────────────────────────────────
 
 
-class CsvImportDialog(QDialog):
-    """CSV group import wizard. Call result_groups() after exec() == Accepted."""
+def _csv_widget_stylesheet(t) -> str:
+    """CSS used by any dialog that embeds CsvImportWidget."""
+    return f"""
+        QLabel#mutedLabel {{ color: {t.muted}; font-size: 12px; }}
+        QSpinBox {{
+            background-color: {t.display};
+            color: {t.text};
+            border: 1px solid {t.muted};
+            border-radius: 4px;
+            padding: 3px 3px 3px 8px;
+            min-width: 56px;
+        }}
+        QSpinBox:disabled {{
+            color: {t.muted};
+            background-color: {t.bg};
+            border-color: {t.bg};
+        }}
+        QSpinBox::up-button, QSpinBox::down-button {{
+            subcontrol-origin: border;
+            width: 18px;
+            background-color: {t.sep};
+            border-left: 1px solid {t.muted};
+        }}
+        QSpinBox::up-button {{
+            subcontrol-position: top right;
+            border-bottom: 1px solid {t.muted};
+            border-top-right-radius: 3px;
+        }}
+        QSpinBox::down-button {{
+            subcontrol-position: bottom right;
+            border-bottom-right-radius: 3px;
+        }}
+        QSpinBox::up-button:disabled, QSpinBox::down-button:disabled {{
+            background-color: {t.bg};
+            border-color: {t.bg};
+        }}
+        QCheckBox {{
+            spacing: 6px;
+            color: {t.panel_text};
+        }}
+        QCheckBox:disabled {{ color: {t.muted}; }}
+        QCheckBox::indicator {{
+            width: 12px;
+            height: 12px;
+            border: 1px solid {t.muted};
+            border-radius: 2px;
+            background: transparent;
+        }}
+        QCheckBox::indicator:checked {{
+            background-color: {t.accent};
+            border-color: {t.accent};
+        }}
+        QCheckBox::indicator:disabled {{
+            background-color: transparent;
+            border-color: {t.sep};
+        }}
+        QComboBox:disabled {{
+            color: {t.muted};
+            background-color: {t.bg};
+            border-color: {t.sep};
+        }}
+        QLineEdit:disabled {{
+            color: {t.muted};
+            background-color: {t.bg};
+            border-color: {t.sep};
+        }}
+        QListWidget#csvGroupColsList {{
+            background-color: {t.display};
+            color: {t.text};
+            border: 1px solid {t.muted};
+            border-radius: 5px;
+        }}
+        QListWidget#csvGroupColsList:disabled {{
+            background-color: {t.bg};
+            border-color: {t.sep};
+            color: {t.muted};
+        }}
+        QListWidget#csvGroupColsList::item {{
+            padding: 2px 6px;
+        }}
+        QListWidget#csvGroupColsList::item:selected {{
+            background: transparent;
+        }}
+        QScrollArea#previewArea {{
+            background-color: {t.display};
+            border: 1px solid {t.muted};
+            border-radius: 5px;
+        }}
+        QScrollArea#previewArea > QWidget > QWidget {{
+            background-color: {t.display};
+        }}
+    """
+
+
+# ── Embeddable widget ─────────────────────────────────────────────────────────
+
+
+class CsvImportWidget(QWidget):
+    """CSV group import wizard, embeddable as a page in a larger dialog.
+
+    Emits validity_changed(bool) whenever the importable state changes.
+    Call is_valid() to check current state; result_groups() to get the result.
+    """
+
+    validity_changed = Signal(bool)
 
     def __init__(self, file_exts: set[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -287,24 +388,35 @@ class CsvImportDialog(QDialog):
         self._added_files: list[Path] = []
         self._conflicts: list[_Conflict] = []
         self._last_result: _MatchResult | None = None
-        self._result: dict[str, list[Path]] = {}
         self._tooltip_filter = _TooltipOnDisabled(self)
 
-        self.setWindowTitle("Import groups from CSV")
-        self.resize(660, 620)
         self._build_ui()
-        self._apply_stylesheet()
         self._update_controls_state()
         self._refresh()
 
+    def is_valid(self) -> bool:
+        return (
+            bool(self._rows)
+            and bool(self._match_combo.currentText())
+            and bool(self._selected_group_cols())
+            and all(c.selection is not None for c in self._conflicts)
+            and self._last_result is not None
+            and bool(
+                self._last_result.clean_matches
+                or any(c.selection is not None for c in self._conflicts)
+            )
+        )
+
     def result_groups(self) -> dict[str, list[Path]]:
-        return dict(self._result)
+        if self._last_result is None:
+            return {}
+        return _build_result_groups(self._last_result.clean_matches, self._conflicts)
 
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 16, 16, 14)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(10)
 
         # CSV load row
@@ -437,21 +549,6 @@ class CsvImportDialog(QDialog):
         self._preview_area.setWidgetResizable(True)
         self._preview_area.setMinimumHeight(200)
         outer.addWidget(self._preview_area, stretch=1)
-
-        # Buttons
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setObjectName("secondaryButton")
-        cancel_btn.clicked.connect(self.reject)
-        self._import_btn = QPushButton("Import Groups")
-        self._import_btn.setObjectName("importBtn")
-        self._import_btn.setEnabled(False)
-        self._import_btn.clicked.connect(self._on_import)
-        btn_row.addWidget(cancel_btn)
-        btn_row.addSpacing(8)
-        btn_row.addWidget(self._import_btn)
-        outer.addLayout(btn_row)
 
     # ── State management ──────────────────────────────────────────────────────
 
@@ -592,7 +689,7 @@ class CsvImportDialog(QDialog):
             self._conflicts = []
             self._last_result = None
             self._rebuild_preview(None)
-            self._refresh_import_btn()
+            self._emit_validity()
             return
 
         result = _compute_matches(
@@ -615,7 +712,10 @@ class CsvImportDialog(QDialog):
 
         self._last_result = result
         self._rebuild_preview(result)
-        self._refresh_import_btn()
+        self._emit_validity()
+
+    def _emit_validity(self) -> None:
+        self.validity_changed.emit(self.is_valid())
 
     def _rebuild_preview(self, result: _MatchResult | None) -> None:
         t = _get_theme()
@@ -740,35 +840,53 @@ class CsvImportDialog(QDialog):
             _both_id: int = both_id,
         ) -> None:
             _conflict.selection = _BOTH if btn_id == _both_id else btn_id
-            self._refresh_import_btn()
+            self._emit_validity()
 
         btn_group.idClicked.connect(on_toggled)
         return w
 
-    def _refresh_import_btn(self) -> None:
-        can_import = (
-            bool(self._rows)
-            and bool(self._match_combo.currentText())
-            and bool(self._selected_group_cols())
-            and all(c.selection is not None for c in self._conflicts)
-            and self._last_result is not None
-            and bool(
-                self._last_result.clean_matches
-                or any(c.selection is not None for c in self._conflicts)
-            )
-        )
-        self._import_btn.setEnabled(can_import)
 
-    def _on_import(self) -> None:
-        if self._last_result is None:
-            return
-        groups = _build_result_groups(self._last_result.clean_matches, self._conflicts)
-        if not groups:
-            return
-        self._result = groups
-        self.accept()
+# ── Standalone dialog wrapper ─────────────────────────────────────────────────
 
-    # ── Stylesheet ────────────────────────────────────────────────────────────
+
+class CsvImportDialog(QDialog):
+    """Thin standalone wrapper around CsvImportWidget. Call result_groups() after exec()."""
+
+    def __init__(self, file_exts: set[str], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Import groups from CSV")
+        self.resize(660, 620)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 14)
+        outer.setSpacing(10)
+
+        self._widget = CsvImportWidget(file_exts, self)
+        outer.addWidget(self._widget, stretch=1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("secondaryButton")
+        cancel_btn.clicked.connect(self.reject)
+        self._ok_btn = QPushButton("Import Groups")
+        self._ok_btn.setObjectName("importBtn")
+        self._ok_btn.setEnabled(False)
+        self._ok_btn.clicked.connect(self._on_accept)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addSpacing(8)
+        btn_row.addWidget(self._ok_btn)
+        outer.addLayout(btn_row)
+
+        self._widget.validity_changed.connect(self._ok_btn.setEnabled)
+        self._apply_stylesheet()
+
+    def result_groups(self) -> dict[str, list[Path]]:
+        return self._widget.result_groups()
+
+    def _on_accept(self) -> None:
+        if self._widget.is_valid():
+            self.accept()
 
     def _apply_stylesheet(self) -> None:
         t = _get_theme()
@@ -779,95 +897,8 @@ class CsvImportDialog(QDialog):
                 base = win.styleSheet()
         self.setStyleSheet(
             base
+            + _csv_widget_stylesheet(t)
             + f"""
-            QLabel#mutedLabel {{ color: {t.muted}; font-size: 12px; }}
-            QSpinBox {{
-                background-color: {t.display};
-                color: {t.text};
-                border: 1px solid {t.muted};
-                border-radius: 4px;
-                padding: 3px 3px 3px 8px;
-                min-width: 56px;
-            }}
-            QSpinBox:disabled {{
-                color: {t.muted};
-                background-color: {t.bg};
-                border-color: {t.bg};
-            }}
-            QSpinBox::up-button, QSpinBox::down-button {{
-                subcontrol-origin: border;
-                width: 18px;
-                background-color: {t.sep};
-                border-left: 1px solid {t.muted};
-            }}
-            QSpinBox::up-button {{
-                subcontrol-position: top right;
-                border-bottom: 1px solid {t.muted};
-                border-top-right-radius: 3px;
-            }}
-            QSpinBox::down-button {{
-                subcontrol-position: bottom right;
-                border-bottom-right-radius: 3px;
-            }}
-            QSpinBox::up-button:disabled, QSpinBox::down-button:disabled {{
-                background-color: {t.bg};
-                border-color: {t.bg};
-            }}
-            QCheckBox {{
-                spacing: 6px;
-                color: {t.panel_text};
-            }}
-            QCheckBox:disabled {{ color: {t.muted}; }}
-            QCheckBox::indicator {{
-                width: 12px;
-                height: 12px;
-                border: 1px solid {t.muted};
-                border-radius: 2px;
-                background: transparent;
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: {t.accent};
-                border-color: {t.accent};
-            }}
-            QCheckBox::indicator:disabled {{
-                background-color: transparent;
-                border-color: {t.sep};
-            }}
-            QComboBox:disabled {{
-                color: {t.muted};
-                background-color: {t.bg};
-                border-color: {t.sep};
-            }}
-            QLineEdit:disabled {{
-                color: {t.muted};
-                background-color: {t.bg};
-                border-color: {t.sep};
-            }}
-            QListWidget#csvGroupColsList {{
-                background-color: {t.display};
-                color: {t.text};
-                border: 1px solid {t.muted};
-                border-radius: 5px;
-            }}
-            QListWidget#csvGroupColsList:disabled {{
-                background-color: {t.bg};
-                border-color: {t.sep};
-                color: {t.muted};
-            }}
-            QListWidget#csvGroupColsList::item {{
-                padding: 2px 6px;
-            }}
-            QListWidget#csvGroupColsList::item:selected {{
-                background: transparent;
-            }}
-            QScrollArea#previewArea {{
-                background-color: {t.display};
-                border: 1px solid {t.muted};
-                border-radius: 5px;
-            }}
-            QScrollArea#previewArea > QWidget > QWidget {{
-                background-color: {t.display};
-            }}
             QPushButton#importBtn {{
                 background-color: {t.accent};
                 color: white;
