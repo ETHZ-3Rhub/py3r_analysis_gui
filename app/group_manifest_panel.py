@@ -410,7 +410,7 @@ class GroupManifestPanel(QWidget):
 
         adv_row = QHBoxLayout()
         adv_row.setContentsMargins(0, 0, 0, 0)
-        adv_btn = QPushButton("Advanced loader…")
+        adv_btn = QPushButton("Advanced loader")
         adv_btn.setObjectName("settingsButton")
         adv_btn.setToolTip(
             "Open the advanced loader — import groups from a metadata CSV\n"

@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QScrollArea,
     QSpinBox,
+    QStyle,
+    QStyleOptionViewItem,
     QToolTip,
     QVBoxLayout,
     QWidget,
@@ -46,6 +48,36 @@ class _TooltipOnDisabled(QObject):
                 QToolTip.showText(event.globalPos(), tip, obj)  # type: ignore[attr-defined]
             return True
         return super().eventFilter(obj, event)
+
+
+class _CheckableListWidget(QListWidget):
+    """QListWidget where clicking anywhere on a row toggles its checkbox.
+
+    Normally only clicking the indicator itself toggles the check state.
+    This subclass intercepts mouse presses: if the click lands outside the
+    indicator rect, it toggles manually and skips the normal press (avoiding
+    double-toggle when the indicator IS clicked).
+    """
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        item = self.itemAt(event.pos())
+        if item is not None and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+            opt = QStyleOptionViewItem()
+            opt.initFrom(self)
+            opt.rect = self.visualItemRect(item)
+            opt.features = QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
+            check_rect = self.style().subElementRect(
+                QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, self
+            )
+            if not check_rect.contains(event.pos()):
+                new_state = (
+                    Qt.CheckState.Unchecked
+                    if item.checkState() == Qt.CheckState.Checked
+                    else Qt.CheckState.Checked
+                )
+                item.setCheckState(new_state)
+                return
+        super().mousePressEvent(event)
 
 
 class _ElideLeftLabel(QLabel):
@@ -516,7 +548,7 @@ class CsvImportWidget(QWidget):
         group_layout = QVBoxLayout()
         group_layout.setSpacing(4)
         group_layout.addWidget(QLabel("Group by columns:"))
-        self._group_cols_list = QListWidget()
+        self._group_cols_list = _CheckableListWidget()
         self._group_cols_list.setObjectName("csvGroupColsList")
         self._group_cols_list.setFixedHeight(96)
         self._group_cols_list.itemChanged.connect(self._refresh)
@@ -533,14 +565,14 @@ class CsvImportWidget(QWidget):
         match_len_lbl.setToolTip("Controls how much of the CSV ID must appear in the filename.")
         match_len_row.addWidget(match_len_lbl)
 
-        self._all_radio = QRadioButton("All")
+        self._all_radio = QRadioButton("all")
         self._all_radio.setChecked(True)
         self._all_radio.setToolTip(
             "The full ID from the CSV must be found in the filename. Safest — "
             "use this unless you have a reason to allow partial matches."
         )
         self._all_radio.installEventFilter(self._tooltip_filter)
-        self._atleast_radio = QRadioButton("At least")
+        self._atleast_radio = QRadioButton("at least")
         self._atleast_radio.setToolTip(
             "The matched substring must be at least this many characters long. "
             "Lower values allow more partial matches but risk false positives."
@@ -572,14 +604,14 @@ class CsvImportWidget(QWidget):
         sep_lbl.setToolTip("Controls what counts as a word boundary around the matched text.")
         sep_row.addWidget(sep_lbl)
 
-        self._nonalpha_radio = QRadioButton("All non-alphanumeric")
+        self._nonalpha_radio = QRadioButton("all non-alphanumeric")
         self._nonalpha_radio.setChecked(True)
         self._nonalpha_radio.setToolTip(
             "Prevents partial-word matches — e.g. stops 'OFT1' matching inside "
             "'OFT10'. Recommended for most datasets."
         )
         self._nonalpha_radio.installEventFilter(self._tooltip_filter)
-        self._specify_radio = QRadioButton("Specify:")
+        self._specify_radio = QRadioButton("specify:")
         self._specify_radio.setToolTip(
             "Only these characters are treated as separators between ID tokens. "
             "Leave the field empty to apply no separator requirement."
