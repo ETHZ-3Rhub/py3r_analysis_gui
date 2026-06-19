@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -605,6 +606,12 @@ class CsvImportWidget(QWidget):
                 lbl.setToolTip(tooltip)
             return lbl
 
+        def _sep() -> QFrame:
+            f = QFrame()
+            f.setFrameShape(QFrame.Shape.HLine)
+            f.setStyleSheet(f"color: {t.sep}; margin: 4px 0;")
+            return f
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
@@ -629,6 +636,29 @@ class CsvImportWidget(QWidget):
         csv_row.addWidget(self._csv_name_lbl, stretch=1)
         outer.addLayout(csv_row)
 
+        outer.addWidget(_sep())
+        outer.addWidget(_header("Load data"))
+
+        # File add row
+        files_row = QHBoxLayout()
+        files_row.setSpacing(8)
+        self._add_folder_btn = QPushButton("Add folder…")
+        self._add_folder_btn.setObjectName("secondaryButton")
+        self._add_folder_btn.clicked.connect(self._add_folder)
+        self._add_folder_btn.installEventFilter(self._tooltip_filter)
+        self._add_files_btn = QPushButton("Add files…")
+        self._add_files_btn.setObjectName("secondaryButton")
+        self._add_files_btn.clicked.connect(self._add_files)
+        self._add_files_btn.installEventFilter(self._tooltip_filter)
+        self._file_count_lbl = QLabel("No files added.")
+        self._file_count_lbl.setObjectName("mutedLabel")
+        files_row.addWidget(self._add_folder_btn)
+        files_row.addWidget(self._add_files_btn)
+        files_row.addWidget(self._file_count_lbl)
+        files_row.addStretch()
+        outer.addLayout(files_row)
+
+        outer.addWidget(_sep())
         outer.addWidget(
             _header(
                 "Match manifest / protocol to filenames",
@@ -792,27 +822,6 @@ class CsvImportWidget(QWidget):
         zeros_row.addWidget(self._zeros_check)
         zeros_row.addStretch()
         outer.addLayout(zeros_row)
-
-        outer.addWidget(_header("Load data"))
-
-        # File add row
-        files_row = QHBoxLayout()
-        files_row.setSpacing(8)
-        self._add_folder_btn = QPushButton("Add folder…")
-        self._add_folder_btn.setObjectName("secondaryButton")
-        self._add_folder_btn.clicked.connect(self._add_folder)
-        self._add_folder_btn.installEventFilter(self._tooltip_filter)
-        self._add_files_btn = QPushButton("Add files…")
-        self._add_files_btn.setObjectName("secondaryButton")
-        self._add_files_btn.clicked.connect(self._add_files)
-        self._add_files_btn.installEventFilter(self._tooltip_filter)
-        self._file_count_lbl = QLabel("No files added.")
-        self._file_count_lbl.setObjectName("mutedLabel")
-        files_row.addWidget(self._add_folder_btn)
-        files_row.addWidget(self._add_files_btn)
-        files_row.addWidget(self._file_count_lbl)
-        files_row.addStretch()
-        outer.addLayout(files_row)
 
         # Preview
         self._preview_area = QScrollArea()
