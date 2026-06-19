@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import csv
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -133,117 +133,124 @@ class _FocusActivatesRadio(QObject):
 
 
 def _apply_zero_tolerance(s: str) -> str:
-    """Strip leading zeros from each contiguous digit run: '0012' → '12'."""
+    """Strip leading zeros from each numeric run: '0012' → '12', 'OFT01' → 'OFT1'."""
     return re.sub(r"(?<!\d)0+(\d)", r"\1", s)
 
 
-def _lcs(a: str, b: str) -> str:
-    """Longest common substring of a and b via O(n*m) two-row DP."""
-    if not a or not b:
-        return ""
+def _preprocess_tokens(
+    s: str,
+    nonalpha: bool,
+    boundary_strings: list[str],
+    case_sensitive: bool,
+    tolerate_zeros: bool,
+    ignore_containing: list[str],
+) -> list[str]:
+    """Tokenise and normalise s; drop ignored tokens. Returns the token list.
+
+    Pipeline: case-fold → tokenise (on non-alphanumeric runs if nonalpha, else
+    on the boundary strings) → strip leading zeros per token → drop any token
+    that contains an ignore string.
+    """
+    if not case_sensitive:
+        s = s.lower()
+    if nonalpha:
+        tokens = re.findall(r"[a-zA-Z0-9]+", s)
+    else:
+        seps = [b if case_sensitive else b.lower() for b in boundary_strings if b]
+        if seps:
+            pattern = "|".join(re.escape(sep) for sep in sorted(seps, key=len, reverse=True))
+            tokens = [t for t in re.split(pattern, s) if t]
+        else:
+            tokens = [s] if s else []
+    if tolerate_zeros:
+        tokens = [_apply_zero_tolerance(t) for t in tokens]
+    ignore = [g if case_sensitive else g.lower() for g in ignore_containing if g]
+    if ignore:
+        tokens = [t for t in tokens if not any(g in t for g in ignore)]
+    return tokens
+
+
+def _token_lcs_subsequence(a: list[str], b: list[str]) -> list[str]:
+    """Longest common subsequence of token lists a and b (order kept, gaps allowed)."""
     m, n = len(a), len(b)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m - 1, -1, -1):
+        for j in range(n - 1, -1, -1):
+            dp[i][j] = dp[i + 1][j + 1] + 1 if a[i] == b[j] else max(dp[i + 1][j], dp[i][j + 1])
+    out: list[str] = []
+    i = j = 0
+    while i < m and j < n:
+        if a[i] == b[j]:
+            out.append(a[i])
+            i += 1
+            j += 1
+        elif dp[i + 1][j] >= dp[i][j + 1]:
+            i += 1
+        else:
+            j += 1
+    return out
+
+
+def _token_common_subarray(a: list[str], b: list[str]) -> list[str]:
+    """Longest contiguous common subarray of token lists a and b via O(n*m) DP."""
+    if not a or not b:
+        return []
+    n = len(b)
     best, best_end = 0, 0
     prev = [0] * (n + 1)
-    for i in range(m):
+    for i in range(len(a)):
         curr = [0] * (n + 1)
         for j in range(n):
             if a[i] == b[j]:
                 curr[j + 1] = prev[j] + 1
                 if curr[j + 1] > best:
                     best = curr[j + 1]
-                    best_end = j + 1
+                    best_end = i + 1
         prev = curr
-    return b[best_end - best : best_end]
+    return a[best_end - best : best_end]
 
 
-def _tokenize_alphanumeric(s: str) -> list[str]:
-    return re.findall(r"[a-zA-Z0-9]+", s)
-
-
-def _is_whole_word_in(s: str, sub: str) -> bool:
-    """Return True if sub appears in s bounded by non-alphanumeric chars or string boundaries."""
-    idx = s.find(sub)
-    while idx != -1:
-        before = idx == 0 or not s[idx - 1].isalnum()
-        after_pos = idx + len(sub)
-        after = after_pos == len(s) or not s[after_pos].isalnum()
-        if before and after:
-            return True
-        idx = s.find(sub, idx + 1)
-    return False
-
-
-def _tokenize_by_strings(s: str, separators: list[str]) -> list[str]:
-    """Split s on separator strings (longer separators first, non-overlapping left-to-right)."""
-    if not separators:
-        return [s] if s else []
-    seps = sorted(separators, key=len, reverse=True)
-    tokens: list[str] = []
-    i = 0
-    chunk_start = 0
-    while i < len(s):
-        matched_sep: str | None = None
-        for sep in seps:
-            if s[i : i + len(sep)] == sep:
-                matched_sep = sep
-                break
-        if matched_sep is not None:
-            token = s[chunk_start:i]
-            if token:
-                tokens.append(token)
-            i += len(matched_sep)
-            chunk_start = i
-        else:
-            i += 1
-    tail = s[chunk_start:]
-    if tail:
-        tokens.append(tail)
-    return tokens
+def _token_window_match(a: list[str], b: list[str], min_n: int) -> list[str]:
+    """Largest N≥min_n with a same-multiset window a[i:i+N] / b[j:j+N]; those tokens or []."""
+    for size in range(min(len(a), len(b)), min_n - 1, -1):
+        for i in range(len(a) - size + 1):
+            wa = Counter(a[i : i + size])
+            for j in range(len(b) - size + 1):
+                if Counter(b[j : j + size]) == wa:
+                    return a[i : i + size]
+    return []
 
 
 def _find_match(
-    id_val: str,
-    stem: str,
-    min_chars: int | None,
-    tolerate_zeros: bool,
-    whole_token: bool,
-    boundary_strings: list[str],
-    case_sensitive: bool = True,
-) -> str | None:
-    """Return matched token or None.
+    handle_tokens: list[str],
+    stem_tokens: list[str],
+    min_tokens: int,
+    match_order: bool,
+    match_uninterrupted: bool,
+) -> list[str] | None:
+    """Return the matched token list, or None if the threshold isn't met.
 
-    For whole_token and boundary_strings modes: tokenizes both strings and
-    returns the longest common token (checked against min_chars). For plain
-    mode: returns the longest common substring via LCS.
+    The manifest ID (handle) is the needle; the file stem the haystack. The two
+    flags select the algorithm and apply bidirectionally — the structure must
+    hold in both token sequences. min_tokens == 0 means 'all' (threshold =
+    len(handle_tokens)).
     """
-    a = id_val if case_sensitive else id_val.lower()
-    b = stem if case_sensitive else stem.lower()
-    a = _apply_zero_tolerance(a) if tolerate_zeros else a
-    b = _apply_zero_tolerance(b) if tolerate_zeros else b
-    effective_min = len(a) if min_chars is None else min_chars
-    if whole_token:
-        # LCS + whole-word boundary check in both strings. The boundary check in
-        # b prevents 'OFT1' matching inside 'OFT10'; checking a too catches the
-        # case where the LCS is only a substring of the id_val.
-        matched = _lcs(a, b)
-        if not matched or len(matched) < effective_min:
-            return None
-        return matched if _is_whole_word_in(a, matched) and _is_whole_word_in(b, matched) else None
-    if boundary_strings:
-        # Tokenize both strings on the separator strings, find the longest common
-        # token. effective_min uses the longest token in a (not len(a)) so that
-        # IDs containing separators are handled correctly in "all" mode.
-        tokens_a = _tokenize_by_strings(a, boundary_strings)
-        common = set(tokens_a) & set(_tokenize_by_strings(b, boundary_strings))
-        if not common:
-            return None
-        best = max(common, key=len)
-        eff_min = max(len(t) for t in tokens_a) if min_chars is None else min_chars
-        return best if len(best) >= eff_min else None
-    matched = _lcs(a, b)
-    if not matched or len(matched) < effective_min:
+    if not handle_tokens or not stem_tokens:
         return None
-    return matched
+    effective_min = len(handle_tokens) if min_tokens == 0 else min_tokens
+    if effective_min <= 0:
+        return None
+
+    if not match_order and not match_uninterrupted:
+        matched = sorted(set(handle_tokens) & set(stem_tokens))
+    elif match_order and not match_uninterrupted:
+        matched = _token_lcs_subsequence(handle_tokens, stem_tokens)
+    elif not match_order and match_uninterrupted:
+        matched = _token_window_match(handle_tokens, stem_tokens, effective_min)
+    else:
+        matched = _token_common_subarray(handle_tokens, stem_tokens)
+
+    return matched if len(matched) >= effective_min else None
 
 
 def _col_values_summary(unique_vals: list[str], max_shown: int = 4) -> str:
@@ -288,7 +295,7 @@ def _read_csv(path: Path) -> tuple[list[dict], list[str], str]:
 class _Match:
     path: Path
     id_val: str
-    matched_substr: str
+    matched_tokens: list[str]
     group_name: str
 
 
@@ -318,17 +325,28 @@ def _compute_matches(
     match_col: str,
     group_cols: list[str],
     files: list[Path],
-    min_chars: int | None,
-    tolerate_zeros: bool,
-    whole_token: bool,
+    *,
+    nonalpha: bool,
     boundary_strings: list[str],
-    case_sensitive: bool = True,
+    case_sensitive: bool,
+    tolerate_zeros: bool,
+    ignore_containing: list[str],
+    min_tokens: int,
+    match_order: bool,
+    match_uninterrupted: bool,
 ) -> _MatchResult:
     if not rows or not files:
         return _MatchResult([], list(files) if files else [], 0, [], False)
 
     rows_skipped_blank = 0
     candidate_matches: dict[Path, list[_Match]] = defaultdict(list)
+
+    stem_tokens = {
+        f: _preprocess_tokens(
+            f.stem, nonalpha, boundary_strings, case_sensitive, tolerate_zeros, ignore_containing
+        )
+        for f in files
+    }
 
     for row in rows:
         id_val = str(row.get(match_col, "")).strip()
@@ -338,19 +356,16 @@ def _compute_matches(
         if group_name is None:
             rows_skipped_blank += 1
             continue
+        handle_tokens = _preprocess_tokens(
+            id_val, nonalpha, boundary_strings, case_sensitive, tolerate_zeros, ignore_containing
+        )
         for f in files:
-            substr = _find_match(
-                id_val,
-                f.stem,
-                min_chars,
-                tolerate_zeros,
-                whole_token,
-                boundary_strings,
-                case_sensitive,
+            matched = _find_match(
+                handle_tokens, stem_tokens[f], min_tokens, match_order, match_uninterrupted
             )
-            if substr is not None:
+            if matched is not None:
                 candidate_matches[f].append(
-                    _Match(path=f, id_val=id_val, matched_substr=substr, group_name=group_name)
+                    _Match(path=f, id_val=id_val, matched_tokens=matched, group_name=group_name)
                 )
 
     files_not_in_csv = [f for f in files if not candidate_matches[f]]
@@ -402,19 +417,33 @@ def _build_result_groups(
     return groups
 
 
-def _highlight(full: str, substr: str, accent: str) -> str:
-    """Return HTML with substr bolded in accent colour if found in full (case-insensitive find)."""
-    if not substr:
+def _highlight(full: str, tokens: list[str], accent: str) -> str:
+    """Bold each token's first case-insensitive occurrence in full (best-effort).
+
+    Tokens are normalised (case-folded, zero-stripped) so some may not appear
+    verbatim in the raw text — those are silently left unbolded.
+    """
+    low = full.lower()
+    spans: list[tuple[int, int]] = []
+    for tok in tokens:
+        if not tok:
+            continue
+        idx = low.find(tok.lower())
+        if idx != -1:
+            spans.append((idx, idx + len(tok)))
+    if not spans:
         return full
-    idx = full.lower().find(substr.lower())
-    if idx == -1:
-        return full
-    matched_text = full[idx : idx + len(substr)]
-    return (
-        f"{full[:idx]}"
-        f'<b style="color:{accent};">{matched_text}</b>'
-        f"{full[idx + len(substr):]}"
-    )
+    spans.sort()
+    out: list[str] = []
+    pos = 0
+    for start, end in spans:
+        if start < pos:
+            continue  # overlaps an already-bolded span
+        out.append(full[pos:start])
+        out.append(f'<b style="color:{accent};">{full[start:end]}</b>')
+        pos = end
+    out.append(full[pos:])
+    return "".join(out)
 
 
 # ── Shared stylesheet helper ──────────────────────────────────────────────────
@@ -578,6 +607,7 @@ class CsvImportWidget(QWidget):
         self._last_result: _MatchResult | None = None
         self._expanded_groups: set[str] = set()
         self._boundary_strings: list[str] = []
+        self._ignore_strings: list[str] = []
         self._tooltip_filter = _TooltipOnDisabled(self)
 
         self._build_ui()
@@ -736,63 +766,23 @@ class CsvImportWidget(QWidget):
 
         outer.addLayout(col_row)
 
-        # Line A — number of characters to match
-        match_len_row = QHBoxLayout()
-        match_len_row.setSpacing(8)
-        match_len_lbl = QLabel("Number of characters to match:")
-        match_len_lbl.setToolTip("Controls how much of the CSV ID must appear in the filename.")
-        match_len_row.addWidget(match_len_lbl)
-
-        self._all_radio = QRadioButton("all")
-        self._all_radio.setChecked(True)
-        self._all_radio.setToolTip(
-            "The full ID from the CSV must be found in the filename. Safest — "
-            "use this unless you have a reason to allow partial matches."
-        )
-        self._all_radio.installEventFilter(self._tooltip_filter)
-        self._atleast_radio = QRadioButton("at least")
-        self._atleast_radio.setToolTip(
-            "The matched substring must be at least this many characters long. "
-            "Lower values allow more partial matches but risk false positives."
-        )
-        self._atleast_radio.installEventFilter(self._tooltip_filter)
-        matchlen_group = QButtonGroup(self)
-        matchlen_group.addButton(self._all_radio)
-        matchlen_group.addButton(self._atleast_radio)
-
-        self._min_spin = QSpinBox()
-        self._min_spin.setRange(1, 999)
-        self._min_spin.setValue(3)
-        self._min_spin.setEnabled(False)
-        self._min_spin.valueChanged.connect(self._refresh)
-        self._min_spin.installEventFilter(self._tooltip_filter)
-        self._min_spin.installEventFilter(_FocusActivatesRadio(self._atleast_radio, self))
-
-        self._all_radio.toggled.connect(self._on_matchlen_radio_changed)
-        match_len_row.addWidget(self._all_radio)
-        match_len_row.addWidget(self._atleast_radio)
-        match_len_row.addWidget(self._min_spin)
-        match_len_row.addStretch()
-        outer.addLayout(match_len_row)
-
-        # Line B — separator strings
+        # Row 1 — separators
         sep_row = QHBoxLayout()
         sep_row.setSpacing(8)
         sep_lbl = QLabel("Separators:")
-        sep_lbl.setToolTip("Controls what counts as a word boundary around the matched text.")
+        sep_lbl.setToolTip("How filenames and IDs are split into tokens before matching.")
         sep_row.addWidget(sep_lbl)
 
         self._nonalpha_radio = QRadioButton("all non-alphanumeric")
         self._nonalpha_radio.setChecked(True)
         self._nonalpha_radio.setToolTip(
-            "Prevents partial-word matches — e.g. stops 'OFT1' matching inside "
-            "'OFT10'. Recommended for most datasets."
+            "Split on any run of non-alphanumeric characters. Recommended for most datasets."
         )
         self._nonalpha_radio.installEventFilter(self._tooltip_filter)
         self._strings_radio = QRadioButton("strings")
         self._strings_radio.setToolTip(
-            "Only these separator strings define token boundaries. "
-            "Add strings below; leave empty for no boundary requirement."
+            "Split only on the separator strings you add below — useful when your "
+            "tokens themselves contain punctuation."
         )
         self._strings_radio.installEventFilter(self._tooltip_filter)
         sep_group = QButtonGroup(self)
@@ -821,7 +811,7 @@ class CsvImportWidget(QWidget):
         sep_row.addStretch()
         outer.addLayout(sep_row)
 
-        # Chips row (shown only in "strings" mode)
+        # Separator chips (shown only in "strings" mode)
         self._sep_chips_scroll = QScrollArea()
         self._sep_chips_scroll.setObjectName("sepChipsArea")
         self._sep_chips_scroll.setWidgetResizable(True)
@@ -836,6 +826,105 @@ class CsvImportWidget(QWidget):
         self._sep_chips_layout.addStretch()
         self._sep_chips_scroll.setWidget(self._sep_chips_widget)
         outer.addWidget(self._sep_chips_scroll)
+
+        # Row 2 — how many ID tokens must be found, and order/contiguity
+        idtok_row = QHBoxLayout()
+        idtok_row.setSpacing(8)
+        idtok_lbl = QLabel("ID tokens in filename:")
+        idtok_lbl.setToolTip(
+            "How many of the manifest ID's tokens must be found in the filename. "
+            "The filename may carry extra tokens, which are ignored."
+        )
+        idtok_row.addWidget(idtok_lbl)
+
+        self._all_radio = QRadioButton("all")
+        self._all_radio.setChecked(True)
+        self._all_radio.setToolTip(
+            "Every token of the manifest ID must be found in the filename. Safest "
+            "— use this unless you have a reason to allow partial matches."
+        )
+        self._all_radio.installEventFilter(self._tooltip_filter)
+        self._atleast_radio = QRadioButton("at least")
+        self._atleast_radio.setToolTip(
+            "At least this many of the ID's tokens must be found. Lower values "
+            "allow more partial matches but risk false positives."
+        )
+        self._atleast_radio.installEventFilter(self._tooltip_filter)
+        tokcount_group = QButtonGroup(self)
+        tokcount_group.addButton(self._all_radio)
+        tokcount_group.addButton(self._atleast_radio)
+
+        self._min_spin = QSpinBox()
+        self._min_spin.setRange(1, 99)
+        self._min_spin.setValue(1)
+        self._min_spin.setEnabled(False)
+        self._min_spin.valueChanged.connect(self._refresh)
+        self._min_spin.installEventFilter(self._tooltip_filter)
+        self._min_spin.installEventFilter(_FocusActivatesRadio(self._atleast_radio, self))
+        self._all_radio.toggled.connect(self._on_tokcount_radio_changed)
+
+        idtok_row.addWidget(self._all_radio)
+        idtok_row.addWidget(self._atleast_radio)
+        idtok_row.addWidget(self._min_spin)
+        idtok_row.addSpacing(16)
+
+        self._order_check = QCheckBox("Match order")
+        self._order_check.setToolTip(
+            "Matched tokens must appear in the same relative order in both the ID and the filename."
+        )
+        self._order_check.toggled.connect(self._refresh)
+        self._order_check.installEventFilter(self._tooltip_filter)
+        self._unint_check = QCheckBox("Match uninterrupted")
+        self._unint_check.setToolTip(
+            "Matched tokens must be contiguous — no other tokens interleaved — in "
+            "both the ID and the filename."
+        )
+        self._unint_check.toggled.connect(self._refresh)
+        self._unint_check.installEventFilter(self._tooltip_filter)
+        idtok_row.addWidget(self._order_check)
+        idtok_row.addWidget(self._unint_check)
+        idtok_row.addStretch()
+        outer.addLayout(idtok_row)
+
+        # Row 3 — ignore tokens containing
+        ignore_row = QHBoxLayout()
+        ignore_row.setSpacing(8)
+        ignore_lbl = QLabel("Ignore tokens containing:")
+        ignore_lbl.setToolTip(
+            "Drop any token (from the ID or the filename) that contains one of "
+            "these strings before matching — e.g. a shared date, batch, or cohort tag."
+        )
+        ignore_row.addWidget(ignore_lbl)
+
+        self._ignore_edit = QLineEdit()
+        self._ignore_edit.setPlaceholderText("string…")
+        self._ignore_edit.setMaximumWidth(120)
+        self._ignore_edit.returnPressed.connect(self._on_add_ignore)
+        self._ignore_edit.installEventFilter(self._tooltip_filter)
+        self._ignore_add_btn = QPushButton("Add")
+        self._ignore_add_btn.setObjectName("secondaryButton")
+        self._ignore_add_btn.clicked.connect(self._on_add_ignore)
+        self._ignore_add_btn.installEventFilter(self._tooltip_filter)
+        ignore_row.addWidget(self._ignore_edit)
+        ignore_row.addWidget(self._ignore_add_btn)
+        ignore_row.addStretch()
+        outer.addLayout(ignore_row)
+
+        # Ignore chips (shown only when at least one string is set)
+        self._ignore_chips_scroll = QScrollArea()
+        self._ignore_chips_scroll.setObjectName("sepChipsArea")
+        self._ignore_chips_scroll.setWidgetResizable(True)
+        self._ignore_chips_scroll.setFixedHeight(36)
+        self._ignore_chips_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._ignore_chips_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._ignore_chips_scroll.setVisible(False)
+        self._ignore_chips_widget = QWidget()
+        self._ignore_chips_layout = QHBoxLayout(self._ignore_chips_widget)
+        self._ignore_chips_layout.setContentsMargins(4, 2, 4, 2)
+        self._ignore_chips_layout.setSpacing(4)
+        self._ignore_chips_layout.addStretch()
+        self._ignore_chips_scroll.setWidget(self._ignore_chips_widget)
+        outer.addWidget(self._ignore_chips_scroll)
 
         # Line C — case sensitivity + tolerate leading zeros
         zeros_row = QHBoxLayout()
@@ -879,8 +968,12 @@ class CsvImportWidget(QWidget):
             self._group_cols_list,
             self._all_radio,
             self._atleast_radio,
+            self._order_check,
+            self._unint_check,
             self._nonalpha_radio,
             self._strings_radio,
+            self._ignore_edit,
+            self._ignore_add_btn,
             self._case_check,
             self._zeros_check,
             self._add_folder_btn,
@@ -905,7 +998,7 @@ class CsvImportWidget(QWidget):
 
     # ── Event handlers ────────────────────────────────────────────────────────
 
-    def _on_matchlen_radio_changed(self, all_checked: bool) -> None:
+    def _on_tokcount_radio_changed(self, all_checked: bool) -> None:
         self._min_spin.setEnabled(not all_checked and bool(self._rows))
         self._refresh()
 
@@ -941,6 +1034,33 @@ class CsvImportWidget(QWidget):
             btn.setObjectName("sepChip")
             btn.clicked.connect(lambda checked=False, s=sep: self._remove_sep(s))
             self._sep_chips_layout.insertWidget(self._sep_chips_layout.count() - 1, btn)
+
+    def _on_add_ignore(self) -> None:
+        s = self._ignore_edit.text()
+        if not s or s in self._ignore_strings:
+            return
+        self._ignore_strings.append(s)
+        self._ignore_edit.clear()
+        self._rebuild_ignore_chips()
+        self._refresh()
+
+    def _remove_ignore(self, s: str) -> None:
+        if s in self._ignore_strings:
+            self._ignore_strings.remove(s)
+        self._rebuild_ignore_chips()
+        self._refresh()
+
+    def _rebuild_ignore_chips(self) -> None:
+        while self._ignore_chips_layout.count() > 1:
+            item = self._ignore_chips_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for s in self._ignore_strings:
+            btn = QPushButton(f"{s}  ×")
+            btn.setObjectName("sepChip")
+            btn.clicked.connect(lambda checked=False, v=s: self._remove_ignore(v))
+            self._ignore_chips_layout.insertWidget(self._ignore_chips_layout.count() - 1, btn)
+        self._ignore_chips_scroll.setVisible(bool(self._ignore_strings))
 
     def _load_csv(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1093,11 +1213,14 @@ class CsvImportWidget(QWidget):
             match_col,
             group_cols,
             self._added_files,
-            min_chars=None if self._all_radio.isChecked() else self._min_spin.value(),
-            tolerate_zeros=self._zeros_check.isChecked(),
-            whole_token=self._nonalpha_radio.isChecked(),
+            nonalpha=self._nonalpha_radio.isChecked(),
             boundary_strings=self._boundary_strings,
             case_sensitive=self._case_check.isChecked(),
+            tolerate_zeros=self._zeros_check.isChecked(),
+            ignore_containing=self._ignore_strings,
+            min_tokens=0 if self._all_radio.isChecked() else self._min_spin.value(),
+            match_order=self._order_check.isChecked(),
+            match_uninterrupted=self._unint_check.isChecked(),
         )
 
         # Preserve user conflict selections across config changes
@@ -1158,8 +1281,8 @@ class CsvImportWidget(QWidget):
                     f'<span style="color:{t.muted};">  ({len(ms)} files)</span>'
                 ]
                 for m in visible:
-                    fname_html = _highlight(m.path.name, m.matched_substr, t.accent)
-                    id_html = _highlight(m.id_val, m.matched_substr, t.accent)
+                    fname_html = _highlight(m.path.name, m.matched_tokens, t.accent)
+                    id_html = _highlight(m.id_val, m.matched_tokens, t.accent)
                     lines.append(
                         f'<span style="color:{t.muted};">&nbsp;&nbsp;&nbsp;&nbsp;{fname_html}'
                         f'</span><span style="color:{t.sep};">'
