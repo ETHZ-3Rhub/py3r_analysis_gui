@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -33,11 +34,14 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStyle,
     QStyleOptionViewItem,
+    QTableWidget,
+    QTableWidgetItem,
     QToolTip,
     QVBoxLayout,
     QWidget,
 )
 
+from app.group_manifest_panel import _FOLDER_TEXT_COLOURS, _ElideLeftDelegate
 from app.theme import get_theme as _get_theme
 
 # ── Tooltip-on-disabled shim (same pattern as app/gating.py) ─────────────────
@@ -499,6 +503,15 @@ def _csv_widget_stylesheet(t) -> str:
         QListWidget#csvGroupColsList::item:selected {{
             background: transparent;
         }}
+        QTableWidget#filePreviewTable {{
+            background-color: {t.display};
+            border: 1px solid {t.muted};
+            border-radius: 4px;
+            font-size: 11px;
+        }}
+        QTableWidget#filePreviewTable::item {{
+            padding: 1px 4px;
+        }}
         QListWidget#matchPreviewList {{
             background-color: {t.display};
             color: {t.muted};
@@ -639,9 +652,12 @@ class CsvImportWidget(QWidget):
         outer.addWidget(_sep())
         outer.addWidget(_header("Load data"))
 
-        # File add row
+        # Load data: buttons on left, filename preview on right
         files_row = QHBoxLayout()
-        files_row.setSpacing(8)
+        files_row.setSpacing(14)
+
+        files_left = QVBoxLayout()
+        files_left.setSpacing(4)
         self._add_folder_btn = QPushButton("Add folder…")
         self._add_folder_btn.setObjectName("secondaryButton")
         self._add_folder_btn.clicked.connect(self._add_folder)
@@ -652,10 +668,31 @@ class CsvImportWidget(QWidget):
         self._add_files_btn.installEventFilter(self._tooltip_filter)
         self._file_count_lbl = QLabel("No files added.")
         self._file_count_lbl.setObjectName("mutedLabel")
-        files_row.addWidget(self._add_folder_btn)
-        files_row.addWidget(self._add_files_btn)
-        files_row.addWidget(self._file_count_lbl)
-        files_row.addStretch()
+        files_left.addWidget(self._add_folder_btn)
+        files_left.addWidget(self._add_files_btn)
+        files_left.addWidget(self._file_count_lbl)
+        files_left.addStretch()
+        files_row.addLayout(files_left, stretch=1)
+
+        self._file_preview = QTableWidget(0, 2)
+        self._file_preview.setObjectName("filePreviewTable")
+        self._file_preview.setFixedHeight(88)
+        self._file_preview.horizontalHeader().hide()
+        self._file_preview.verticalHeader().hide()
+        self._file_preview.setShowGrid(False)
+        self._file_preview.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._file_preview.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._file_preview.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._file_preview.setItemDelegateForColumn(0, _ElideLeftDelegate(self._file_preview))
+        self._file_preview.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Interactive
+        )
+        self._file_preview.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self._file_preview.setColumnWidth(0, 110)
+        files_row.addWidget(self._file_preview, stretch=1)
+
         outer.addLayout(files_row)
 
         outer.addWidget(_sep())
@@ -1012,6 +1049,23 @@ class CsvImportWidget(QWidget):
         n = len(self._added_files)
         noun = "file" if n == 1 else "files"
         self._file_count_lbl.setText(f"{n} {noun} added.")
+        folder_colour: dict[Path, QBrush] = {}
+        for p in self._added_files:
+            if p.parent not in folder_colour:
+                idx = len(folder_colour) % len(_FOLDER_TEXT_COLOURS)
+                folder_colour[p.parent] = QBrush(QColor(_FOLDER_TEXT_COLOURS[idx]))
+        self._file_preview.setRowCount(len(self._added_files))
+        for row, p in enumerate(self._added_files):
+            colour = folder_colour[p.parent]
+            dir_item = QTableWidgetItem(str(p.parent) + "/")
+            dir_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            dir_item.setForeground(colour)
+            dir_item.setToolTip(str(p.parent))
+            name_item = QTableWidgetItem(p.name)
+            name_item.setForeground(colour)
+            name_item.setToolTip(str(p))
+            self._file_preview.setItem(row, 0, dir_item)
+            self._file_preview.setItem(row, 1, name_item)
         self._refresh()
 
     # ── Matching + preview ────────────────────────────────────────────────────
