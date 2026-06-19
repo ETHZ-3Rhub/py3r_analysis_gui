@@ -408,6 +408,19 @@ class GroupManifestPanel(QWidget):
         self._group_list.setObjectName("manifestGroupList")
         layout.addWidget(self._group_list, stretch=1)
 
+        adv_row = QHBoxLayout()
+        adv_row.setContentsMargins(0, 0, 0, 0)
+        adv_btn = QPushButton("Advanced loader")
+        adv_btn.setObjectName("settingsButton")
+        adv_btn.setToolTip(
+            "Open the advanced loader — import groups from a metadata CSV\n"
+            "or (coming soon) by walking a directory tree."
+        )
+        adv_btn.clicked.connect(self._open_advanced_loader)
+        adv_row.addStretch()
+        adv_row.addWidget(adv_btn)
+        layout.addLayout(adv_row)
+
         add_row = QHBoxLayout()
         add_row.setSpacing(6)
         from_folder_btn = QPushButton("+ New group from folder…")
@@ -504,6 +517,29 @@ class GroupManifestPanel(QWidget):
         if not paths:
             return
         self._create_group(default_name="Group", paths=paths)
+
+    def _open_advanced_loader(self) -> None:
+        from app.advanced_loader_dialog import AdvancedLoaderDialog
+
+        dlg = AdvancedLoaderDialog(self._file_exts, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._bulk_add_groups(dlg.result_groups())
+
+    def _bulk_add_groups(self, groups: dict[str, list[Path]]) -> None:
+        for name, paths in groups.items():
+            self._add_group_direct(name, paths)
+
+    def _add_group_direct(self, name: str, paths: list[Path]) -> None:
+        """Like _create_group but skips the rename prompt — used for CSV import."""
+        base = name
+        suffix = 2
+        while name in self._manifests:
+            name = f"{base} {suffix}"
+            suffix += 1
+        self._manifests[name] = []
+        self._build_group_item(name)
+        self.group_added.emit(name)
+        self._add_paths(name, paths)
 
     def _create_group(self, default_name: str, paths: list[Path]) -> None:
         """Groups are always born holding files — naming comes after, as a
