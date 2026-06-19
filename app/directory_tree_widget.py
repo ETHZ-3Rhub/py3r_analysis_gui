@@ -1,8 +1,8 @@
 """Directory-tree group loader widget.
 
 Walks a root directory to depth range [min, max] and collects files into
-groups — one group per folder that contains matching files. Group name =
-path segments from root to that folder joined with '_'.
+groups — one group per folder that contains matching files. Group name is
+built from selected depth levels joined with '_'.
 
 Embeddable as page 1 of AdvancedLoaderDialog's QStackedWidget.
 Same public API as CsvImportWidget: validity_changed signal, is_valid(),
@@ -19,9 +19,13 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStyle,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -36,17 +40,19 @@ def _walk_tree(
     min_depth: int,
     max_depth: int,
     file_exts: set[str],
-) -> dict[str, list[Path]]:
-    """Return {group_name: [Path, ...]} for all folders in [min_depth, max_depth]
-    that contain at least one matching file. Groups are ordered by path."""
-    groups: dict[str, list[Path]] = {}
+) -> list[tuple[tuple[str, ...], list[Path]]]:
+    """Return [(parts, [Path, ...]), ...] for all matching folders in [min_depth, max_depth].
+
+    parts = path segments from root to the folder (1-based depth).
+    """
+    entries: list[tuple[tuple[str, ...], list[Path]]] = []
     try:
         children = sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith("."))
     except (PermissionError, OSError):
-        return {}
+        return []
     for child in children:
-        _recurse(root, child, 1, min_depth, max_depth, file_exts, groups)
-    return groups
+        _recurse(root, child, 1, min_depth, max_depth, file_exts, entries)
+    return entries
 
 
 def _recurse(
@@ -56,7 +62,7 @@ def _recurse(
     min_depth: int,
     max_depth: int,
     file_exts: set[str],
-    groups: dict[str, list[Path]],
+    entries: list[tuple[tuple[str, ...], list[Path]]],
 ) -> None:
     if min_depth <= depth <= max_depth:
         try:
@@ -69,8 +75,7 @@ def _recurse(
             files = []
         if files:
             parts = current.relative_to(root).parts
-            group_name = "_".join(parts)
-            groups[group_name] = files
+            entries.append((parts, files))
 
     if depth < max_depth:
         try:
@@ -80,7 +85,54 @@ def _recurse(
         except (PermissionError, OSError):
             subdirs = []
         for subdir in subdirs:
-            _recurse(root, subdir, depth + 1, min_depth, max_depth, file_exts, groups)
+            _recurse(root, subdir, depth + 1, min_depth, max_depth, file_exts, entries)
+
+
+def _compute_groups(
+    entries: list[tuple[tuple[str, ...], list[Path]]],
+    selected_levels: set[int],
+    default_name: str = "Group",
+) -> dict[str, list[Path]]:
+    """Compute {group_name: [Path, ...]} using only selected depth levels (1-based).
+
+    Entries that produce the same name after level selection are merged.
+    All-deselected (or shallower-than-selected) entries fall under default_name.
+    """
+    merged: dict[str, list[Path]] = {}
+    for parts, files in entries:
+        name_parts = [parts[i - 1] for i in sorted(selected_levels) if i <= len(parts)]
+        name = "_".join(name_parts) if name_parts else default_name
+        if name not in merged:
+            merged[name] = []
+        merged[name].extend(files)
+    return {name: sorted(set(files)) for name, files in merged.items()}
+
+
+# ── Local _CheckableListWidget (intentionally duplicated from csv_import_dialog) ──
+
+
+class _CheckableListWidget(QListWidget):
+    """QListWidget where clicking anywhere on a row toggles its checkbox."""
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        item = self.itemAt(event.pos())
+        if item is not None and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+            opt = QStyleOptionViewItem()
+            opt.initFrom(self)
+            opt.rect = self.visualItemRect(item)
+            opt.features = QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
+            check_rect = self.style().subElementRect(
+                QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, self
+            )
+            if not check_rect.contains(event.pos()):
+                new_state = (
+                    Qt.CheckState.Unchecked
+                    if item.checkState() == Qt.CheckState.Checked
+                    else Qt.CheckState.Checked
+                )
+                item.setCheckState(new_state)
+                return
+        super().mousePressEvent(event)
 
 
 # ── Widget ────────────────────────────────────────────────────────────────────
@@ -95,6 +147,9 @@ class DirectoryTreeWidget(QWidget):
         super().__init__(parent)
         self._file_exts = file_exts
         self._root: Path | None = None
+        self._entries: list[tuple[tuple[str, ...], list[Path]]] = []
+        self._checked_levels: set[int] = set()
+        self._seen_levels: set[int] = set()
         self._result: dict[str, list[Path]] = {}
         self._expanded_groups: set[str] = set()
 
@@ -172,6 +227,19 @@ class DirectoryTreeWidget(QWidget):
         depth_row.addStretch()
         outer.addLayout(depth_row)
 
+        # ── Group by levels ───────────────────────────────────────────────────
+        outer.addWidget(_header("Group by levels"))
+
+        self._levels_placeholder = QLabel("Choose a folder to see grouping levels.")
+        self._levels_placeholder.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
+        outer.addWidget(self._levels_placeholder)
+
+        self._levels_list = _CheckableListWidget()
+        self._levels_list.setMaximumHeight(120)
+        self._levels_list.setVisible(False)
+        self._levels_list.itemChanged.connect(self._on_level_changed)
+        outer.addWidget(self._levels_list)
+
         # ── Preview ───────────────────────────────────────────────────────────
         self._preview_area = QScrollArea()
         self._preview_area.setObjectName("previewArea")
@@ -228,7 +296,19 @@ class DirectoryTreeWidget(QWidget):
         self._root_lbl.setText(str(self._root))
         self._root_lbl.setToolTip(str(self._root))
         self._expanded_groups.clear()
+        self._checked_levels.clear()
+        self._seen_levels.clear()
         self._refresh()
+
+    # ── Level checkbox handler ────────────────────────────────────────────────
+
+    def _on_level_changed(self, item: QListWidgetItem) -> None:
+        level: int = item.data(Qt.ItemDataRole.UserRole)
+        if item.checkState() == Qt.CheckState.Checked:
+            self._checked_levels.add(level)
+        else:
+            self._checked_levels.discard(level)
+        self._recompute()
 
     # ── Preview link handler ──────────────────────────────────────────────────
 
@@ -239,18 +319,67 @@ class DirectoryTreeWidget(QWidget):
             self._expanded_groups.discard(href[len("collapse:") :])
         self._rebuild_preview()
 
-    # ── Scan + preview ────────────────────────────────────────────────────────
+    # ── Scan + recompute + preview ────────────────────────────────────────────
 
     def _refresh(self) -> None:
+        """Full rescan: walk filesystem, rebuild level list, recompute groups."""
         if self._root is not None:
-            self._result = _walk_tree(
+            self._entries = _walk_tree(
                 self._root,
                 self._min_spin.value(),
                 self._max_spin.value(),
                 self._file_exts,
             )
         else:
-            self._result = {}
+            self._entries = []
+        self._rebuild_levels()
+        self._recompute()
+
+    def _rebuild_levels(self) -> None:
+        """Rebuild level checkboxes from current entries; preserve checked state."""
+        self._levels_list.blockSignals(True)
+        self._levels_list.clear()
+
+        if not self._entries:
+            self._levels_placeholder.setVisible(True)
+            self._levels_list.setVisible(False)
+            self._levels_list.blockSignals(False)
+            return
+
+        max_depth = max(len(parts) for parts, _ in self._entries)
+
+        for level in range(1, max_depth + 1):
+            unique_vals = sorted(
+                {parts[level - 1] for parts, _ in self._entries if len(parts) >= level}
+            )
+            if len(unique_vals) <= 5:
+                vals_str = ", ".join(unique_vals)
+            else:
+                vals_str = ", ".join(unique_vals[:5]) + ", …"
+            label = f"Level {level}  —  {vals_str}"
+
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, level)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+
+            # New levels (not yet seen) default to checked
+            if level not in self._seen_levels:
+                self._checked_levels.add(level)
+                self._seen_levels.add(level)
+
+            item.setCheckState(
+                Qt.CheckState.Checked if level in self._checked_levels else Qt.CheckState.Unchecked
+            )
+            self._levels_list.addItem(item)
+
+        self._levels_placeholder.setVisible(False)
+        self._levels_list.setVisible(True)
+        self._levels_list.blockSignals(False)
+
+    def _recompute(self) -> None:
+        """Recompute groups from cached entries + current checked levels, then refresh preview."""
+        self._result = _compute_groups(self._entries, self._checked_levels)
+        self._expanded_groups &= set(self._result)
         self._rebuild_preview()
         self.validity_changed.emit(self.is_valid())
 
