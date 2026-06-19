@@ -137,6 +137,56 @@ def _apply_zero_tolerance(s: str) -> str:
     return re.sub(r"(?<!\d)0+(\d)", r"\1", s)
 
 
+def _token_spans(
+    s: str, nonalpha: bool, boundary_strings: list[str], case_sensitive: bool
+) -> list[tuple[str, int, int]]:
+    """Return (raw_token, start, end) for each token in s — the raw substring and
+    its character span in s. Splits on non-alphanumeric runs if nonalpha, else on
+    the boundary strings."""
+    if nonalpha:
+        return [(m.group(), m.start(), m.end()) for m in re.finditer(r"[a-zA-Z0-9]+", s)]
+    seps = [b for b in boundary_strings if b]
+    if not seps:
+        return [(s, 0, len(s))] if s else []
+    pattern = "|".join(re.escape(sep) for sep in sorted(seps, key=len, reverse=True))
+    flags = 0 if case_sensitive else re.IGNORECASE
+    spans: list[tuple[str, int, int]] = []
+    pos = 0
+    for m in re.finditer(pattern, s, flags):
+        if m.start() > pos:
+            spans.append((s[pos : m.start()], pos, m.start()))
+        pos = m.end()
+    if pos < len(s):
+        spans.append((s[pos:], pos, len(s)))
+    return spans
+
+
+def _tokenize(
+    s: str,
+    nonalpha: bool,
+    boundary_strings: list[str],
+    case_sensitive: bool,
+    tolerate_zeros: bool,
+    ignore_containing: list[str],
+) -> list[tuple[str, int, int]]:
+    """Tokenise and normalise s, keeping each token's span in the raw string.
+
+    Returns (normalised_value, start, end) per surviving token. Pipeline: split →
+    case-fold → strip leading zeros → drop tokens containing an ignore string. The
+    span always refers to the original s, so it can highlight the raw text.
+    """
+    ignore = [g if case_sensitive else g.lower() for g in ignore_containing if g]
+    out: list[tuple[str, int, int]] = []
+    for raw, start, end in _token_spans(s, nonalpha, boundary_strings, case_sensitive):
+        val = raw if case_sensitive else raw.lower()
+        if tolerate_zeros:
+            val = _apply_zero_tolerance(val)
+        if ignore and any(g in val for g in ignore):
+            continue
+        out.append((val, start, end))
+    return out
+
+
 def _preprocess_tokens(
     s: str,
     nonalpha: bool,
@@ -145,58 +195,46 @@ def _preprocess_tokens(
     tolerate_zeros: bool,
     ignore_containing: list[str],
 ) -> list[str]:
-    """Tokenise and normalise s; drop ignored tokens. Returns the token list.
-
-    Pipeline: case-fold → tokenise (on non-alphanumeric runs if nonalpha, else
-    on the boundary strings) → strip leading zeros per token → drop any token
-    that contains an ignore string.
-    """
-    if not case_sensitive:
-        s = s.lower()
-    if nonalpha:
-        tokens = re.findall(r"[a-zA-Z0-9]+", s)
-    else:
-        seps = [b if case_sensitive else b.lower() for b in boundary_strings if b]
-        if seps:
-            pattern = "|".join(re.escape(sep) for sep in sorted(seps, key=len, reverse=True))
-            tokens = [t for t in re.split(pattern, s) if t]
-        else:
-            tokens = [s] if s else []
-    if tolerate_zeros:
-        tokens = [_apply_zero_tolerance(t) for t in tokens]
-    ignore = [g if case_sensitive else g.lower() for g in ignore_containing if g]
-    if ignore:
-        tokens = [t for t in tokens if not any(g in t for g in ignore)]
-    return tokens
+    """The normalised token values of s (see _tokenize), without spans."""
+    return [
+        v
+        for v, _, _ in _tokenize(
+            s, nonalpha, boundary_strings, case_sensitive, tolerate_zeros, ignore_containing
+        )
+    ]
 
 
-def _token_lcs_subsequence(a: list[str], b: list[str]) -> list[str]:
-    """Longest common subsequence of token lists a and b (order kept, gaps allowed)."""
+def _lcs_indices(a: list[str], b: list[str]) -> tuple[list[int], list[int]]:
+    """Longest common subsequence of a and b, returned as the matched index lists
+    into a and b (order kept, gaps allowed)."""
     m, n = len(a), len(b)
     dp = [[0] * (n + 1) for _ in range(m + 1)]
     for i in range(m - 1, -1, -1):
         for j in range(n - 1, -1, -1):
             dp[i][j] = dp[i + 1][j + 1] + 1 if a[i] == b[j] else max(dp[i + 1][j], dp[i][j + 1])
-    out: list[str] = []
+    ai: list[int] = []
+    bi: list[int] = []
     i = j = 0
     while i < m and j < n:
         if a[i] == b[j]:
-            out.append(a[i])
+            ai.append(i)
+            bi.append(j)
             i += 1
             j += 1
         elif dp[i + 1][j] >= dp[i][j + 1]:
             i += 1
         else:
             j += 1
-    return out
+    return ai, bi
 
 
-def _token_common_subarray(a: list[str], b: list[str]) -> list[str]:
-    """Longest contiguous common subarray of token lists a and b via O(n*m) DP."""
+def _subarray_indices(a: list[str], b: list[str]) -> tuple[list[int], list[int]]:
+    """Longest contiguous common subarray of a and b (O(n*m) DP), as the matched
+    index ranges into a and b."""
     if not a or not b:
-        return []
+        return [], []
     n = len(b)
-    best, best_end = 0, 0
+    best, end_a, end_b = 0, 0, 0
     prev = [0] * (n + 1)
     for i in range(len(a)):
         curr = [0] * (n + 1)
@@ -205,20 +243,21 @@ def _token_common_subarray(a: list[str], b: list[str]) -> list[str]:
                 curr[j + 1] = prev[j] + 1
                 if curr[j + 1] > best:
                     best = curr[j + 1]
-                    best_end = i + 1
+                    end_a, end_b = i + 1, j + 1
         prev = curr
-    return a[best_end - best : best_end]
+    return list(range(end_a - best, end_a)), list(range(end_b - best, end_b))
 
 
-def _token_window_match(a: list[str], b: list[str], min_n: int) -> list[str]:
-    """Largest N≥min_n with a same-multiset window a[i:i+N] / b[j:j+N]; those tokens or []."""
+def _window_indices(a: list[str], b: list[str], min_n: int) -> tuple[list[int], list[int]] | None:
+    """Largest N≥min_n with a same-multiset window a[i:i+N] / b[j:j+N]; the matched
+    index ranges into a and b, or None."""
     for size in range(min(len(a), len(b)), min_n - 1, -1):
         for i in range(len(a) - size + 1):
             wa = Counter(a[i : i + size])
             for j in range(len(b) - size + 1):
                 if Counter(b[j : j + size]) == wa:
-                    return a[i : i + size]
-    return []
+                    return list(range(i, i + size)), list(range(j, j + size))
+    return None
 
 
 def _find_match(
@@ -227,13 +266,15 @@ def _find_match(
     min_tokens: int,
     match_order: bool,
     match_uninterrupted: bool,
-) -> list[str] | None:
-    """Return the matched token list, or None if the threshold isn't met.
+) -> tuple[list[int], list[int]] | None:
+    """Return (handle_indices, stem_indices) for the matched tokens, or None if the
+    threshold isn't met.
 
     The manifest ID (handle) is the needle; the file stem the haystack. The two
-    flags select the algorithm and apply bidirectionally — the structure must
-    hold in both token sequences. min_tokens == 0 means 'all' (threshold =
-    len(handle_tokens)).
+    flags select the algorithm and apply bidirectionally — the structure must hold
+    in both token sequences. The returned indices are the exact tokens the match
+    rests on, in each sequence, so the caller can highlight precisely what decided
+    it. min_tokens == 0 means 'all' (threshold = len(handle_tokens)).
     """
     if not handle_tokens or not stem_tokens:
         return None
@@ -242,15 +283,20 @@ def _find_match(
         return None
 
     if not match_order and not match_uninterrupted:
-        matched = sorted(set(handle_tokens) & set(stem_tokens))
-    elif match_order and not match_uninterrupted:
-        matched = _token_lcs_subsequence(handle_tokens, stem_tokens)
-    elif not match_order and match_uninterrupted:
-        matched = _token_window_match(handle_tokens, stem_tokens, effective_min)
-    else:
-        matched = _token_common_subarray(handle_tokens, stem_tokens)
-
-    return matched if len(matched) >= effective_min else None
+        common = set(handle_tokens) & set(stem_tokens)
+        if len(common) < effective_min:
+            return None
+        return (
+            [i for i, t in enumerate(handle_tokens) if t in common],
+            [j for j, t in enumerate(stem_tokens) if t in common],
+        )
+    if match_order and not match_uninterrupted:
+        ai, bi = _lcs_indices(handle_tokens, stem_tokens)
+        return (ai, bi) if len(ai) >= effective_min else None
+    if not match_order and match_uninterrupted:
+        return _window_indices(handle_tokens, stem_tokens, effective_min)
+    ai, bi = _subarray_indices(handle_tokens, stem_tokens)
+    return (ai, bi) if len(ai) >= effective_min else None
 
 
 def _col_values_summary(unique_vals: list[str], max_shown: int = 4) -> str:
@@ -295,7 +341,10 @@ def _read_csv(path: Path) -> tuple[list[dict], list[str], str]:
 class _Match:
     path: Path
     id_val: str
-    matched_tokens: list[str]
+    # character spans of the matched tokens, for highlighting: id_spans into
+    # id_val, name_spans into path.stem (a prefix of path.name)
+    id_spans: list[tuple[int, int]]
+    name_spans: list[tuple[int, int]]
     group_name: str
 
 
@@ -341,8 +390,8 @@ def _compute_matches(
     rows_skipped_blank = 0
     candidate_matches: dict[Path, list[_Match]] = defaultdict(list)
 
-    stem_tokens = {
-        f: _preprocess_tokens(
+    stem_toks = {
+        f: _tokenize(
             f.stem, nonalpha, boundary_strings, case_sensitive, tolerate_zeros, ignore_containing
         )
         for f in files
@@ -356,16 +405,29 @@ def _compute_matches(
         if group_name is None:
             rows_skipped_blank += 1
             continue
-        handle_tokens = _preprocess_tokens(
+        handle_toks = _tokenize(
             id_val, nonalpha, boundary_strings, case_sensitive, tolerate_zeros, ignore_containing
         )
+        handle_vals = [v for v, _, _ in handle_toks]
         for f in files:
+            file_toks = stem_toks[f]
             matched = _find_match(
-                handle_tokens, stem_tokens[f], min_tokens, match_order, match_uninterrupted
+                handle_vals,
+                [v for v, _, _ in file_toks],
+                min_tokens,
+                match_order,
+                match_uninterrupted,
             )
             if matched is not None:
+                h_idx, s_idx = matched
                 candidate_matches[f].append(
-                    _Match(path=f, id_val=id_val, matched_tokens=matched, group_name=group_name)
+                    _Match(
+                        path=f,
+                        id_val=id_val,
+                        id_spans=[handle_toks[i][1:] for i in h_idx],
+                        name_spans=[file_toks[j][1:] for j in s_idx],
+                        group_name=group_name,
+                    )
                 )
 
     files_not_in_csv = [f for f in files if not candidate_matches[f]]
@@ -417,26 +479,14 @@ def _build_result_groups(
     return groups
 
 
-def _highlight(full: str, tokens: list[str], accent: str) -> str:
-    """Bold each token's first case-insensitive occurrence in full (best-effort).
-
-    Tokens are normalised (case-folded, zero-stripped) so some may not appear
-    verbatim in the raw text — those are silently left unbolded.
-    """
-    low = full.lower()
-    spans: list[tuple[int, int]] = []
-    for tok in tokens:
-        if not tok:
-            continue
-        idx = low.find(tok.lower())
-        if idx != -1:
-            spans.append((idx, idx + len(tok)))
+def _highlight(full: str, spans: list[tuple[int, int]], accent: str) -> str:
+    """Bold the given character spans in full. Spans come straight from the match,
+    so exactly the tokens the decision rests on are highlighted."""
     if not spans:
         return full
-    spans.sort()
     out: list[str] = []
     pos = 0
-    for start, end in spans:
+    for start, end in sorted(spans):
         if start < pos:
             continue  # overlaps an already-bolded span
         out.append(full[pos:start])
@@ -827,7 +877,8 @@ class CsvImportWidget(QWidget):
         self._sep_chips_scroll.setWidget(self._sep_chips_widget)
         outer.addWidget(self._sep_chips_scroll)
 
-        # Row 2 — how many ID tokens must be found, and order/contiguity
+        # Row 2 — how many ID tokens must be found (count on the first line,
+        # order/contiguity toggles on the second so nothing crops when narrow)
         idtok_row = QHBoxLayout()
         idtok_row.setSpacing(8)
         idtok_lbl = QLabel("ID tokens in filename:")
@@ -866,8 +917,11 @@ class CsvImportWidget(QWidget):
         idtok_row.addWidget(self._all_radio)
         idtok_row.addWidget(self._atleast_radio)
         idtok_row.addWidget(self._min_spin)
-        idtok_row.addSpacing(16)
+        idtok_row.addStretch()
+        outer.addLayout(idtok_row)
 
+        flags_row = QHBoxLayout()
+        flags_row.setSpacing(16)
         self._order_check = QCheckBox("Match order")
         self._order_check.setToolTip(
             "Matched tokens must appear in the same relative order in both the ID and the filename."
@@ -881,10 +935,10 @@ class CsvImportWidget(QWidget):
         )
         self._unint_check.toggled.connect(self._refresh)
         self._unint_check.installEventFilter(self._tooltip_filter)
-        idtok_row.addWidget(self._order_check)
-        idtok_row.addWidget(self._unint_check)
-        idtok_row.addStretch()
-        outer.addLayout(idtok_row)
+        flags_row.addWidget(self._order_check)
+        flags_row.addWidget(self._unint_check)
+        flags_row.addStretch()
+        outer.addLayout(flags_row)
 
         # Row 3 — ignore tokens containing
         ignore_row = QHBoxLayout()
@@ -1197,6 +1251,19 @@ class CsvImportWidget(QWidget):
             if self._group_cols_list.item(i).checkState() == Qt.CheckState.Checked
         ]
 
+    def _matching_config(self) -> dict:
+        """Current matching controls as kwargs for _compute_matches."""
+        return dict(
+            nonalpha=self._nonalpha_radio.isChecked(),
+            boundary_strings=self._boundary_strings,
+            case_sensitive=self._case_check.isChecked(),
+            tolerate_zeros=self._zeros_check.isChecked(),
+            ignore_containing=self._ignore_strings,
+            min_tokens=0 if self._all_radio.isChecked() else self._min_spin.value(),
+            match_order=self._order_check.isChecked(),
+            match_uninterrupted=self._unint_check.isChecked(),
+        )
+
     def _refresh(self) -> None:
         match_col = self._match_combo.currentText()
         group_cols = self._selected_group_cols()
@@ -1213,14 +1280,7 @@ class CsvImportWidget(QWidget):
             match_col,
             group_cols,
             self._added_files,
-            nonalpha=self._nonalpha_radio.isChecked(),
-            boundary_strings=self._boundary_strings,
-            case_sensitive=self._case_check.isChecked(),
-            tolerate_zeros=self._zeros_check.isChecked(),
-            ignore_containing=self._ignore_strings,
-            min_tokens=0 if self._all_radio.isChecked() else self._min_spin.value(),
-            match_order=self._order_check.isChecked(),
-            match_uninterrupted=self._unint_check.isChecked(),
+            **self._matching_config(),
         )
 
         # Preserve user conflict selections across config changes
@@ -1281,8 +1341,8 @@ class CsvImportWidget(QWidget):
                     f'<span style="color:{t.muted};">  ({len(ms)} files)</span>'
                 ]
                 for m in visible:
-                    fname_html = _highlight(m.path.name, m.matched_tokens, t.accent)
-                    id_html = _highlight(m.id_val, m.matched_tokens, t.accent)
+                    fname_html = _highlight(m.path.name, m.name_spans, t.accent)
+                    id_html = _highlight(m.id_val, m.id_spans, t.accent)
                     lines.append(
                         f'<span style="color:{t.muted};">&nbsp;&nbsp;&nbsp;&nbsp;{fname_html}'
                         f'</span><span style="color:{t.sep};">'
