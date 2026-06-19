@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -237,6 +239,14 @@ def _find_match(
     if not matched or len(matched) < effective_min:
         return None
     return matched
+
+
+def _col_values_summary(unique_vals: list[str], max_shown: int = 4) -> str:
+    if not unique_vals:
+        return ""
+    shown = ", ".join(unique_vals[:max_shown])
+    extra = len(unique_vals) - max_shown
+    return f"{shown}  ...+{extra}" if extra > 0 else shown
 
 
 def _group_name_for(row: dict, group_cols: list[str]) -> str | None:
@@ -488,6 +498,19 @@ def _csv_widget_stylesheet(t) -> str:
         QListWidget#csvGroupColsList::item:selected {{
             background: transparent;
         }}
+        QListWidget#matchPreviewList {{
+            background-color: {t.display};
+            color: {t.muted};
+            border: 1px solid {t.muted};
+            border-radius: 4px;
+            font-size: 11px;
+        }}
+        QListWidget#matchPreviewList::item {{
+            padding: 1px 6px;
+        }}
+        QListWidget#matchPreviewList::item:selected {{
+            background: transparent;
+        }}
         QScrollArea#previewArea {{
             background-color: {t.display};
             border: 1px solid {t.muted};
@@ -625,7 +648,12 @@ class CsvImportWidget(QWidget):
         self._match_combo.currentIndexChanged.connect(self._on_match_col_changed)
         self._match_combo.installEventFilter(self._tooltip_filter)
         match_layout.addWidget(self._match_combo)
-        match_layout.addStretch()
+        self._match_preview = QListWidget()
+        self._match_preview.setObjectName("matchPreviewList")
+        self._match_preview.setFixedHeight(76)
+        self._match_preview.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._match_preview.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        match_layout.addWidget(self._match_preview)
         col_row.addLayout(match_layout, stretch=1)
 
         group_layout = QVBoxLayout()
@@ -633,7 +661,7 @@ class CsvImportWidget(QWidget):
         group_layout.addWidget(QLabel("Group by columns:"))
         self._group_cols_list = _CheckableListWidget()
         self._group_cols_list.setObjectName("csvGroupColsList")
-        self._group_cols_list.setFixedHeight(96)
+        self._group_cols_list.setFixedHeight(110)
         self._group_cols_list.itemChanged.connect(self._refresh)
         self._group_cols_list.installEventFilter(self._tooltip_filter)
         group_layout.addWidget(self._group_cols_list)
@@ -895,7 +923,8 @@ class CsvImportWidget(QWidget):
         self._on_match_col_changed()  # populates group cols list + calls _refresh
 
     def _on_match_col_changed(self) -> None:
-        """Repopulate group cols list excluding the current match column."""
+        """Repopulate group cols list and match preview for the current match column."""
+        t = _get_theme()
         match_col = self._match_combo.currentText()
         prev_checked = set(self._selected_group_cols())
 
@@ -910,9 +939,35 @@ class CsvImportWidget(QWidget):
                 Qt.CheckState.Checked if col in prev_checked else Qt.CheckState.Unchecked
             )
             self._group_cols_list.addItem(item)
+            unique_vals = sorted(
+                {
+                    str(row.get(col, "")).strip()
+                    for row in self._rows
+                    if str(row.get(col, "")).strip()
+                }
+            )
+            summary = _col_values_summary(unique_vals)
+            if summary:
+                sub = QListWidgetItem(f"    {summary}")
+                sub.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                sub.setForeground(QColor(t.muted))
+                font = sub.font()
+                font.setPointSize(max(font.pointSize() - 1, 8))
+                sub.setFont(font)
+                self._group_cols_list.addItem(sub)
         self._group_cols_list.blockSignals(False)
 
+        self._populate_match_preview(match_col)
         self._refresh()
+
+    def _populate_match_preview(self, col: str) -> None:
+        self._match_preview.clear()
+        if not self._rows or not col:
+            return
+        for row in self._rows:
+            val = str(row.get(col, "")).strip()
+            if val:
+                self._match_preview.addItem(val)
 
     def _add_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Select a folder")
