@@ -363,6 +363,7 @@ class _MatchResult:
     rows_skipped_blank: int
     conflicts: list[_Conflict]
     groups_over_limit: bool
+    unmatched_csv_ids: list[str]
     error: str = ""
 
 
@@ -385,10 +386,11 @@ def _compute_matches(
     match_uninterrupted: bool,
 ) -> _MatchResult:
     if not rows or not files:
-        return _MatchResult([], list(files) if files else [], 0, [], False)
+        return _MatchResult([], list(files) if files else [], 0, [], False, [])
 
     rows_skipped_blank = 0
     candidate_matches: dict[Path, list[_Match]] = defaultdict(list)
+    ids_with_group: set[str] = set()
 
     stem_toks = {
         f: _tokenize(
@@ -405,6 +407,7 @@ def _compute_matches(
         if group_name is None:
             rows_skipped_blank += 1
             continue
+        ids_with_group.add(id_val)
         handle_toks = _tokenize(
             id_val, nonalpha, boundary_strings, case_sensitive, tolerate_zeros, ignore_containing
         )
@@ -431,6 +434,8 @@ def _compute_matches(
                 )
 
     files_not_in_csv = [f for f in files if not candidate_matches[f]]
+    ids_that_matched: set[str] = {m.id_val for ms in candidate_matches.values() for m in ms}
+    unmatched_csv_ids = sorted(ids_with_group - ids_that_matched)
     conflicts: list[_Conflict] = []
 
     for f, ms in candidate_matches.items():
@@ -460,6 +465,7 @@ def _compute_matches(
         rows_skipped_blank=rows_skipped_blank,
         conflicts=conflicts,
         groups_over_limit=len(all_group_names) > 12,
+        unmatched_csv_ids=unmatched_csv_ids,
     )
 
 
@@ -656,6 +662,9 @@ class CsvImportWidget(QWidget):
         self._conflicts: list[_Conflict] = []
         self._last_result: _MatchResult | None = None
         self._expanded_groups: set[str] = set()
+        self._expanded_warnings: set[str] = set()
+        self._files_not_matched_ack: bool = False
+        self._rows_not_matched_ack: bool = False
         self._boundary_strings: list[str] = []
         self._ignore_strings: list[str] = []
         self._tooltip_filter = _TooltipOnDisabled(self)
@@ -678,6 +687,8 @@ class CsvImportWidget(QWidget):
                     for c in self._conflicts
                 )
             )
+            and (not self._last_result.files_not_in_csv or self._files_not_matched_ack)
+            and (not self._last_result.unmatched_csv_ids or self._rows_not_matched_ack)
         )
 
     def result_groups(self) -> dict[str, list[Path]]:
@@ -1275,6 +1286,13 @@ class CsvImportWidget(QWidget):
             self._emit_validity()
             return
 
+        old_files_not_in_csv = (
+            set(self._last_result.files_not_in_csv) if self._last_result else set()
+        )
+        old_unmatched_csv_ids = (
+            set(self._last_result.unmatched_csv_ids) if self._last_result else set()
+        )
+
         result = _compute_matches(
             self._rows,
             match_col,
@@ -1290,6 +1308,11 @@ class CsvImportWidget(QWidget):
             if c.label in old_selections:
                 c.selection = old_selections[c.label]
 
+        if set(result.files_not_in_csv) != old_files_not_in_csv:
+            self._files_not_matched_ack = False
+        if set(result.unmatched_csv_ids) != old_unmatched_csv_ids:
+            self._rows_not_matched_ack = False
+
         self._last_result = result
         self._rebuild_preview(result)
         self._emit_validity()
@@ -1302,6 +1325,10 @@ class CsvImportWidget(QWidget):
             self._expanded_groups.add(href[len("expand:") :])
         elif href.startswith("collapse:"):
             self._expanded_groups.discard(href[len("collapse:") :])
+        elif href.startswith("expand-warn:"):
+            self._expanded_warnings.add(href[len("expand-warn:") :])
+        elif href.startswith("collapse-warn:"):
+            self._expanded_warnings.discard(href[len("collapse-warn:") :])
         self._rebuild_preview(self._last_result)
 
     def _rebuild_preview(self, result: _MatchResult | None) -> None:
@@ -1388,13 +1415,37 @@ class CsvImportWidget(QWidget):
             for conflict in self._conflicts:
                 layout.addWidget(self._build_conflict_widget(conflict, t))
 
-        # Warnings
+        # Files not matched in any CSV row
         if result.files_not_in_csv:
             n = len(result.files_not_in_csv)
             noun = "file" if n == 1 else "files"
-            w = QLabel(f"{n} {noun} not matched in CSV (excluded)")
-            w.setStyleSheet(f"color: {t.muted}; font-size: 11px;")
-            layout.addWidget(w)
+            layout.addWidget(
+                self._build_warning_widget(
+                    key="files",
+                    items=[p.name for p in result.files_not_in_csv],
+                    header=f"{n} {noun} not assigned to any group — skip to continue:",
+                    checkbox_label=f"Skip these {n} {noun}",
+                    ack=self._files_not_matched_ack,
+                    t=t,
+                    on_ack=lambda checked: self._set_files_ack(checked),
+                )
+            )
+
+        # Manifest rows that matched no file
+        if result.unmatched_csv_ids:
+            n = len(result.unmatched_csv_ids)
+            noun = "row" if n == 1 else "rows"
+            layout.addWidget(
+                self._build_warning_widget(
+                    key="rows",
+                    items=result.unmatched_csv_ids,
+                    header=f"{n} manifest {noun} matched no file — skip to continue:",
+                    checkbox_label=f"Skip these {n} {noun}",
+                    ack=self._rows_not_matched_ack,
+                    t=t,
+                    on_ack=lambda checked: self._set_rows_ack(checked),
+                )
+            )
 
         if result.rows_skipped_blank:
             n = result.rows_skipped_blank
@@ -1410,6 +1461,66 @@ class CsvImportWidget(QWidget):
 
         layout.addStretch()
         self._preview_area.setWidget(content)
+
+    def _set_files_ack(self, checked: bool) -> None:
+        self._files_not_matched_ack = checked
+        self._emit_validity()
+
+    def _set_rows_ack(self, checked: bool) -> None:
+        self._rows_not_matched_ack = checked
+        self._emit_validity()
+
+    def _build_warning_widget(
+        self, key: str, items: list[str], header: str, checkbox_label: str, ack: bool, t, on_ack
+    ) -> QWidget:
+        w = QWidget()
+        vbox = QVBoxLayout(w)
+        vbox.setContentsMargins(0, 4, 0, 8)
+        vbox.setSpacing(3)
+
+        lbl = QLabel(header)
+        lbl.setStyleSheet(f"color: {t.warn}; font-size: 11px; font-weight: bold;")
+        vbox.addWidget(lbl)
+
+        is_expanded = key in self._expanded_warnings
+        visible = items if is_expanded else items[:5]
+        for item_text in visible:
+            item_lbl = QLabel(f"    {item_text}")
+            item_lbl.setStyleSheet(f"color: {t.panel_text}; font-size: 11px;")
+            vbox.addWidget(item_lbl)
+
+        extra = len(items) - 5
+        if not is_expanded and extra > 0:
+            noun = "item" if extra == 1 else "items"
+            more_lbl = QLabel(
+                f'<a href="expand-warn:{key}" style="color:{t.sep}; text-decoration:none;">'
+                f"    ... and {extra} more {noun}</a>"
+            )
+            more_lbl.setTextFormat(Qt.TextFormat.RichText)
+            more_lbl.setOpenExternalLinks(False)
+            more_lbl.linkActivated.connect(self._on_preview_link)
+            vbox.addWidget(more_lbl)
+        elif is_expanded and len(items) > 5:
+            less_lbl = QLabel(
+                f'<a href="collapse-warn:{key}" style="color:{t.sep}; text-decoration:none;">'
+                f"    show less</a>"
+            )
+            less_lbl.setTextFormat(Qt.TextFormat.RichText)
+            less_lbl.setOpenExternalLinks(False)
+            less_lbl.linkActivated.connect(self._on_preview_link)
+            vbox.addWidget(less_lbl)
+
+        cb_row = QHBoxLayout()
+        cb_row.setContentsMargins(0, 2, 0, 0)
+        cb_row.setSpacing(0)
+        cb = QCheckBox(checkbox_label)
+        cb.setChecked(ack)
+        cb.toggled.connect(on_ack)
+        cb_row.addWidget(cb)
+        cb_row.addStretch()
+        vbox.addLayout(cb_row)
+
+        return w
 
     def _build_conflict_widget(self, conflict: _Conflict, t) -> QWidget:
         w = QWidget()
