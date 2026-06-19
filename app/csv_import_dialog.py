@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -1334,18 +1334,25 @@ class CsvImportWidget(QWidget):
         self.validity_changed.emit(self.is_valid())
 
     def _on_preview_link(self, href: str) -> None:
+        scroll_to_group: str | None = None
         if href.startswith("expand:"):
-            self._expanded_groups.add(href[len("expand:") :])
+            gname = href[len("expand:") :]
+            self._expanded_groups.add(gname)
+            scroll_to_group = gname
         elif href.startswith("collapse:"):
             self._expanded_groups.discard(href[len("collapse:") :])
         elif href.startswith("expand-warn:"):
             self._expanded_warnings.add(href[len("expand-warn:") :])
         elif href.startswith("collapse-warn:"):
             self._expanded_warnings.discard(href[len("collapse-warn:") :])
-        self._rebuild_preview(self._last_result)
+        self._rebuild_preview(self._last_result, scroll_to_group=scroll_to_group)
 
-    def _rebuild_preview(self, result: _MatchResult | None) -> None:
+    def _rebuild_preview(
+        self, result: _MatchResult | None, scroll_to_group: str | None = None
+    ) -> None:
         t = _get_theme()
+        scroll_val = self._preview_area.verticalScrollBar().value()
+        scroll_target: QWidget | None = None
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -1380,6 +1387,9 @@ class CsvImportWidget(QWidget):
                 layout.addWidget(placeholder)
             layout.addStretch()
             self._preview_area.setWidget(content)
+            QTimer.singleShot(
+                0, lambda: self._preview_area.verticalScrollBar().setValue(scroll_val)
+            )
             return
 
         # Tree: group → files (clean matches only), one section per group
@@ -1410,6 +1420,8 @@ class CsvImportWidget(QWidget):
                 group_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
                 group_lbl.setWordWrap(False)
                 layout.addWidget(group_lbl)
+                if gname == scroll_to_group:
+                    scroll_target = group_lbl
 
                 extra = len(ms) - 5
                 if not is_expanded and extra > 0:
@@ -1491,6 +1503,13 @@ class CsvImportWidget(QWidget):
 
         layout.addStretch()
         self._preview_area.setWidget(content)
+
+        def _restore_scroll() -> None:
+            self._preview_area.verticalScrollBar().setValue(scroll_val)
+            if scroll_target is not None:
+                QTimer.singleShot(0, lambda: self._preview_area.ensureWidgetVisible(scroll_target))
+
+        QTimer.singleShot(0, _restore_scroll)
 
     def _set_files_ack(self, checked: bool) -> None:
         self._files_not_matched_ack = checked
