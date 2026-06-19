@@ -665,6 +665,7 @@ class CsvImportWidget(QWidget):
         self._expanded_warnings: set[str] = set()
         self._files_not_matched_ack: bool = False
         self._rows_not_matched_ack: bool = False
+        self._duplicate_ids: list[str] = []
         self._boundary_strings: list[str] = []
         self._ignore_strings: list[str] = []
         self._tooltip_filter = _TooltipOnDisabled(self)
@@ -676,6 +677,7 @@ class CsvImportWidget(QWidget):
     def is_valid(self) -> bool:
         return (
             bool(self._rows)
+            and not self._duplicate_ids
             and bool(self._match_combo.currentText())
             and bool(self._selected_group_cols())
             and all(c.selection is not None for c in self._conflicts)
@@ -1189,6 +1191,17 @@ class CsvImportWidget(QWidget):
         self._group_cols_list.blockSignals(False)
 
         self._populate_match_preview(match_col)
+        # Detect duplicate IDs in the chosen match column
+        seen: set[str] = set()
+        dupes: set[str] = set()
+        for row in self._rows:
+            val = str(row.get(match_col, "")).strip()
+            if not val:
+                continue
+            if val in seen:
+                dupes.add(val)
+            seen.add(val)
+        self._duplicate_ids = sorted(dupes)
         self._refresh()
 
     def _populate_match_preview(self, col: str) -> None:
@@ -1279,7 +1292,7 @@ class CsvImportWidget(QWidget):
         match_col = self._match_combo.currentText()
         group_cols = self._selected_group_cols()
 
-        if not self._rows or not match_col or not group_cols:
+        if not self._rows or not match_col or not group_cols or self._duplicate_ids:
             self._conflicts = []
             self._last_result = None
             self._rebuild_preview(None)
@@ -1339,15 +1352,32 @@ class CsvImportWidget(QWidget):
         layout.setSpacing(6)
 
         if result is None:
-            msg = (
-                "Load a CSV, pick match and group columns, then add video files."
-                if not self._rows
-                else "Pick a match column and at least one group-by column."
-            )
-            placeholder = QLabel(msg)
-            placeholder.setWordWrap(True)
-            placeholder.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
-            layout.addWidget(placeholder)
+            if self._duplicate_ids:
+                n = len(self._duplicate_ids)
+                err_lbl = QLabel(
+                    "Match column has duplicate values — fix your CSV before importing:"
+                )
+                err_lbl.setWordWrap(True)
+                err_lbl.setStyleSheet(f"color: {t.error}; font-size: 12px; font-weight: bold;")
+                layout.addWidget(err_lbl)
+                layout.addWidget(
+                    self._build_warning_widget(
+                        key="dup_ids",
+                        items=self._duplicate_ids,
+                        header=f"{n} duplicate {'ID' if n == 1 else 'IDs'}:",
+                        t=t,
+                    )
+                )
+            else:
+                msg = (
+                    "Load a CSV, pick match and group columns, then add video files."
+                    if not self._rows
+                    else "Pick a match column and at least one group-by column."
+                )
+                placeholder = QLabel(msg)
+                placeholder.setWordWrap(True)
+                placeholder.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
+                layout.addWidget(placeholder)
             layout.addStretch()
             self._preview_area.setWidget(content)
             return
@@ -1471,7 +1501,14 @@ class CsvImportWidget(QWidget):
         self._emit_validity()
 
     def _build_warning_widget(
-        self, key: str, items: list[str], header: str, checkbox_label: str, ack: bool, t, on_ack
+        self,
+        key: str,
+        items: list[str],
+        header: str,
+        t,
+        checkbox_label: str = "",
+        ack: bool = False,
+        on_ack=None,
     ) -> QWidget:
         w = QWidget()
         vbox = QVBoxLayout(w)
@@ -1510,15 +1547,16 @@ class CsvImportWidget(QWidget):
             less_lbl.linkActivated.connect(self._on_preview_link)
             vbox.addWidget(less_lbl)
 
-        cb_row = QHBoxLayout()
-        cb_row.setContentsMargins(0, 2, 0, 0)
-        cb_row.setSpacing(0)
-        cb = QCheckBox(checkbox_label)
-        cb.setChecked(ack)
-        cb.toggled.connect(on_ack)
-        cb_row.addWidget(cb)
-        cb_row.addStretch()
-        vbox.addLayout(cb_row)
+        if checkbox_label and on_ack is not None:
+            cb_row = QHBoxLayout()
+            cb_row.setContentsMargins(0, 2, 0, 0)
+            cb_row.setSpacing(0)
+            cb = QCheckBox(checkbox_label)
+            cb.setChecked(ack)
+            cb.toggled.connect(on_ack)
+            cb_row.addWidget(cb)
+            cb_row.addStretch()
+            vbox.addLayout(cb_row)
 
         return w
 
