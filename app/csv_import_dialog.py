@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -34,14 +33,12 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStyle,
     QStyleOptionViewItem,
-    QTableWidget,
-    QTableWidgetItem,
     QToolTip,
     QVBoxLayout,
     QWidget,
 )
 
-from app.group_manifest_panel import _FOLDER_TEXT_COLOURS, _ElideLeftDelegate
+from app.group_manifest_panel import _natural_key
 from app.theme import get_theme as _get_theme
 
 # ── Tooltip-on-disabled shim (same pattern as app/gating.py) ─────────────────
@@ -588,15 +585,6 @@ def _csv_widget_stylesheet(t) -> str:
         QListWidget#csvGroupColsList::item:selected {{
             background: transparent;
         }}
-        QTableWidget#filePreviewTable {{
-            background-color: {t.display};
-            border: 1px solid {t.muted};
-            border-radius: 4px;
-            font-size: 11px;
-        }}
-        QTableWidget#filePreviewTable::item {{
-            padding: 1px 4px;
-        }}
         QListWidget#matchPreviewList {{
             background-color: {t.display};
             color: {t.muted};
@@ -637,6 +625,15 @@ def _csv_widget_stylesheet(t) -> str:
             background-color: {t.muted};
             color: {t.bg};
         }}
+        QPushButton#adjustToggle {{
+            background: transparent;
+            border: none;
+            color: {t.muted};
+            text-align: left;
+            padding: 2px 0;
+            font-size: 12px;
+        }}
+        QPushButton#adjustToggle:hover {{ color: {t.accent}; }}
     """
 
 
@@ -703,15 +700,6 @@ class CsvImportWidget(QWidget):
     def _build_ui(self) -> None:
         t = _get_theme()
 
-        def _sub_header(text: str, tooltip: str = "") -> QLabel:
-            lbl = QLabel(text)
-            lbl.setStyleSheet(
-                f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
-            )
-            if tooltip:
-                lbl.setToolTip(tooltip)
-            return lbl
-
         def _sep() -> QFrame:
             f = QFrame()
             f.setFrameShape(QFrame.Shape.HLine)
@@ -722,16 +710,26 @@ class CsvImportWidget(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
 
-        # ── Step 2: Load manifest (always visible) ────────────────────────────
-        self._hdr2 = QLabel("2.  Load manifest")
+        # ── Section 2: Load manifest & choose ID column (always visible) ──────
+        # Two columns: heading + load/choose controls on the left, the handle
+        # list on the right with its title level with the heading and its box top
+        # level with the Load CSV button. The handle list mirrors the filename
+        # list in section 3 so the two things being matched read as a pair.
+        s2_box = QHBoxLayout()
+        s2_box.setSpacing(14)
+
+        s2_left = QVBoxLayout()
+        s2_left.setSpacing(4)
+        self._hdr2 = QLabel("2.  Load manifest & choose ID column")
         self._hdr2.setStyleSheet(
             f"color: {t.accent}; font-size: 11px; font-weight: bold; padding-top: 4px;"
         )
         self._hdr2.setToolTip(
             "A manifest CSV maps each recording to a group. Load the CSV your "
-            "protocol or unblinding sheet produced."
+            "protocol or unblinding sheet produced, then pick the column that "
+            "holds the recording ID."
         )
-        outer.addWidget(self._hdr2)
+        s2_left.addWidget(self._hdr2)
 
         csv_row = QHBoxLayout()
         csv_row.setSpacing(8)
@@ -742,9 +740,49 @@ class CsvImportWidget(QWidget):
         self._csv_name_lbl.setObjectName("mutedLabel")
         csv_row.addWidget(load_btn)
         csv_row.addWidget(self._csv_name_lbl, stretch=1)
-        outer.addLayout(csv_row)
+        s2_left.addLayout(csv_row)
 
-        # ── Step 3: Load data + column selection (hidden until CSV loaded) ────
+        # Match-column chooser (revealed on load)
+        self._s2_detail = QWidget()
+        self._s2_detail.setVisible(False)
+        match_layout = QVBoxLayout(self._s2_detail)
+        match_layout.setContentsMargins(0, 0, 0, 0)
+        match_layout.setSpacing(4)
+        combo_row = QHBoxLayout()
+        combo_row.setSpacing(8)
+        combo_row.addWidget(QLabel("Match on column:"))
+        self._match_combo = QComboBox()
+        self._match_combo.currentIndexChanged.connect(self._on_match_col_changed)
+        self._match_combo.installEventFilter(self._tooltip_filter)
+        combo_row.addWidget(self._match_combo, stretch=1)
+        match_layout.addLayout(combo_row)
+        self._dup_id_lbl = QLabel()
+        self._dup_id_lbl.setWordWrap(True)
+        self._dup_id_lbl.setStyleSheet(f"color: {t.error}; font-size: 11px;")
+        self._dup_id_lbl.setVisible(False)
+        match_layout.addWidget(self._dup_id_lbl)
+        s2_left.addWidget(self._s2_detail)
+        s2_left.addStretch()
+        s2_box.addLayout(s2_left, stretch=1)
+
+        s2_right = QVBoxLayout()
+        s2_right.setSpacing(4)
+        self._ids_lbl = QLabel("IDs in this column:")
+        self._ids_lbl.setVisible(False)
+        s2_right.addWidget(self._ids_lbl)
+        self._match_preview = QListWidget()
+        self._match_preview.setObjectName("matchPreviewList")
+        self._match_preview.setFixedHeight(92)
+        self._match_preview.setVisible(False)
+        self._match_preview.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._match_preview.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        s2_right.addWidget(self._match_preview)
+        s2_right.addStretch()
+        s2_box.addLayout(s2_right, stretch=1)
+
+        outer.addLayout(s2_box)
+
+        # ── Section 3: Load data (hidden until a clean ID column is chosen) ────
         self._step3_container = QWidget()
         self._step3_container.setVisible(False)
         s3 = QVBoxLayout(self._step3_container)
@@ -753,18 +791,22 @@ class CsvImportWidget(QWidget):
 
         s3.addWidget(_sep())
 
-        self._hdr3 = QLabel("3.  Load data")
-        self._hdr3.setStyleSheet(
-            f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
-        )
-        s3.addWidget(self._hdr3)
-
-        # Load data: buttons on left, filename preview on right
+        # Same two-column shape as section 2: heading + buttons + info on the
+        # left, filename list on the right with its title level with the heading
+        # and its box top level with the buttons row.
         files_row = QHBoxLayout()
         files_row.setSpacing(14)
 
         files_left = QVBoxLayout()
         files_left.setSpacing(4)
+        self._hdr3 = QLabel("3.  Load data")
+        self._hdr3.setStyleSheet(
+            f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        )
+        files_left.addWidget(self._hdr3)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(8)
         self._add_folder_btn = QPushButton("Add folder…")
         self._add_folder_btn.setObjectName("secondaryButton")
         self._add_folder_btn.clicked.connect(self._add_folder)
@@ -773,71 +815,43 @@ class CsvImportWidget(QWidget):
         self._add_files_btn.setObjectName("secondaryButton")
         self._add_files_btn.clicked.connect(self._add_files)
         self._add_files_btn.installEventFilter(self._tooltip_filter)
+        self._clear_files_btn = QPushButton("Clear")
+        self._clear_files_btn.setObjectName("secondaryButton")
+        self._clear_files_btn.clicked.connect(self._clear_files)
+        self._clear_files_btn.installEventFilter(self._tooltip_filter)
+        buttons_row.addWidget(self._add_folder_btn)
+        buttons_row.addWidget(self._add_files_btn)
+        buttons_row.addWidget(self._clear_files_btn)
+        buttons_row.addStretch()
+        files_left.addLayout(buttons_row)
+
         self._file_count_lbl = QLabel("No files added.")
         self._file_count_lbl.setObjectName("mutedLabel")
-        files_left.addWidget(self._add_folder_btn)
-        files_left.addWidget(self._add_files_btn)
+        self._dup_name_lbl = QLabel()
+        self._dup_name_lbl.setWordWrap(True)
+        self._dup_name_lbl.setStyleSheet(f"color: {t.error}; font-size: 11px;")
+        self._dup_name_lbl.setVisible(False)
         files_left.addWidget(self._file_count_lbl)
+        files_left.addWidget(self._dup_name_lbl)
         files_left.addStretch()
         files_row.addLayout(files_left, stretch=1)
 
-        self._file_preview = QTableWidget(0, 2)
-        self._file_preview.setObjectName("filePreviewTable")
-        self._file_preview.setFixedHeight(88)
-        self._file_preview.horizontalHeader().hide()
-        self._file_preview.verticalHeader().hide()
-        self._file_preview.setShowGrid(False)
+        file_layout = QVBoxLayout()
+        file_layout.setSpacing(4)
+        file_layout.addWidget(QLabel("Filenames:"))
+        self._file_preview = QListWidget()
+        self._file_preview.setObjectName("matchPreviewList")
+        self._file_preview.setFixedHeight(92)
         self._file_preview.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self._file_preview.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._file_preview.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._file_preview.setItemDelegateForColumn(0, _ElideLeftDelegate(self._file_preview))
-        self._file_preview.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Interactive
-        )
-        self._file_preview.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
-        )
-        self._file_preview.setColumnWidth(0, 110)
-        files_row.addWidget(self._file_preview, stretch=1)
+        file_layout.addWidget(self._file_preview)
+        file_layout.addStretch()
+        files_row.addLayout(file_layout, stretch=1)
+
         s3.addLayout(files_row)
-
-        s3.addWidget(_sep())
-
-        # Column selection: match col + group cols, even split
-        col_row = QHBoxLayout()
-        col_row.setSpacing(14)
-
-        match_layout = QVBoxLayout()
-        match_layout.setSpacing(4)
-        match_layout.addWidget(QLabel("Match on column:"))
-        self._match_combo = QComboBox()
-        self._match_combo.currentIndexChanged.connect(self._on_match_col_changed)
-        self._match_combo.installEventFilter(self._tooltip_filter)
-        match_layout.addWidget(self._match_combo)
-        self._match_preview = QListWidget()
-        self._match_preview.setObjectName("matchPreviewList")
-        self._match_preview.setFixedHeight(76)
-        self._match_preview.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self._match_preview.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        match_layout.addWidget(self._match_preview)
-        col_row.addLayout(match_layout, stretch=1)
-
-        group_layout = QVBoxLayout()
-        group_layout.setSpacing(4)
-        group_layout.addWidget(QLabel("Group by columns:"))
-        self._group_cols_list = _CheckableListWidget()
-        self._group_cols_list.setObjectName("csvGroupColsList")
-        self._group_cols_list.setFixedHeight(110)
-        self._group_cols_list.itemChanged.connect(self._refresh)
-        self._group_cols_list.installEventFilter(self._tooltip_filter)
-        group_layout.addWidget(self._group_cols_list)
-        col_row.addLayout(group_layout, stretch=1)
-
-        s3.addLayout(col_row)
-
         outer.addWidget(self._step3_container)
 
-        # ── Step 4: Match controls + preview (hidden until cols selected) ─────
+        # ── Section 4: Define groups (hidden until files added) ───────────────
         self._step4_container = QWidget()
         self._step4_container.setVisible(False)
         s4 = QVBoxLayout(self._step4_container)
@@ -846,17 +860,71 @@ class CsvImportWidget(QWidget):
 
         s4.addWidget(_sep())
 
-        self._hdr4 = QLabel("4.  Match to filenames")
+        self._hdr4 = QLabel("4.  Define groups by columns")
         self._hdr4.setStyleSheet(
             f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
         )
         self._hdr4.setToolTip(
-            "Tell the wizard which column contains the ID to match against your "
-            "filenames, and which column(s) define the group each recording belongs to."
+            "Tick the column(s) that define which group each recording belongs "
+            "to. Values are joined with '_' to name the group."
         )
         s4.addWidget(self._hdr4)
 
-        # Row 1 — separators
+        self._group_cols_list = _CheckableListWidget()
+        self._group_cols_list.setObjectName("csvGroupColsList")
+        self._group_cols_list.setFixedHeight(92)
+        self._group_cols_list.itemChanged.connect(self._refresh)
+        self._group_cols_list.installEventFilter(self._tooltip_filter)
+        s4.addWidget(self._group_cols_list)
+
+        outer.addWidget(self._step4_container)
+
+        # ── Step 5: Match controls + preview (hidden until files added) ───────
+        self._step5_container = QWidget()
+        self._step5_container.setVisible(False)
+        s5 = QVBoxLayout(self._step5_container)
+        s5.setContentsMargins(0, 0, 0, 0)
+        s5.setSpacing(8)
+
+        s5.addWidget(_sep())
+
+        self._hdr5 = QLabel("5.  Review")
+        self._hdr5.setStyleSheet(
+            f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        )
+        s5.addWidget(self._hdr5)
+
+        # Status banner — the outcome leads. For tidy data it reads "all matched"
+        # and the user is done; the knobs below only come out when it doesn't.
+        self._banner = QLabel()
+        self._banner.setWordWrap(True)
+        self._banner.setStyleSheet(f"color: {t.muted}; font-size: 12px; padding: 4px 0;")
+        s5.addWidget(self._banner)
+
+        # Collapsed "adjust" disclosure. The defaults match most datasets, so this
+        # stays shut unless the banner reports a problem; its label carries a
+        # one-line summary of the current rules so it isn't a black box.
+        self._adjust_toggle = QPushButton("▸  Adjust matching rules")
+        self._adjust_toggle.setObjectName("adjustToggle")
+        self._adjust_toggle.setCheckable(True)
+        self._adjust_toggle.clicked.connect(self._toggle_adjust)
+        s5.addWidget(self._adjust_toggle)
+
+        self._adjust_body = QWidget()
+        self._adjust_body.setVisible(False)
+        adj = QVBoxLayout(self._adjust_body)
+        adj.setContentsMargins(0, 0, 0, 6)
+        adj.setSpacing(8)
+
+        def _sub(text: str) -> QLabel:
+            lbl = QLabel(text)
+            lbl.setStyleSheet(f"color: {t.muted}; font-size: 11px; font-weight: bold;")
+            return lbl
+
+        # ── Tokens — how names are split, and when two tokens count as equal ──
+        adj.addWidget(_sub("Tokens"))
+
+        # Separators
         sep_row = QHBoxLayout()
         sep_row.setSpacing(8)
         sep_lbl = QLabel("Separators:")
@@ -899,7 +967,7 @@ class CsvImportWidget(QWidget):
         sep_row.addWidget(self._sep_edit)
         sep_row.addWidget(self._sep_add_btn)
         sep_row.addStretch()
-        s4.addLayout(sep_row)
+        adj.addLayout(sep_row)
 
         # Separator chips (shown only in "strings" mode)
         self._sep_chips_scroll = QScrollArea()
@@ -915,9 +983,75 @@ class CsvImportWidget(QWidget):
         self._sep_chips_layout.setSpacing(4)
         self._sep_chips_layout.addStretch()
         self._sep_chips_scroll.setWidget(self._sep_chips_widget)
-        s4.addWidget(self._sep_chips_scroll)
+        adj.addWidget(self._sep_chips_scroll)
 
-        # Row 2 — how many ID tokens must be found (count on the first line,
+        # Ignore tokens containing
+        ignore_row = QHBoxLayout()
+        ignore_row.setSpacing(8)
+        ignore_lbl = QLabel("Ignore tokens containing:")
+        ignore_lbl.setToolTip(
+            "Drop any token (from the ID or the filename) that contains one of "
+            "these strings before matching — e.g. a shared date, batch, or cohort tag."
+        )
+        ignore_row.addWidget(ignore_lbl)
+
+        self._ignore_edit = QLineEdit()
+        self._ignore_edit.setPlaceholderText("string…")
+        self._ignore_edit.setMaximumWidth(120)
+        self._ignore_edit.returnPressed.connect(self._on_add_ignore)
+        self._ignore_edit.installEventFilter(self._tooltip_filter)
+        self._ignore_add_btn = QPushButton("Add")
+        self._ignore_add_btn.setObjectName("secondaryButton")
+        self._ignore_add_btn.clicked.connect(self._on_add_ignore)
+        self._ignore_add_btn.installEventFilter(self._tooltip_filter)
+        ignore_row.addWidget(self._ignore_edit)
+        ignore_row.addWidget(self._ignore_add_btn)
+        ignore_row.addStretch()
+        adj.addLayout(ignore_row)
+
+        # Ignore chips (shown only when at least one string is set)
+        self._ignore_chips_scroll = QScrollArea()
+        self._ignore_chips_scroll.setObjectName("sepChipsArea")
+        self._ignore_chips_scroll.setWidgetResizable(True)
+        self._ignore_chips_scroll.setFixedHeight(36)
+        self._ignore_chips_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._ignore_chips_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._ignore_chips_scroll.setVisible(False)
+        self._ignore_chips_widget = QWidget()
+        self._ignore_chips_layout = QHBoxLayout(self._ignore_chips_widget)
+        self._ignore_chips_layout.setContentsMargins(4, 2, 4, 2)
+        self._ignore_chips_layout.setSpacing(4)
+        self._ignore_chips_layout.addStretch()
+        self._ignore_chips_scroll.setWidget(self._ignore_chips_widget)
+        adj.addWidget(self._ignore_chips_scroll)
+
+        # Case sensitivity + tolerate leading zeros
+        zeros_row = QHBoxLayout()
+        zeros_row.setSpacing(16)
+        self._case_check = QCheckBox("Case-sensitive")
+        self._case_check.setChecked(True)
+        self._case_check.setToolTip(
+            "When checked, 'OFT1' and 'oft1' are treated as different — the case "
+            "in the CSV ID and the filename must match. Uncheck to ignore case."
+        )
+        self._case_check.toggled.connect(self._refresh)
+        self._case_check.installEventFilter(self._tooltip_filter)
+        zeros_row.addWidget(self._case_check)
+        self._zeros_check = QCheckBox("Tolerate leading zeros")
+        self._zeros_check.setToolTip(
+            "Treats '001', '01', and '1' as equivalent when matching — useful if "
+            "your CSV IDs and filenames use inconsistent zero-padding."
+        )
+        self._zeros_check.toggled.connect(self._refresh)
+        self._zeros_check.installEventFilter(self._tooltip_filter)
+        zeros_row.addWidget(self._zeros_check)
+        zeros_row.addStretch()
+        adj.addLayout(zeros_row)
+
+        # ── Match strictness — how strictly the ID's tokens must line up ──────
+        adj.addWidget(_sub("Match strictness"))
+
+        # How many of the ID's tokens must be found (count on the first line,
         # order/contiguity toggles on the second so nothing crops when narrow)
         idtok_row = QHBoxLayout()
         idtok_row.setSpacing(8)
@@ -958,7 +1092,7 @@ class CsvImportWidget(QWidget):
         idtok_row.addWidget(self._atleast_radio)
         idtok_row.addWidget(self._min_spin)
         idtok_row.addStretch()
-        s4.addLayout(idtok_row)
+        adj.addLayout(idtok_row)
 
         flags_row = QHBoxLayout()
         flags_row.setSpacing(16)
@@ -978,103 +1112,61 @@ class CsvImportWidget(QWidget):
         flags_row.addWidget(self._order_check)
         flags_row.addWidget(self._unint_check)
         flags_row.addStretch()
-        s4.addLayout(flags_row)
+        adj.addLayout(flags_row)
 
-        # Row 3 — ignore tokens containing
-        ignore_row = QHBoxLayout()
-        ignore_row.setSpacing(8)
-        ignore_lbl = QLabel("Ignore tokens containing:")
-        ignore_lbl.setToolTip(
-            "Drop any token (from the ID or the filename) that contains one of "
-            "these strings before matching — e.g. a shared date, batch, or cohort tag."
-        )
-        ignore_row.addWidget(ignore_lbl)
-
-        self._ignore_edit = QLineEdit()
-        self._ignore_edit.setPlaceholderText("string…")
-        self._ignore_edit.setMaximumWidth(120)
-        self._ignore_edit.returnPressed.connect(self._on_add_ignore)
-        self._ignore_edit.installEventFilter(self._tooltip_filter)
-        self._ignore_add_btn = QPushButton("Add")
-        self._ignore_add_btn.setObjectName("secondaryButton")
-        self._ignore_add_btn.clicked.connect(self._on_add_ignore)
-        self._ignore_add_btn.installEventFilter(self._tooltip_filter)
-        ignore_row.addWidget(self._ignore_edit)
-        ignore_row.addWidget(self._ignore_add_btn)
-        ignore_row.addStretch()
-        s4.addLayout(ignore_row)
-
-        # Ignore chips (shown only when at least one string is set)
-        self._ignore_chips_scroll = QScrollArea()
-        self._ignore_chips_scroll.setObjectName("sepChipsArea")
-        self._ignore_chips_scroll.setWidgetResizable(True)
-        self._ignore_chips_scroll.setFixedHeight(36)
-        self._ignore_chips_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._ignore_chips_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._ignore_chips_scroll.setVisible(False)
-        self._ignore_chips_widget = QWidget()
-        self._ignore_chips_layout = QHBoxLayout(self._ignore_chips_widget)
-        self._ignore_chips_layout.setContentsMargins(4, 2, 4, 2)
-        self._ignore_chips_layout.setSpacing(4)
-        self._ignore_chips_layout.addStretch()
-        self._ignore_chips_scroll.setWidget(self._ignore_chips_widget)
-        s4.addWidget(self._ignore_chips_scroll)
-
-        # Line C — case sensitivity + tolerate leading zeros
-        zeros_row = QHBoxLayout()
-        zeros_row.setSpacing(16)
-        self._case_check = QCheckBox("Case-sensitive")
-        self._case_check.setChecked(True)
-        self._case_check.setToolTip(
-            "When checked, 'OFT1' and 'oft1' are treated as different — the case "
-            "in the CSV ID and the filename must match. Uncheck to ignore case."
-        )
-        self._case_check.toggled.connect(self._refresh)
-        self._case_check.installEventFilter(self._tooltip_filter)
-        zeros_row.addWidget(self._case_check)
-        self._zeros_check = QCheckBox("Tolerate leading zeros")
-        self._zeros_check.setToolTip(
-            "Treats '001', '01', and '1' as equivalent when matching — useful if "
-            "your CSV IDs and filenames use inconsistent zero-padding."
-        )
-        self._zeros_check.toggled.connect(self._refresh)
-        self._zeros_check.installEventFilter(self._tooltip_filter)
-        zeros_row.addWidget(self._zeros_check)
-        zeros_row.addStretch()
-        s4.addLayout(zeros_row)
+        s5.addWidget(self._adjust_body)
 
         # Preview
         self._preview_area = QScrollArea()
         self._preview_area.setObjectName("previewArea")
         self._preview_area.setWidgetResizable(True)
         self._preview_area.setMinimumHeight(80)
-        s4.addWidget(self._preview_area, stretch=1)
+        s5.addWidget(self._preview_area, stretch=1)
 
-        outer.addWidget(self._step4_container, stretch=1)
+        outer.addWidget(self._step5_container, stretch=1)
+
+        # Trailing stretch — pins earlier steps to the top before step 5 appears.
+        # Without it, the only stretch item (step 5) is hidden, so the box layout
+        # sees zero total stretch and spreads the slack evenly around every item,
+        # vertically centring the visible steps. Once step 5 is shown its preview
+        # area takes the slack instead, so this collapses to 0 (see
+        # _update_step_visibility).
+        self._outer_layout = outer
+        self._bottom_stretch_index = outer.count()
+        outer.addStretch(1)
 
     # ── Step visibility ───────────────────────────────────────────────────────
 
     def _update_step_visibility(self) -> None:
         t = _get_theme()
         csv_loaded = bool(self._rows)
-        cols_selected = (
-            csv_loaded
-            and bool(self._match_combo.currentText())
-            and bool(self._selected_group_cols())
-        )
-        self._step3_container.setVisible(csv_loaded)
-        self._step4_container.setVisible(cols_selected)
+        # A clean ID column (loaded, chosen, no duplicates) gates everything below
+        # it — you can't load data against an ambiguous manifest.
+        id_ok = csv_loaded and bool(self._match_combo.currentText()) and not self._duplicate_ids
+        files_added = bool(self._added_files)
+        groups_defined = bool(self._selected_group_cols())
+
+        self._s2_detail.setVisible(csv_loaded)
+        self._ids_lbl.setVisible(csv_loaded)
+        self._match_preview.setVisible(csv_loaded)
+        self._step3_container.setVisible(id_ok)
+        self._step4_container.setVisible(id_ok and files_added)
+        step5_visible = id_ok and files_added and groups_defined
+        self._step5_container.setVisible(step5_visible)
+
+        # While section 5 is up its preview takes the slack; otherwise the
+        # trailing spacer takes it so the visible sections stay pinned to the top
+        # instead of being vertically centred in the empty space below them.
+        self._outer_layout.setStretch(self._bottom_stretch_index, 0 if step5_visible else 1)
+
         _active = f"color: {t.accent}; font-size: 11px; font-weight: bold; padding-top: 4px;"
         _done = f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
-        if not csv_loaded:
-            self._hdr2.setStyleSheet(_active)
-        elif not cols_selected:
-            self._hdr2.setStyleSheet(_done)
-            self._hdr3.setStyleSheet(_active)
-        else:
-            self._hdr2.setStyleSheet(_done)
-            self._hdr3.setStyleSheet(_done)
-            self._hdr4.setStyleSheet(_active)
+        self._hdr2.setStyleSheet(_done if id_ok else _active)
+        self._hdr3.setStyleSheet(_active if (id_ok and not files_added) else _done)
+        self._hdr4.setStyleSheet(
+            _active if (id_ok and files_added and not groups_defined) else _done
+        )
+        self._hdr5.setStyleSheet(_active if step5_visible else _done)
 
     # ── State management ──────────────────────────────────────────────────────
 
@@ -1096,12 +1188,17 @@ class CsvImportWidget(QWidget):
             self._ignore_add_btn,
             self._case_check,
             self._zeros_check,
-            self._add_folder_btn,
-            self._add_files_btn,
         ):
             widget.setEnabled(csv_loaded)
             if not csv_loaded:
                 widget.setToolTip(no_csv_tip)
+
+        # File buttons live in section 3 (only visible once a clean ID column is
+        # chosen, which implies csv_loaded), but keep them enabled whenever a CSV
+        # is loaded.
+        self._add_folder_btn.setEnabled(csv_loaded)
+        self._add_files_btn.setEnabled(csv_loaded)
+        self._clear_files_btn.setEnabled(csv_loaded)
 
         # Spinbox: enabled only when CSV loaded AND "At least" radio is selected
         self._min_spin.setEnabled(csv_loaded and self._atleast_radio.isChecked())
@@ -1210,7 +1307,6 @@ class CsvImportWidget(QWidget):
 
     def _on_match_col_changed(self) -> None:
         """Repopulate group cols list and match preview for the current match column."""
-        t = _get_theme()
         match_col = self._match_combo.currentText()
         prev_checked = set(self._selected_group_cols())
 
@@ -1219,12 +1315,9 @@ class CsvImportWidget(QWidget):
         for col in self._csv_cols:
             if col == match_col:
                 continue
-            item = QListWidgetItem(col)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(
-                Qt.CheckState.Checked if col in prev_checked else Qt.CheckState.Unchecked
-            )
-            self._group_cols_list.addItem(item)
+            # One checkable row per column with its sample values inline (as the
+            # tree loader does) — the real column name lives in UserRole so the
+            # display text can carry the summary without confusing selection.
             unique_vals = sorted(
                 {
                     str(row.get(col, "")).strip()
@@ -1233,18 +1326,20 @@ class CsvImportWidget(QWidget):
                 }
             )
             summary = _col_values_summary(unique_vals)
-            if summary:
-                sub = QListWidgetItem(f"    {summary}")
-                sub.setFlags(Qt.ItemFlag.ItemIsEnabled)
-                sub.setForeground(QColor(t.muted))
-                font = sub.font()
-                font.setPointSize(max(font.pointSize() - 1, 8))
-                sub.setFont(font)
-                self._group_cols_list.addItem(sub)
+            label = f"{col}    —    {summary}" if summary else col
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, col)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked if col in prev_checked else Qt.CheckState.Unchecked
+            )
+            self._group_cols_list.addItem(item)
         self._group_cols_list.blockSignals(False)
 
-        self._populate_match_preview(match_col)
-        # Detect duplicate IDs in the chosen match column
+        # Detect duplicate IDs in the chosen match column. A manifest with the
+        # same ID twice is ambiguous (which group?), so this blocks everything
+        # below — surfaced right here next to the handle list, not down in the
+        # result.
         seen: set[str] = set()
         dupes: set[str] = set()
         for row in self._rows:
@@ -1255,16 +1350,34 @@ class CsvImportWidget(QWidget):
                 dupes.add(val)
             seen.add(val)
         self._duplicate_ids = sorted(dupes)
+
+        if self._duplicate_ids:
+            n = len(self._duplicate_ids)
+            self._dup_id_lbl.setText(
+                f"⚠ This column has {n} duplicate {'value' if n == 1 else 'values'} "
+                f"— choose a unique ID column or fix the CSV."
+            )
+            self._dup_id_lbl.setToolTip(", ".join(self._duplicate_ids))
+            self._dup_id_lbl.setVisible(True)
+        else:
+            self._dup_id_lbl.setVisible(False)
+
+        self._populate_match_preview(match_col)
         self._refresh()
 
     def _populate_match_preview(self, col: str) -> None:
+        t = _get_theme()
         self._match_preview.clear()
         if not self._rows or not col:
             return
-        for row in self._rows:
-            val = str(row.get(col, "")).strip()
-            if val:
-                self._match_preview.addItem(val)
+        dupes = set(self._duplicate_ids)
+        values = [v for v in (str(row.get(col, "")).strip() for row in self._rows) if v]
+        for val in sorted(values, key=_natural_key):
+            item = QListWidgetItem(val)
+            item.setToolTip(val)
+            if val in dupes:
+                item.setForeground(QColor(t.error))
+            self._match_preview.addItem(item)
 
     def _add_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Select a folder")
@@ -1297,33 +1410,59 @@ class CsvImportWidget(QWidget):
             if p not in existing:
                 self._added_files.append(p)
                 existing.add(p)
-        n = len(self._added_files)
-        noun = "file" if n == 1 else "files"
-        self._file_count_lbl.setText(f"{n} {noun} added.")
-        folder_colour: dict[Path, QBrush] = {}
-        for p in self._added_files:
-            if p.parent not in folder_colour:
-                idx = len(folder_colour) % len(_FOLDER_TEXT_COLOURS)
-                folder_colour[p.parent] = QBrush(QColor(_FOLDER_TEXT_COLOURS[idx]))
-        self._file_preview.setRowCount(len(self._added_files))
-        for row, p in enumerate(self._added_files):
-            colour = folder_colour[p.parent]
-            dir_item = QTableWidgetItem(str(p.parent) + "/")
-            dir_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            dir_item.setForeground(colour)
-            dir_item.setToolTip(str(p.parent))
-            name_item = QTableWidgetItem(p.name)
-            name_item.setForeground(colour)
-            name_item.setToolTip(str(p))
-            self._file_preview.setItem(row, 0, dir_item)
-            self._file_preview.setItem(row, 1, name_item)
+        self._rebuild_file_list()
         self._refresh()
+
+    def _clear_files(self) -> None:
+        self._added_files = []
+        self._rebuild_file_list()
+        self._refresh()
+
+    def _rebuild_file_list(self) -> None:
+        """Repopulate the flat filename list, the count hint and the dup warning.
+
+        Names only (full path on hover) so it reads as a direct counterpart to
+        the handle list. Because the path is hidden, same-named files from
+        different folders would be indistinguishable — so duplicated names are
+        flagged and highlighted. Unlike duplicate IDs this only warns: two files
+        named the same in per-day folders is normal, and any clash over a single
+        handle is settled by conflict resolution below.
+        """
+        t = _get_theme()
+        files = self._added_files
+        n = len(files)
+        if n == 0:
+            self._file_count_lbl.setText("No files added.")
+        else:
+            n_folders = len({p.parent for p in files})
+            file_noun = "file" if n == 1 else "files"
+            folder_noun = "folder" if n_folders == 1 else "folders"
+            self._file_count_lbl.setText(f"{n} {file_noun} from {n_folders} {folder_noun}.")
+
+        name_counts = Counter(p.name for p in files)
+        dup_names = {name for name, count in name_counts.items() if count > 1}
+        if dup_names:
+            d = len(dup_names)
+            self._dup_name_lbl.setText(
+                f"⚠ {d} filename{'' if d == 1 else 's'} duplicated across folders."
+            )
+            self._dup_name_lbl.setVisible(True)
+        else:
+            self._dup_name_lbl.setVisible(False)
+
+        self._file_preview.clear()
+        for p in sorted(files, key=lambda q: _natural_key(q.name)):
+            item = QListWidgetItem(p.name)
+            item.setToolTip(str(p))
+            if p.name in dup_names:
+                item.setForeground(QColor(t.error))
+            self._file_preview.addItem(item)
 
     # ── Matching + preview ────────────────────────────────────────────────────
 
     def _selected_group_cols(self) -> list[str]:
         return [
-            self._group_cols_list.item(i).text()
+            self._group_cols_list.item(i).data(Qt.ItemDataRole.UserRole)
             for i in range(self._group_cols_list.count())
             if self._group_cols_list.item(i).checkState() == Qt.CheckState.Checked
         ]
@@ -1341,8 +1480,64 @@ class CsvImportWidget(QWidget):
             match_uninterrupted=self._unint_check.isChecked(),
         )
 
+    def _toggle_adjust(self) -> None:
+        self._adjust_body.setVisible(self._adjust_toggle.isChecked())
+        self._update_adjust_summary()
+
+    def _update_adjust_summary(self) -> None:
+        """Keep the disclosure's one-line summary of the current rules current."""
+        caret = "▾" if self._adjust_toggle.isChecked() else "▸"
+        parts = [
+            "non-alphanumeric" if self._nonalpha_radio.isChecked() else "custom separators",
+            "all tokens" if self._all_radio.isChecked() else f"≥{self._min_spin.value()} tokens",
+        ]
+        if self._order_check.isChecked():
+            parts.append("ordered")
+        if self._unint_check.isChecked():
+            parts.append("uninterrupted")
+        if self._ignore_strings:
+            parts.append(f"{len(self._ignore_strings)} ignored")
+        parts.append("case-sensitive" if self._case_check.isChecked() else "case-insensitive")
+        if self._zeros_check.isChecked():
+            parts.append("zero-tolerant")
+        self._adjust_toggle.setText(f"{caret}  Adjust matching rules    ({' · '.join(parts)})")
+
+    def _update_banner(self, result: _MatchResult | None) -> None:
+        """Lead section 5 with the outcome: a single green/amber status line."""
+        t = _get_theme()
+        if result is None:
+            self._banner.setText("Add data and tick a group column to see matches.")
+            self._banner.setStyleSheet(f"color: {t.muted}; font-size: 12px; padding: 4px 0;")
+            return
+        problems: list[str] = []
+        if result.conflicts:
+            n = len(result.conflicts)
+            problems.append(f"{n} conflict{'' if n == 1 else 's'}")
+        if result.files_not_in_csv:
+            n = len(result.files_not_in_csv)
+            problems.append(f"{n} file{'' if n == 1 else 's'} unmatched")
+        if result.unmatched_csv_ids:
+            n = len(result.unmatched_csv_ids)
+            problems.append(f"{n} ID{'' if n == 1 else 's'} unmatched")
+        if problems:
+            self._banner.setText("⚠  " + "   ·   ".join(problems) + "   — see below")
+            self._banner.setStyleSheet(
+                f"color: {t.warn}; font-size: 12px; font-weight: bold; padding: 4px 0;"
+            )
+        else:
+            n_files = len(self._added_files)
+            n_groups = len(self.result_groups())
+            self._banner.setText(
+                f"✓  All {n_files} file{'' if n_files == 1 else 's'} matched "
+                f"— {n_groups} group{'' if n_groups == 1 else 's'}"
+            )
+            self._banner.setStyleSheet(
+                f"color: {t.success}; font-size: 12px; font-weight: bold; padding: 4px 0;"
+            )
+
     def _refresh(self) -> None:
         self._update_step_visibility()
+        self._update_adjust_summary()
         match_col = self._match_combo.currentText()
         group_cols = self._selected_group_cols()
 
@@ -1405,6 +1600,7 @@ class CsvImportWidget(QWidget):
         self, result: _MatchResult | None, scroll_to_group: str | None = None
     ) -> None:
         t = _get_theme()
+        self._update_banner(result)
         scroll_val = self._preview_area.verticalScrollBar().value()
         scroll_target: QWidget | None = None
         content = QWidget()
@@ -1446,67 +1642,11 @@ class CsvImportWidget(QWidget):
             )
             return
 
-        # Tree: group → files (clean matches only), one section per group
-        by_group: dict[str, list[_Match]] = {}
-        for m in result.clean_matches:
-            by_group.setdefault(m.group_name, []).append(m)
-
-        if by_group:
-            for gname in sorted(by_group):
-                ms = by_group[gname]
-                is_expanded = gname in self._expanded_groups
-                visible = ms if is_expanded else ms[:5]
-
-                lines = [
-                    f'<b style="color:{t.text};">{gname}</b>'
-                    f'<span style="color:{t.muted};">  ({len(ms)} files)</span>'
-                ]
-                for m in visible:
-                    fname_html = _highlight(m.path.name, m.name_spans, t.accent)
-                    id_html = _highlight(m.id_val, m.id_spans, t.accent)
-                    lines.append(
-                        f'<span style="color:{t.muted};">&nbsp;&nbsp;&nbsp;&nbsp;{fname_html}'
-                        f'</span><span style="color:{t.sep};">'
-                        f"&nbsp; &larr; &nbsp;{id_html}</span>"
-                    )
-                group_lbl = QLabel("<br>".join(lines))
-                group_lbl.setTextFormat(Qt.TextFormat.RichText)
-                group_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-                group_lbl.setWordWrap(False)
-                layout.addWidget(group_lbl)
-                if gname == scroll_to_group:
-                    scroll_target = group_lbl
-
-                extra = len(ms) - 5
-                if not is_expanded and extra > 0:
-                    noun = "file" if extra == 1 else "files"
-                    more_lbl = QLabel(
-                        f'<a href="expand:{gname}" style="color:{t.sep}; text-decoration:none;">'
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;... and {extra} more {noun}</a>"
-                    )
-                    more_lbl.setTextFormat(Qt.TextFormat.RichText)
-                    more_lbl.setOpenExternalLinks(False)
-                    more_lbl.linkActivated.connect(self._on_preview_link)
-                    layout.addWidget(more_lbl)
-                elif is_expanded and len(ms) > 5:
-                    less_lbl = QLabel(
-                        f'<a href="collapse:{gname}" style="color:{t.sep}; text-decoration:none;">'
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;show less</a>"
-                    )
-                    less_lbl.setTextFormat(Qt.TextFormat.RichText)
-                    less_lbl.setOpenExternalLinks(False)
-                    less_lbl.linkActivated.connect(self._on_preview_link)
-                    layout.addWidget(less_lbl)
-
-        elif self._added_files:
-            no_match = QLabel("No matches yet — check your match column and controls.")
-            no_match.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
-            layout.addWidget(no_match)
-
-        # Conflicts
+        # Problems first — the banner names them; here is the detail and the
+        # control to clear each one, above the matches they affect.
         if self._conflicts:
             sep = QLabel("Conflicts — resolve each before importing:")
-            sep.setStyleSheet(f"color: {t.warn}; font-weight: bold; margin-top: 6px;")
+            sep.setStyleSheet(f"color: {t.warn}; font-weight: bold; margin-top: 2px;")
             layout.addWidget(sep)
             for conflict in self._conflicts:
                 layout.addWidget(self._build_conflict_widget(conflict, t))
@@ -1554,6 +1694,70 @@ class CsvImportWidget(QWidget):
             w = QLabel("Warning: more than 12 distinct groups — check your column selection.")
             w.setStyleSheet(f"color: {t.warn}; font-size: 11px;")
             layout.addWidget(w)
+
+        # Then the matches themselves: group → files (clean matches only).
+        by_group: dict[str, list[_Match]] = {}
+        for m in result.clean_matches:
+            by_group.setdefault(m.group_name, []).append(m)
+
+        if by_group:
+            header = QLabel("Matched groups:")
+            header.setStyleSheet(
+                f"color: {t.muted}; font-size: 11px; font-weight: bold; margin-top: 4px;"
+            )
+            layout.addWidget(header)
+            for gname in sorted(by_group):
+                ms = by_group[gname]
+                is_expanded = gname in self._expanded_groups
+                visible = ms if is_expanded else ms[:5]
+
+                lines = [
+                    f'<b style="color:{t.text};">{gname}</b>'
+                    f'<span style="color:{t.muted};">  ({len(ms)} files)</span>'
+                ]
+                for m in visible:
+                    fname_html = _highlight(m.path.name, m.name_spans, t.accent)
+                    id_html = _highlight(m.id_val, m.id_spans, t.accent)
+                    lines.append(
+                        f'<span style="color:{t.muted};">&nbsp;&nbsp;&nbsp;&nbsp;{fname_html}'
+                        f'</span><span style="color:{t.sep};">'
+                        f"&nbsp; &larr; &nbsp;{id_html}</span>"
+                    )
+                group_lbl = QLabel("<br>".join(lines))
+                group_lbl.setTextFormat(Qt.TextFormat.RichText)
+                group_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+                group_lbl.setWordWrap(False)
+                layout.addWidget(group_lbl)
+                if gname == scroll_to_group:
+                    scroll_target = group_lbl
+
+                extra = len(ms) - 5
+                if not is_expanded and extra > 0:
+                    noun = "file" if extra == 1 else "files"
+                    more_lbl = QLabel(
+                        f'<a href="expand:{gname}" style="color:{t.sep}; text-decoration:none;">'
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;... and {extra} more {noun}</a>"
+                    )
+                    more_lbl.setTextFormat(Qt.TextFormat.RichText)
+                    more_lbl.setOpenExternalLinks(False)
+                    more_lbl.linkActivated.connect(self._on_preview_link)
+                    layout.addWidget(more_lbl)
+                elif is_expanded and len(ms) > 5:
+                    less_lbl = QLabel(
+                        f'<a href="collapse:{gname}" style="color:{t.sep}; text-decoration:none;">'
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;show less</a>"
+                    )
+                    less_lbl.setTextFormat(Qt.TextFormat.RichText)
+                    less_lbl.setOpenExternalLinks(False)
+                    less_lbl.linkActivated.connect(self._on_preview_link)
+                    layout.addWidget(less_lbl)
+
+        elif self._added_files:
+            no_match = QLabel(
+                "No matches yet — open “Adjust matching rules” above and loosen them."
+            )
+            no_match.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
+            layout.addWidget(no_match)
 
         layout.addStretch()
         self._preview_area.setWidget(content)

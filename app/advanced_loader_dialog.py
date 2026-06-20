@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QRadioButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -36,7 +37,7 @@ class AdvancedLoaderDialog(QDialog):
         self._apply_stylesheet()
 
     def result_groups(self) -> dict[str, list[Path]]:
-        if self._stack.currentIndex() == 0:
+        if self._stack.currentIndex() == 1:
             return self._csv_widget.result_groups()
         return self._tree_widget.result_groups()
 
@@ -55,32 +56,30 @@ class AdvancedLoaderDialog(QDialog):
         )
         outer.addWidget(self._hdr1)
 
-        # Mode buttons (checkable, exclusive — neither selected on open)
+        # Mode selector: radio buttons (neither selected on open)
         mode_row = QHBoxLayout()
         mode_row.setSpacing(12)
-        self._csv_btn = QPushButton("Groups from manifest CSV")
-        self._csv_btn.setObjectName("loaderOptionBtn")
-        self._csv_btn.setCheckable(True)
-        self._tree_btn = QPushButton("Groups from directory tree")
-        self._tree_btn.setObjectName("loaderOptionBtn")
-        self._tree_btn.setCheckable(True)
+        self._csv_btn = QRadioButton("Groups from manifest CSV")
+        self._tree_btn = QRadioButton("Groups from directory tree")
         self._mode_group = QButtonGroup(self)
         self._mode_group.setExclusive(True)
         self._mode_group.addButton(self._csv_btn, 0)
         self._mode_group.addButton(self._tree_btn, 1)
         mode_row.addWidget(self._csv_btn)
         mode_row.addWidget(self._tree_btn)
+        mode_row.addStretch()
         outer.addLayout(mode_row)
 
-        # Stacked content (hidden until a mode is chosen)
+        # Stacked content — page 0 is a blank placeholder so the stack is always
+        # visible and the button bar never moves when a mode is selected.
         self._stack = QStackedWidget()
-        self._stack.setVisible(False)
+        self._stack.addWidget(QWidget())  # page 0: placeholder
 
         self._csv_widget = CsvImportWidget(self._file_exts, self)
-        self._stack.addWidget(self._csv_widget)  # page 0
+        self._stack.addWidget(self._csv_widget)  # page 1
 
         self._tree_widget = DirectoryTreeWidget(self._file_exts, self)
-        self._stack.addWidget(self._tree_widget)  # page 1
+        self._stack.addWidget(self._tree_widget)  # page 2
 
         outer.addWidget(self._stack, stretch=1)
 
@@ -113,19 +112,18 @@ class AdvancedLoaderDialog(QDialog):
         self._hdr1.setStyleSheet(
             f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
         )
-        self._stack.setCurrentIndex(btn_id)
-        self._stack.setVisible(True)
+        self._stack.setCurrentIndex(btn_id + 1)  # +1: page 0 is placeholder
         if btn_id == 0:
             self._ok_btn.setEnabled(self._csv_widget.is_valid())
         else:
             self._ok_btn.setEnabled(self._tree_widget.is_valid())
 
     def _on_csv_validity_changed(self, valid: bool) -> None:
-        if self._stack.isVisible() and self._stack.currentIndex() == 0:
+        if self._stack.currentIndex() == 1:
             self._ok_btn.setEnabled(valid)
 
     def _on_tree_validity_changed(self, valid: bool) -> None:
-        if self._stack.isVisible() and self._stack.currentIndex() == 1:
+        if self._stack.currentIndex() == 2:
             self._ok_btn.setEnabled(valid)
 
     def _on_ok(self) -> None:
@@ -155,19 +153,5 @@ class AdvancedLoaderDialog(QDialog):
             }}
             QPushButton#importBtn:hover {{ background-color: {t.accent_hover}; }}
             QPushButton#importBtn:disabled {{ background-color: {t.muted}; color: {t.bg}; }}
-            QPushButton#loaderOptionBtn {{
-                background-color: {t.display};
-                color: {t.text};
-                border: 1px solid {t.muted};
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-size: 13px;
-            }}
-            QPushButton#loaderOptionBtn:hover {{ border-color: {t.accent}; }}
-            QPushButton#loaderOptionBtn:checked {{
-                background-color: {t.accent};
-                color: white;
-                border-color: {t.accent};
-            }}
         """
         )

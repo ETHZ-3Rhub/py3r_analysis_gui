@@ -264,12 +264,27 @@ class DirectoryTreeWidget(QWidget):
 
         outer.addWidget(self._step3_container, stretch=1)
 
+        # Trailing stretch — pins step 2 to the top before step 3 appears.
+        # Without it, the only stretch item (step 3) is hidden, so the box layout
+        # sees zero total stretch and spreads the slack evenly around every item,
+        # vertically centring step 2. Once step 3 is shown its preview area takes
+        # the slack instead, so this collapses to 0 (see _update_step_visibility).
+        self._outer_layout = outer
+        self._bottom_stretch_index = outer.count()
+        outer.addStretch(1)
+
     # ── Step visibility ───────────────────────────────────────────────────────
 
     def _update_step_visibility(self) -> None:
         t = _get_theme()
         root_chosen = self._root is not None
         self._step3_container.setVisible(root_chosen)
+
+        # While step 3 is up its preview takes the slack; otherwise the trailing
+        # spacer takes it so step 2 stays pinned to the top instead of being
+        # vertically centred in the empty space below it.
+        self._outer_layout.setStretch(self._bottom_stretch_index, 0 if root_chosen else 1)
+
         _active = f"color: {t.accent}; font-size: 11px; font-weight: bold; padding-top: 4px;"
         _done = f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
         if root_chosen:
