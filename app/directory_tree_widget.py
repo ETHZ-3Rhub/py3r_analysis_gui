@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -167,21 +168,29 @@ class DirectoryTreeWidget(QWidget):
     def _build_ui(self) -> None:
         t = _get_theme()
 
-        def _header(text: str, tooltip: str = "") -> QLabel:
+        def _sub_header(text: str) -> QLabel:
             lbl = QLabel(text)
             lbl.setStyleSheet(
                 f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
             )
-            if tooltip:
-                lbl.setToolTip(tooltip)
             return lbl
+
+        def _sep() -> QFrame:
+            f = QFrame()
+            f.setFrameShape(QFrame.Shape.HLine)
+            f.setStyleSheet(f"color: {t.sep}; margin: 4px 0;")
+            return f
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
 
-        # ── Root directory ────────────────────────────────────────────────────
-        outer.addWidget(_header("Root directory"))
+        # ── Step 2: Root directory (always visible) ───────────────────────────
+        self._hdr2 = QLabel("2.  Root directory")
+        self._hdr2.setStyleSheet(
+            f"color: {t.accent}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        )
+        outer.addWidget(self._hdr2)
 
         root_row = QHBoxLayout()
         root_row.setSpacing(8)
@@ -194,19 +203,29 @@ class DirectoryTreeWidget(QWidget):
         root_row.addWidget(self._root_lbl, stretch=1)
         outer.addLayout(root_row)
 
-        # ── Depth ─────────────────────────────────────────────────────────────
-        outer.addWidget(_header("Depth"))
+        # ── Step 3: Depth + levels + preview (hidden until root chosen) ───────
+        self._step3_container = QWidget()
+        self._step3_container.setVisible(False)
+        s3 = QVBoxLayout(self._step3_container)
+        s3.setContentsMargins(0, 0, 0, 0)
+        s3.setSpacing(8)
+
+        s3.addWidget(_sep())
+
+        self._hdr3 = QLabel("3.  Depth & groups")
+        self._hdr3.setStyleSheet(
+            f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        )
+        s3.addWidget(self._hdr3)
 
         depth_row = QHBoxLayout()
         depth_row.setSpacing(8)
-
         depth_row.addWidget(QLabel("Min:"))
         self._min_spin = QSpinBox()
         self._min_spin.setRange(1, 99)
         self._min_spin.setValue(1)
         self._min_spin.valueChanged.connect(self._on_min_changed)
         depth_row.addWidget(self._min_spin)
-
         depth_row.addSpacing(8)
         depth_row.addWidget(QLabel("Max:"))
         self._max_spin = QSpinBox()
@@ -214,7 +233,6 @@ class DirectoryTreeWidget(QWidget):
         self._max_spin.setValue(1)
         self._max_spin.valueChanged.connect(self._on_max_changed)
         depth_row.addWidget(self._max_spin)
-
         depth_row.addSpacing(8)
         self._link_check = QCheckBox("Link")
         self._link_check.setChecked(True)
@@ -223,29 +241,42 @@ class DirectoryTreeWidget(QWidget):
         )
         self._link_check.toggled.connect(self._on_link_toggled)
         depth_row.addWidget(self._link_check)
-
         depth_row.addStretch()
-        outer.addLayout(depth_row)
+        s3.addLayout(depth_row)
 
-        # ── Group by levels ───────────────────────────────────────────────────
-        outer.addWidget(_header("Group by levels"))
+        s3.addWidget(_sub_header("Group by levels"))
 
         self._levels_placeholder = QLabel("Choose a folder to see grouping levels.")
         self._levels_placeholder.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
-        outer.addWidget(self._levels_placeholder)
+        s3.addWidget(self._levels_placeholder)
 
         self._levels_list = _CheckableListWidget()
         self._levels_list.setMaximumHeight(120)
         self._levels_list.setVisible(False)
         self._levels_list.itemChanged.connect(self._on_level_changed)
-        outer.addWidget(self._levels_list)
+        s3.addWidget(self._levels_list)
 
-        # ── Preview ───────────────────────────────────────────────────────────
         self._preview_area = QScrollArea()
         self._preview_area.setObjectName("previewArea")
         self._preview_area.setWidgetResizable(True)
-        self._preview_area.setMinimumHeight(160)
-        outer.addWidget(self._preview_area, stretch=1)
+        self._preview_area.setMinimumHeight(100)
+        s3.addWidget(self._preview_area, stretch=1)
+
+        outer.addWidget(self._step3_container, stretch=1)
+
+    # ── Step visibility ───────────────────────────────────────────────────────
+
+    def _update_step_visibility(self) -> None:
+        t = _get_theme()
+        root_chosen = self._root is not None
+        self._step3_container.setVisible(root_chosen)
+        _active = f"color: {t.accent}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        _done = f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        if root_chosen:
+            self._hdr2.setStyleSheet(_done)
+            self._hdr3.setStyleSheet(_active)
+        else:
+            self._hdr2.setStyleSheet(_active)
 
     # ── Depth spin handlers ───────────────────────────────────────────────────
 
@@ -380,6 +411,7 @@ class DirectoryTreeWidget(QWidget):
         """Recompute groups from cached entries + current checked levels, then refresh preview."""
         self._result = _compute_groups(self._entries, self._checked_levels)
         self._expanded_groups &= set(self._result)
+        self._update_step_visibility()
         self._rebuild_preview()
         self.validity_changed.emit(self.is_valid())
 

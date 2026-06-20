@@ -12,8 +12,8 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
     QHBoxLayout,
+    QLabel,
     QPushButton,
-    QRadioButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -25,13 +25,13 @@ from app.theme import get_theme as _get_theme
 
 
 class AdvancedLoaderDialog(QDialog):
-    """Advanced loader: manifest CSV wizard or directory tree (stub)."""
+    """Advanced loader: manifest CSV wizard or directory tree."""
 
     def __init__(self, file_exts: set[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._file_exts = file_exts
         self.setWindowTitle("Advanced loader")
-        self.resize(680, 680)
+        self.setFixedSize(700, 860)
         self._build_ui()
         self._apply_stylesheet()
 
@@ -43,26 +43,38 @@ class AdvancedLoaderDialog(QDialog):
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
+        t = _get_theme()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 16, 16, 14)
         outer.setSpacing(12)
 
-        # Mode selector
+        # Step 1 header
+        self._hdr1 = QLabel("1.  Choose loader")
+        self._hdr1.setStyleSheet(
+            f"color: {t.accent}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        )
+        outer.addWidget(self._hdr1)
+
+        # Mode buttons (checkable, exclusive — neither selected on open)
         mode_row = QHBoxLayout()
-        mode_row.setSpacing(20)
-        self._manifest_radio = QRadioButton("Groups from manifest CSV")
-        self._tree_radio = QRadioButton("Groups from directory tree")
-        self._manifest_radio.setChecked(True)
-        mode_group = QButtonGroup(self)
-        mode_group.addButton(self._manifest_radio)
-        mode_group.addButton(self._tree_radio)
-        mode_row.addWidget(self._manifest_radio)
-        mode_row.addWidget(self._tree_radio)
-        mode_row.addStretch()
+        mode_row.setSpacing(12)
+        self._csv_btn = QPushButton("Groups from manifest CSV")
+        self._csv_btn.setObjectName("loaderOptionBtn")
+        self._csv_btn.setCheckable(True)
+        self._tree_btn = QPushButton("Groups from directory tree")
+        self._tree_btn.setObjectName("loaderOptionBtn")
+        self._tree_btn.setCheckable(True)
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        self._mode_group.addButton(self._csv_btn, 0)
+        self._mode_group.addButton(self._tree_btn, 1)
+        mode_row.addWidget(self._csv_btn)
+        mode_row.addWidget(self._tree_btn)
         outer.addLayout(mode_row)
 
-        # Stacked content
+        # Stacked content (hidden until a mode is chosen)
         self._stack = QStackedWidget()
+        self._stack.setVisible(False)
 
         self._csv_widget = CsvImportWidget(self._file_exts, self)
         self._stack.addWidget(self._csv_widget)  # page 0
@@ -90,24 +102,30 @@ class AdvancedLoaderDialog(QDialog):
         # Wiring
         self._csv_widget.validity_changed.connect(self._on_csv_validity_changed)
         self._tree_widget.validity_changed.connect(self._on_tree_validity_changed)
-        self._manifest_radio.toggled.connect(self._on_mode_toggled)
+        self._mode_group.idToggled.connect(self._on_mode_toggled)
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
-    def _on_mode_toggled(self, manifest_checked: bool) -> None:
-        if manifest_checked:
-            self._stack.setCurrentIndex(0)
+    def _on_mode_toggled(self, btn_id: int, checked: bool) -> None:
+        if not checked:
+            return
+        t = _get_theme()
+        self._hdr1.setStyleSheet(
+            f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        )
+        self._stack.setCurrentIndex(btn_id)
+        self._stack.setVisible(True)
+        if btn_id == 0:
             self._ok_btn.setEnabled(self._csv_widget.is_valid())
         else:
-            self._stack.setCurrentIndex(1)
             self._ok_btn.setEnabled(self._tree_widget.is_valid())
 
     def _on_csv_validity_changed(self, valid: bool) -> None:
-        if self._stack.currentIndex() == 0:
+        if self._stack.isVisible() and self._stack.currentIndex() == 0:
             self._ok_btn.setEnabled(valid)
 
     def _on_tree_validity_changed(self, valid: bool) -> None:
-        if self._stack.currentIndex() == 1:
+        if self._stack.isVisible() and self._stack.currentIndex() == 1:
             self._ok_btn.setEnabled(valid)
 
     def _on_ok(self) -> None:
@@ -137,5 +155,19 @@ class AdvancedLoaderDialog(QDialog):
             }}
             QPushButton#importBtn:hover {{ background-color: {t.accent_hover}; }}
             QPushButton#importBtn:disabled {{ background-color: {t.muted}; color: {t.bg}; }}
+            QPushButton#loaderOptionBtn {{
+                background-color: {t.display};
+                color: {t.text};
+                border: 1px solid {t.muted};
+                border-radius: 6px;
+                padding: 10px 20px;
+                font-size: 13px;
+            }}
+            QPushButton#loaderOptionBtn:hover {{ border-color: {t.accent}; }}
+            QPushButton#loaderOptionBtn:checked {{
+                background-color: {t.accent};
+                color: white;
+                border-color: {t.accent};
+            }}
         """
         )

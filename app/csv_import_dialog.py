@@ -703,7 +703,7 @@ class CsvImportWidget(QWidget):
     def _build_ui(self) -> None:
         t = _get_theme()
 
-        def _header(text: str, tooltip: str = "") -> QLabel:
+        def _sub_header(text: str, tooltip: str = "") -> QLabel:
             lbl = QLabel(text)
             lbl.setStyleSheet(
                 f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
@@ -722,15 +722,17 @@ class CsvImportWidget(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
 
-        outer.addWidget(
-            _header(
-                "Load manifest / protocol",
-                "A manifest CSV maps each recording to a group. Load the CSV your "
-                "protocol or unblinding sheet produced.",
-            )
+        # ── Step 2: Load manifest (always visible) ────────────────────────────
+        self._hdr2 = QLabel("2.  Load manifest")
+        self._hdr2.setStyleSheet(
+            f"color: {t.accent}; font-size: 11px; font-weight: bold; padding-top: 4px;"
         )
+        self._hdr2.setToolTip(
+            "A manifest CSV maps each recording to a group. Load the CSV your "
+            "protocol or unblinding sheet produced."
+        )
+        outer.addWidget(self._hdr2)
 
-        # CSV load row
         csv_row = QHBoxLayout()
         csv_row.setSpacing(8)
         load_btn = QPushButton("Load CSV…")
@@ -742,8 +744,20 @@ class CsvImportWidget(QWidget):
         csv_row.addWidget(self._csv_name_lbl, stretch=1)
         outer.addLayout(csv_row)
 
-        outer.addWidget(_sep())
-        outer.addWidget(_header("Load data"))
+        # ── Step 3: Load data + column selection (hidden until CSV loaded) ────
+        self._step3_container = QWidget()
+        self._step3_container.setVisible(False)
+        s3 = QVBoxLayout(self._step3_container)
+        s3.setContentsMargins(0, 0, 0, 0)
+        s3.setSpacing(8)
+
+        s3.addWidget(_sep())
+
+        self._hdr3 = QLabel("3.  Load data")
+        self._hdr3.setStyleSheet(
+            f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        )
+        s3.addWidget(self._hdr3)
 
         # Load data: buttons on left, filename preview on right
         files_row = QHBoxLayout()
@@ -785,17 +799,9 @@ class CsvImportWidget(QWidget):
         )
         self._file_preview.setColumnWidth(0, 110)
         files_row.addWidget(self._file_preview, stretch=1)
+        s3.addLayout(files_row)
 
-        outer.addLayout(files_row)
-
-        outer.addWidget(_sep())
-        outer.addWidget(
-            _header(
-                "Match manifest / protocol to filenames",
-                "Tell the wizard which column contains the ID to match against your "
-                "filenames, and which column(s) define the group each recording belongs to.",
-            )
-        )
+        s3.addWidget(_sep())
 
         # Column selection: match col + group cols, even split
         col_row = QHBoxLayout()
@@ -827,7 +833,28 @@ class CsvImportWidget(QWidget):
         group_layout.addWidget(self._group_cols_list)
         col_row.addLayout(group_layout, stretch=1)
 
-        outer.addLayout(col_row)
+        s3.addLayout(col_row)
+
+        outer.addWidget(self._step3_container)
+
+        # ── Step 4: Match controls + preview (hidden until cols selected) ─────
+        self._step4_container = QWidget()
+        self._step4_container.setVisible(False)
+        s4 = QVBoxLayout(self._step4_container)
+        s4.setContentsMargins(0, 0, 0, 0)
+        s4.setSpacing(8)
+
+        s4.addWidget(_sep())
+
+        self._hdr4 = QLabel("4.  Match to filenames")
+        self._hdr4.setStyleSheet(
+            f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        )
+        self._hdr4.setToolTip(
+            "Tell the wizard which column contains the ID to match against your "
+            "filenames, and which column(s) define the group each recording belongs to."
+        )
+        s4.addWidget(self._hdr4)
 
         # Row 1 — separators
         sep_row = QHBoxLayout()
@@ -872,7 +899,7 @@ class CsvImportWidget(QWidget):
         sep_row.addWidget(self._sep_edit)
         sep_row.addWidget(self._sep_add_btn)
         sep_row.addStretch()
-        outer.addLayout(sep_row)
+        s4.addLayout(sep_row)
 
         # Separator chips (shown only in "strings" mode)
         self._sep_chips_scroll = QScrollArea()
@@ -888,7 +915,7 @@ class CsvImportWidget(QWidget):
         self._sep_chips_layout.setSpacing(4)
         self._sep_chips_layout.addStretch()
         self._sep_chips_scroll.setWidget(self._sep_chips_widget)
-        outer.addWidget(self._sep_chips_scroll)
+        s4.addWidget(self._sep_chips_scroll)
 
         # Row 2 — how many ID tokens must be found (count on the first line,
         # order/contiguity toggles on the second so nothing crops when narrow)
@@ -931,7 +958,7 @@ class CsvImportWidget(QWidget):
         idtok_row.addWidget(self._atleast_radio)
         idtok_row.addWidget(self._min_spin)
         idtok_row.addStretch()
-        outer.addLayout(idtok_row)
+        s4.addLayout(idtok_row)
 
         flags_row = QHBoxLayout()
         flags_row.setSpacing(16)
@@ -951,7 +978,7 @@ class CsvImportWidget(QWidget):
         flags_row.addWidget(self._order_check)
         flags_row.addWidget(self._unint_check)
         flags_row.addStretch()
-        outer.addLayout(flags_row)
+        s4.addLayout(flags_row)
 
         # Row 3 — ignore tokens containing
         ignore_row = QHBoxLayout()
@@ -975,7 +1002,7 @@ class CsvImportWidget(QWidget):
         ignore_row.addWidget(self._ignore_edit)
         ignore_row.addWidget(self._ignore_add_btn)
         ignore_row.addStretch()
-        outer.addLayout(ignore_row)
+        s4.addLayout(ignore_row)
 
         # Ignore chips (shown only when at least one string is set)
         self._ignore_chips_scroll = QScrollArea()
@@ -991,7 +1018,7 @@ class CsvImportWidget(QWidget):
         self._ignore_chips_layout.setSpacing(4)
         self._ignore_chips_layout.addStretch()
         self._ignore_chips_scroll.setWidget(self._ignore_chips_widget)
-        outer.addWidget(self._ignore_chips_scroll)
+        s4.addWidget(self._ignore_chips_scroll)
 
         # Line C — case sensitivity + tolerate leading zeros
         zeros_row = QHBoxLayout()
@@ -1014,14 +1041,40 @@ class CsvImportWidget(QWidget):
         self._zeros_check.installEventFilter(self._tooltip_filter)
         zeros_row.addWidget(self._zeros_check)
         zeros_row.addStretch()
-        outer.addLayout(zeros_row)
+        s4.addLayout(zeros_row)
 
         # Preview
         self._preview_area = QScrollArea()
         self._preview_area.setObjectName("previewArea")
         self._preview_area.setWidgetResizable(True)
-        self._preview_area.setMinimumHeight(160)
-        outer.addWidget(self._preview_area, stretch=1)
+        self._preview_area.setMinimumHeight(80)
+        s4.addWidget(self._preview_area, stretch=1)
+
+        outer.addWidget(self._step4_container, stretch=1)
+
+    # ── Step visibility ───────────────────────────────────────────────────────
+
+    def _update_step_visibility(self) -> None:
+        t = _get_theme()
+        csv_loaded = bool(self._rows)
+        cols_selected = (
+            csv_loaded
+            and bool(self._match_combo.currentText())
+            and bool(self._selected_group_cols())
+        )
+        self._step3_container.setVisible(csv_loaded)
+        self._step4_container.setVisible(cols_selected)
+        _active = f"color: {t.accent}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        _done = f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        if not csv_loaded:
+            self._hdr2.setStyleSheet(_active)
+        elif not cols_selected:
+            self._hdr2.setStyleSheet(_done)
+            self._hdr3.setStyleSheet(_active)
+        else:
+            self._hdr2.setStyleSheet(_done)
+            self._hdr3.setStyleSheet(_done)
+            self._hdr4.setStyleSheet(_active)
 
     # ── State management ──────────────────────────────────────────────────────
 
@@ -1289,6 +1342,7 @@ class CsvImportWidget(QWidget):
         )
 
     def _refresh(self) -> None:
+        self._update_step_visibility()
         match_col = self._match_combo.currentText()
         group_cols = self._selected_group_cols()
 
