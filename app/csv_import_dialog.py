@@ -911,10 +911,9 @@ class CsvImportWidget(QWidget):
         s5.addWidget(self._adjust_toggle)
 
         self._adjust_body = QWidget()
-        self._adjust_body.setVisible(False)
         adj = QVBoxLayout(self._adjust_body)
-        adj.setContentsMargins(0, 0, 0, 6)
-        adj.setSpacing(8)
+        adj.setContentsMargins(0, 0, 8, 6)
+        adj.setSpacing(6)
 
         def _sub(text: str) -> QLabel:
             lbl = QLabel(text)
@@ -924,12 +923,11 @@ class CsvImportWidget(QWidget):
         # ── Tokens — how names are split, and when two tokens count as equal ──
         adj.addWidget(_sub("Tokens"))
 
-        # Separators
-        sep_row = QHBoxLayout()
-        sep_row.setSpacing(8)
+        # Separators — label above its controls so the panel stays narrow enough
+        # to sit beside the preview rather than pushing it down.
         sep_lbl = QLabel("Separators:")
         sep_lbl.setToolTip("How filenames and IDs are split into tokens before matching.")
-        sep_row.addWidget(sep_lbl)
+        adj.addWidget(sep_lbl)
 
         self._nonalpha_radio = QRadioButton("all non-alphanumeric")
         self._nonalpha_radio.setChecked(True)
@@ -946,6 +944,14 @@ class CsvImportWidget(QWidget):
         sep_group = QButtonGroup(self)
         sep_group.addButton(self._nonalpha_radio)
         sep_group.addButton(self._strings_radio)
+        self._nonalpha_radio.toggled.connect(self._on_separator_radio_changed)
+
+        sep_radios = QHBoxLayout()
+        sep_radios.setSpacing(8)
+        sep_radios.addWidget(self._nonalpha_radio)
+        sep_radios.addWidget(self._strings_radio)
+        sep_radios.addStretch()
+        adj.addLayout(sep_radios)
 
         self._sep_edit = QLineEdit()
         self._sep_edit.setPlaceholderText("separator…")
@@ -961,13 +967,17 @@ class CsvImportWidget(QWidget):
         self._sep_add_btn.clicked.connect(self._on_add_sep)
         self._sep_add_btn.installEventFilter(self._tooltip_filter)
 
-        self._nonalpha_radio.toggled.connect(self._on_separator_radio_changed)
-        sep_row.addWidget(self._nonalpha_radio)
-        sep_row.addWidget(self._strings_radio)
-        sep_row.addWidget(self._sep_edit)
-        sep_row.addWidget(self._sep_add_btn)
-        sep_row.addStretch()
-        adj.addLayout(sep_row)
+        # Only relevant in "strings" mode, so hidden otherwise — keeps the panel
+        # a row shorter in the common case.
+        self._sep_input = QWidget()
+        self._sep_input.setVisible(False)
+        sep_input = QHBoxLayout(self._sep_input)
+        sep_input.setContentsMargins(0, 0, 0, 0)
+        sep_input.setSpacing(8)
+        sep_input.addWidget(self._sep_edit)
+        sep_input.addWidget(self._sep_add_btn)
+        sep_input.addStretch()
+        adj.addWidget(self._sep_input)
 
         # Separator chips (shown only in "strings" mode)
         self._sep_chips_scroll = QScrollArea()
@@ -986,14 +996,12 @@ class CsvImportWidget(QWidget):
         adj.addWidget(self._sep_chips_scroll)
 
         # Ignore tokens containing
-        ignore_row = QHBoxLayout()
-        ignore_row.setSpacing(8)
         ignore_lbl = QLabel("Ignore tokens containing:")
         ignore_lbl.setToolTip(
             "Drop any token (from the ID or the filename) that contains one of "
             "these strings before matching — e.g. a shared date, batch, or cohort tag."
         )
-        ignore_row.addWidget(ignore_lbl)
+        adj.addWidget(ignore_lbl)
 
         self._ignore_edit = QLineEdit()
         self._ignore_edit.setPlaceholderText("string…")
@@ -1004,10 +1012,12 @@ class CsvImportWidget(QWidget):
         self._ignore_add_btn.setObjectName("secondaryButton")
         self._ignore_add_btn.clicked.connect(self._on_add_ignore)
         self._ignore_add_btn.installEventFilter(self._tooltip_filter)
-        ignore_row.addWidget(self._ignore_edit)
-        ignore_row.addWidget(self._ignore_add_btn)
-        ignore_row.addStretch()
-        adj.addLayout(ignore_row)
+        ignore_input = QHBoxLayout()
+        ignore_input.setSpacing(8)
+        ignore_input.addWidget(self._ignore_edit)
+        ignore_input.addWidget(self._ignore_add_btn)
+        ignore_input.addStretch()
+        adj.addLayout(ignore_input)
 
         # Ignore chips (shown only when at least one string is set)
         self._ignore_chips_scroll = QScrollArea()
@@ -1025,9 +1035,9 @@ class CsvImportWidget(QWidget):
         self._ignore_chips_scroll.setWidget(self._ignore_chips_widget)
         adj.addWidget(self._ignore_chips_scroll)
 
-        # Case sensitivity + tolerate leading zeros
+        # Case sensitivity + tolerate leading zeros (fit on one row at this width)
         zeros_row = QHBoxLayout()
-        zeros_row.setSpacing(16)
+        zeros_row.setSpacing(12)
         self._case_check = QCheckBox("Case-sensitive")
         self._case_check.setChecked(True)
         self._case_check.setToolTip(
@@ -1051,16 +1061,13 @@ class CsvImportWidget(QWidget):
         # ── Match strictness — how strictly the ID's tokens must line up ──────
         adj.addWidget(_sub("Match strictness"))
 
-        # How many of the ID's tokens must be found (count on the first line,
-        # order/contiguity toggles on the second so nothing crops when narrow)
-        idtok_row = QHBoxLayout()
-        idtok_row.setSpacing(8)
+        # How many of the ID's tokens must be found — label above the controls.
         idtok_lbl = QLabel("ID tokens in filename:")
         idtok_lbl.setToolTip(
             "How many of the manifest ID's tokens must be found in the filename. "
             "The filename may carry extra tokens, which are ignored."
         )
-        idtok_row.addWidget(idtok_lbl)
+        adj.addWidget(idtok_lbl)
 
         self._all_radio = QRadioButton("all")
         self._all_radio.setChecked(True)
@@ -1088,20 +1095,24 @@ class CsvImportWidget(QWidget):
         self._min_spin.installEventFilter(_FocusActivatesRadio(self._atleast_radio, self))
         self._all_radio.toggled.connect(self._on_tokcount_radio_changed)
 
-        idtok_row.addWidget(self._all_radio)
-        idtok_row.addWidget(self._atleast_radio)
-        idtok_row.addWidget(self._min_spin)
-        idtok_row.addStretch()
-        adj.addLayout(idtok_row)
+        idtok_controls = QHBoxLayout()
+        idtok_controls.setSpacing(8)
+        idtok_controls.addWidget(self._all_radio)
+        idtok_controls.addWidget(self._atleast_radio)
+        idtok_controls.addWidget(self._min_spin)
+        idtok_controls.addStretch()
+        adj.addLayout(idtok_controls)
 
+        # Order / contiguity flags
         flags_row = QHBoxLayout()
-        flags_row.setSpacing(16)
+        flags_row.setSpacing(12)
         self._order_check = QCheckBox("Match order")
         self._order_check.setToolTip(
             "Matched tokens must appear in the same relative order in both the ID and the filename."
         )
         self._order_check.toggled.connect(self._refresh)
         self._order_check.installEventFilter(self._tooltip_filter)
+        flags_row.addWidget(self._order_check)
         self._unint_check = QCheckBox("Match uninterrupted")
         self._unint_check.setToolTip(
             "Matched tokens must be contiguous — no other tokens interleaved — in "
@@ -1109,19 +1120,36 @@ class CsvImportWidget(QWidget):
         )
         self._unint_check.toggled.connect(self._refresh)
         self._unint_check.installEventFilter(self._tooltip_filter)
-        flags_row.addWidget(self._order_check)
         flags_row.addWidget(self._unint_check)
         flags_row.addStretch()
         adj.addLayout(flags_row)
+        adj.addStretch()
 
-        s5.addWidget(self._adjust_body)
+        # Body row: the adjust panel (left, narrow) beside the preview (right).
+        # Collapsed, the preview takes the full width; expanded, the panel drops
+        # in on the left and the preview only narrows — it never loses vertical
+        # lines, and expanding adds no height to the dialog. This also makes the
+        # toggle→target relationship obvious. The panel lives in its own scroll
+        # area so it can never clip its controls, however short the column gets.
+        self._adjust_scroll = QScrollArea()
+        self._adjust_scroll.setObjectName("sepChipsArea")  # borderless/transparent
+        self._adjust_scroll.setWidgetResizable(True)
+        self._adjust_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._adjust_scroll.setMaximumWidth(308)
+        self._adjust_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._adjust_scroll.setVisible(False)
+        self._adjust_scroll.setWidget(self._adjust_body)
 
-        # Preview
+        body_row = QHBoxLayout()
+        body_row.setSpacing(14)
+        body_row.addWidget(self._adjust_scroll)
+
         self._preview_area = QScrollArea()
         self._preview_area.setObjectName("previewArea")
         self._preview_area.setWidgetResizable(True)
         self._preview_area.setMinimumHeight(80)
-        s5.addWidget(self._preview_area, stretch=1)
+        body_row.addWidget(self._preview_area, stretch=1)
+        s5.addLayout(body_row, stretch=1)
 
         outer.addWidget(self._step5_container, stretch=1)
 
@@ -1223,6 +1251,7 @@ class CsvImportWidget(QWidget):
         strings_active = not nonalpha_checked and bool(self._rows)
         self._sep_edit.setEnabled(strings_active)
         self._sep_add_btn.setEnabled(strings_active)
+        self._sep_input.setVisible(not nonalpha_checked)
         self._sep_chips_scroll.setVisible(not nonalpha_checked)
         self._refresh()
 
@@ -1481,7 +1510,7 @@ class CsvImportWidget(QWidget):
         )
 
     def _toggle_adjust(self) -> None:
-        self._adjust_body.setVisible(self._adjust_toggle.isChecked())
+        self._adjust_scroll.setVisible(self._adjust_toggle.isChecked())
         self._update_adjust_summary()
 
     def _update_adjust_summary(self) -> None:
