@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QRadioButton,
     QScrollArea,
@@ -362,6 +363,9 @@ class _MatchResult:
     groups_over_limit: bool
     unmatched_csv_ids: list[str]
     n_ids_with_group: int = 0
+    # group → ids, and id → its candidate file matches, for the ID-centric preview.
+    id_group: dict[str, str] = field(default_factory=dict)
+    id_candidates: dict[str, list[_Match]] = field(default_factory=dict)
     error: str = ""
 
 
@@ -388,6 +392,8 @@ def _compute_matches(
 
     rows_skipped_blank = 0
     candidate_matches: dict[Path, list[_Match]] = defaultdict(list)
+    id_candidates: dict[str, list[_Match]] = defaultdict(list)
+    id_group: dict[str, str] = {}
     ids_with_group: set[str] = set()
 
     stem_toks = {
@@ -406,6 +412,7 @@ def _compute_matches(
             rows_skipped_blank += 1
             continue
         ids_with_group.add(id_val)
+        id_group[id_val] = group_name
         handle_toks = _tokenize(
             id_val, nonalpha, boundary_strings, case_sensitive, tolerate_zeros, ignore_containing
         )
@@ -421,15 +428,15 @@ def _compute_matches(
             )
             if matched is not None:
                 h_idx, s_idx = matched
-                candidate_matches[f].append(
-                    _Match(
-                        path=f,
-                        id_val=id_val,
-                        id_spans=[handle_toks[i][1:] for i in h_idx],
-                        name_spans=[file_toks[j][1:] for j in s_idx],
-                        group_name=group_name,
-                    )
+                match = _Match(
+                    path=f,
+                    id_val=id_val,
+                    id_spans=[handle_toks[i][1:] for i in h_idx],
+                    name_spans=[file_toks[j][1:] for j in s_idx],
+                    group_name=group_name,
                 )
+                candidate_matches[f].append(match)
+                id_candidates[id_val].append(match)
 
     files_not_in_csv = [f for f in files if not candidate_matches[f]]
     ids_that_matched: set[str] = {m.id_val for ms in candidate_matches.values() for m in ms}
@@ -465,6 +472,8 @@ def _compute_matches(
         groups_over_limit=len(all_group_names) > 12,
         unmatched_csv_ids=unmatched_csv_ids,
         n_ids_with_group=len(ids_with_group),
+        id_group=dict(id_group),
+        id_candidates=dict(id_candidates),
     )
 
 
@@ -662,8 +671,6 @@ class CsvImportWidget(QWidget):
         self._last_result: _MatchResult | None = None
         self._expanded_groups: set[str] = set()
         self._expanded_warnings: set[str] = set()
-        self._files_not_matched_ack: bool = False
-        self._rows_not_matched_ack: bool = False
         self._duplicate_ids: list[str] = []
         self._boundary_strings: list[str] = []
         self._ignore_strings: list[str] = []
@@ -674,28 +681,47 @@ class CsvImportWidget(QWidget):
         self._refresh()
 
     def is_valid(self) -> bool:
+        # Ambiguity no longer blocks: unresolved IDs simply don't import, and the
+        # banner shows the count. Import just needs a clean manifest and at least
+        # one file to actually import (a clean arrow or a manual pick).
         return (
             bool(self._rows)
             and not self._duplicate_ids
             and bool(self._match_combo.currentText())
             and bool(self._selected_group_cols())
-            and all(c.selection is not None for c in self._conflicts)
             and self._last_result is not None
-            and bool(
-                self._last_result.clean_matches
-                or any(
-                    isinstance(c.selection, frozenset) and len(c.selection) > 0
-                    for c in self._conflicts
-                )
-            )
-            and (not self._last_result.files_not_in_csv or self._files_not_matched_ack)
-            and (not self._last_result.unmatched_csv_ids or self._rows_not_matched_ack)
+            and bool(self.result_groups())
         )
 
     def result_groups(self) -> dict[str, list[Path]]:
         if self._last_result is None:
             return {}
         return _build_result_groups(self._last_result.clean_matches, self._conflicts)
+
+    def _confirmed_by_id(self) -> dict[str, set[Path]]:
+        """id → the file paths confirmed for it: clean 1:1 matches plus whatever
+        the user picked in manual resolution. Mirrors what result_groups imports,
+        and drives both the ← / ? glyphs and the banner tally."""
+        confirmed: dict[str, set[Path]] = defaultdict(set)
+        if self._last_result is None:
+            return confirmed
+        for m in self._last_result.clean_matches:
+            confirmed[m.id_val].add(m.path)
+        for c in self._conflicts:
+            if isinstance(c.selection, frozenset):
+                for idx in c.selection:
+                    opt = c.options[idx]
+                    confirmed[opt.id_val].add(opt.path)
+        return confirmed
+
+    def files_in_multiple_groups(self) -> list[str]:
+        """Filenames that the current result assigns to more than one group. Used
+        by the parent dialog to warn (not block) at import time."""
+        file_to_groups: dict[Path, set[str]] = defaultdict(set)
+        for gname, paths in self.result_groups().items():
+            for p in paths:
+                file_to_groups[p].add(gname)
+        return sorted(p.name for p, gs in file_to_groups.items() if len(gs) > 1)
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -890,31 +916,33 @@ class CsvImportWidget(QWidget):
 
         s5.addWidget(_sep())
 
-        self._hdr5 = QLabel("5.  Review")
+        self._hdr5 = QLabel("5.  Match IDs to filenames")
         self._hdr5.setStyleSheet(
             f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
         )
         s5.addWidget(self._hdr5)
 
-        # Status banner — the outcome leads. For tidy data it reads "all matched"
-        # and the user is done; the knobs below only come out when it doesn't.
+        # Status banner — an agnostic tally of how the match stands, green only
+        # when everything lines up. See _update_banner.
         self._banner = QLabel()
         self._banner.setWordWrap(True)
         self._banner.setStyleSheet(f"color: {t.muted}; font-size: 12px; padding: 4px 0;")
         s5.addWidget(self._banner)
 
-        # Primary matching control — the one knob most datasets need. "all" (the
-        # spinbox's special minimum, value 0) requires every ID token to line up;
-        # dial in a number to require only that many of the ID's tokens, letting
-        # the filename carry extra tokens. The forgiving defaults (case-insensitive,
-        # zero-tolerant, ordered, uninterrupted) mean this is usually the only knob.
+        # The one knob most datasets need, phrased as a plain question. "all" (the
+        # spinbox's special minimum, value 0) requires every word of the ID to line
+        # up; a number requires only that many. The "additional matching rules"
+        # disclosure rides on the same row, right-aligned, for those who want more
+        # control — the forgiving defaults (case-insensitive, zero-tolerant, ordered,
+        # uninterrupted) mean most never open it.
         tok_row = QHBoxLayout()
         tok_row.setSpacing(8)
-        tok_lbl = QLabel("ID tokens to match:")
+        tok_lbl = QLabel("How many words of each ID must match the filename?")
         tok_lbl.setToolTip(
-            "How many of each manifest ID's tokens must be found in the filename. "
-            "“all” requires every token; a number allows the filename to carry "
-            "extra tokens beyond the matched ones."
+            "A “word” is a chunk of the ID between separators (e.g. OFT_2_12 has "
+            "three: OFT, 2, 12). “all” requires every word to appear in the "
+            "filename; a number requires only that many, letting the filename "
+            "carry extra words beyond the matched ones."
         )
         self._min_spin = QSpinBox()
         self._min_spin.setRange(0, 99)
@@ -923,19 +951,19 @@ class CsvImportWidget(QWidget):
         self._min_spin.setToolTip(tok_lbl.toolTip())
         self._min_spin.valueChanged.connect(self._refresh)
         self._min_spin.installEventFilter(self._tooltip_filter)
-        tok_row.addWidget(tok_lbl)
-        tok_row.addWidget(self._min_spin)
-        tok_row.addStretch()
-        s5.addLayout(tok_row)
 
-        # Collapsed "adjust" disclosure. The defaults match most datasets, so this
-        # stays shut unless the banner reports a problem; its label carries a
-        # one-line summary of the current rules so it isn't a black box.
-        self._adjust_toggle = QPushButton("▸  Adjust matching rules")
+        # Collapsed disclosure for the advanced rules — no enumerated summary, just
+        # a quiet caret. Lives on the spinner's row.
+        self._adjust_toggle = QPushButton("▸  Additional matching rules")
         self._adjust_toggle.setObjectName("adjustToggle")
         self._adjust_toggle.setCheckable(True)
         self._adjust_toggle.clicked.connect(self._toggle_adjust)
-        s5.addWidget(self._adjust_toggle)
+
+        tok_row.addWidget(tok_lbl)
+        tok_row.addWidget(self._min_spin)
+        tok_row.addStretch()
+        tok_row.addWidget(self._adjust_toggle)
+        s5.addLayout(tok_row)
 
         self._adjust_body = QWidget()
         adj = QVBoxLayout(self._adjust_body)
@@ -1139,6 +1167,19 @@ class CsvImportWidget(QWidget):
         self._preview_area.setMinimumHeight(80)
         body_row.addWidget(self._preview_area, stretch=1)
         s5.addLayout(body_row, stretch=1)
+
+        # Manual conflict resolution — a deliberate, opt-in escape hatch, shown
+        # only when conflicts exist. The default workflow is to dial the word count
+        # above until the arrows line up; this is for forcing the stubborn few, and
+        # whatever the user does here is on them (duplicates are warned at import).
+        self._resolve_btn = QPushButton("Resolve conflicts manually…")
+        self._resolve_btn.setObjectName("secondaryButton")
+        self._resolve_btn.setVisible(False)
+        self._resolve_btn.clicked.connect(self._open_manual_resolve)
+        resolve_row = QHBoxLayout()
+        resolve_row.addWidget(self._resolve_btn)
+        resolve_row.addStretch()
+        s5.addLayout(resolve_row)
 
         outer.addWidget(self._step5_container, stretch=1)
 
@@ -1493,21 +1534,9 @@ class CsvImportWidget(QWidget):
         self._update_adjust_summary()
 
     def _update_adjust_summary(self) -> None:
-        """Keep the disclosure's one-line summary of the current rules current."""
+        """Just flip the disclosure caret — no enumerated rule summary (noise)."""
         caret = "▾" if self._adjust_toggle.isChecked() else "▸"
-        parts = [
-            "non-alphanumeric" if self._nonalpha_radio.isChecked() else "custom separators",
-        ]
-        if self._order_check.isChecked():
-            parts.append("ordered")
-        if self._unint_check.isChecked():
-            parts.append("uninterrupted")
-        if self._ignore_strings:
-            parts.append(f"{len(self._ignore_strings)} ignored")
-        parts.append("case-sensitive" if self._case_check.isChecked() else "case-insensitive")
-        if self._zeros_check.isChecked():
-            parts.append("zero-tolerant")
-        self._adjust_toggle.setText(f"{caret}  Adjust matching rules    ({' · '.join(parts)})")
+        self._adjust_toggle.setText(f"{caret}  Additional matching rules")
 
     def _update_banner(self, result: _MatchResult | None) -> None:
         """Lead section 5 with an agnostic tally of how the match currently stands.
@@ -1522,20 +1551,22 @@ class CsvImportWidget(QWidget):
             self._banner.setStyleSheet(f"color: {t.muted}; font-size: 12px; padding: 4px 0;")
             return
 
+        confirmed = self._confirmed_by_id()
+        assigned_files = {p for paths in confirmed.values() for p in paths}
         total_files = len(self._added_files)
-        matched_files = total_files - len(result.files_not_in_csv)
         total_ids = result.n_ids_with_group
-        matched_ids = total_ids - len(result.unmatched_csv_ids)
+        matched_ids = sum(1 for paths in confirmed.values() if paths)
+        matched_files = len(assigned_files)
 
         parts = [
-            f"{matched_files} / {total_files} files matched",
             f"{matched_ids} / {total_ids} IDs matched",
+            f"{matched_files} / {total_files} files matched",
         ]
-        n_conf = len(result.conflicts)
+        n_conf = sum(1 for c in result.conflicts if c.selection is None)
         if n_conf:
             parts.append(f"{n_conf} conflict{'' if n_conf == 1 else 's'}")
 
-        perfect = not result.files_not_in_csv and not result.unmatched_csv_ids and n_conf == 0
+        perfect = total_ids > 0 and matched_ids == total_ids and matched_files == total_files
         if perfect:
             n_groups = len(self.result_groups())
             parts.append(f"{n_groups} group{'' if n_groups == 1 else 's'}")
@@ -1557,15 +1588,9 @@ class CsvImportWidget(QWidget):
             self._conflicts = []
             self._last_result = None
             self._rebuild_preview(None)
+            self._update_resolve_button()
             self._emit_validity()
             return
-
-        old_files_not_in_csv = (
-            set(self._last_result.files_not_in_csv) if self._last_result else set()
-        )
-        old_unmatched_csv_ids = (
-            set(self._last_result.unmatched_csv_ids) if self._last_result else set()
-        )
 
         result = _compute_matches(
             self._rows,
@@ -1582,14 +1607,21 @@ class CsvImportWidget(QWidget):
             if c.label in old_selections:
                 c.selection = old_selections[c.label]
 
-        if set(result.files_not_in_csv) != old_files_not_in_csv:
-            self._files_not_matched_ack = False
-        if set(result.unmatched_csv_ids) != old_unmatched_csv_ids:
-            self._rows_not_matched_ack = False
-
         self._last_result = result
         self._rebuild_preview(result)
+        self._update_resolve_button()
         self._emit_validity()
+
+    def _update_resolve_button(self) -> None:
+        """Show the manual-resolve button only when there are conflicts to resolve,
+        labelling it with the count of still-unresolved ones."""
+        n = sum(1 for c in self._conflicts if c.selection is None)
+        self._resolve_btn.setVisible(bool(self._conflicts))
+        total = len(self._conflicts)
+        if n:
+            self._resolve_btn.setText(f"Resolve {n} conflict{'' if n == 1 else 's'} manually…")
+        else:
+            self._resolve_btn.setText(f"Adjust {total} manual choice{'' if total == 1 else 's'}…")
 
     def _emit_validity(self) -> None:
         self.validity_changed.emit(self.is_valid())
@@ -1654,113 +1686,122 @@ class CsvImportWidget(QWidget):
             )
             return
 
-        # Successes first — the user sees what worked before what didn't. Groups
-        # → files (clean matches only).
-        by_group: dict[str, list[_Match]] = {}
-        for m in result.clean_matches:
-            by_group.setdefault(m.group_name, []).append(m)
+        # The didactic ID-centric list: every manifest ID, grouped, with the
+        # file(s) it matches beneath it. A confirmed 1:1 (a clean match, or a
+        # manual pick) shows ← ; anything unsettled — no file, several files, or a
+        # file also claimed by another ID — shows ? and carries a tooltip saying
+        # why, so the fix (more / fewer words) is legible.
+        confirmed = self._confirmed_by_id()
+        arrow = f'<span style="color:{t.sep};">&larr;</span>'
+        qmark = f'<span style="color:{t.warn}; font-weight:bold;">?</span>'
+        indent = "&nbsp;&nbsp;&nbsp;&nbsp;"
 
-        if by_group:
-            header = QLabel("Matched groups:")
-            header.setStyleSheet(
-                f"color: {t.muted}; font-size: 11px; font-weight: bold; margin-top: 4px;"
-            )
-            layout.addWidget(header)
-            for gname in sorted(by_group):
-                ms = by_group[gname]
-                is_expanded = gname in self._expanded_groups
-                visible = ms if is_expanded else ms[:5]
-
+        def _id_block(id_val: str, candidates: list[_Match], conf: set[Path]) -> QLabel:
+            id_spans = [s for m in candidates for s in m.id_spans]
+            id_html = _highlight(id_val, id_spans, t.accent)
+            if not candidates:
                 lines = [
-                    f'<b style="color:{t.text};">{gname}</b>'
-                    f'<span style="color:{t.muted};">  ({len(ms)} files)</span>'
+                    f'{indent}<span style="color:{t.text};">{id_html}</span>'
+                    f"&nbsp;&nbsp;{qmark}&nbsp;&nbsp;"
+                    f'<span style="color:{t.muted};">(no matching file)</span>'
                 ]
-                for m in visible:
+            else:
+                lines = []
+                for k, m in enumerate(candidates):
+                    glyph = arrow if m.path in conf else qmark
                     fname_html = _highlight(m.path.name, m.name_spans, t.accent)
-                    id_html = _highlight(m.id_val, m.id_spans, t.accent)
+                    head = (
+                        f'{indent}<span style="color:{t.text};">{id_html}</span>'
+                        if k == 0
+                        else f"{indent}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+                    )
                     lines.append(
-                        f'<span style="color:{t.muted};">&nbsp;&nbsp;&nbsp;&nbsp;{fname_html}'
-                        f'</span><span style="color:{t.sep};">'
-                        f"&nbsp; &larr; &nbsp;{id_html}</span>"
+                        f"{head}&nbsp;&nbsp;{glyph}&nbsp;&nbsp;"
+                        f'<span style="color:{t.muted};">{fname_html}</span>'
                     )
-                group_lbl = QLabel("<br>".join(lines))
-                group_lbl.setTextFormat(Qt.TextFormat.RichText)
-                group_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-                group_lbl.setWordWrap(False)
-                layout.addWidget(group_lbl)
-                if gname == scroll_to_group:
-                    scroll_target = group_lbl
+            lbl = QLabel("<br>".join(lines))
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            lbl.setWordWrap(False)
+            if not conf:
+                n = len(candidates)
+                if n == 0:
+                    lbl.setToolTip(
+                        "No filename matched this ID. Lower the word count above to "
+                        "loosen matching — otherwise it just won't be imported."
+                    )
+                elif n >= 2:
+                    lbl.setToolTip(
+                        f"This ID matches {n} filenames, so there's no single confident "
+                        "match. Raise the word count to narrow it down, or resolve it "
+                        "manually below."
+                    )
+                else:
+                    lbl.setToolTip(
+                        "The matching file also matches another ID, so this pairing "
+                        "isn't confident. Raise the word count to separate them, or "
+                        "resolve it manually below."
+                    )
+            return lbl
 
-                extra = len(ms) - 5
-                if not is_expanded and extra > 0:
-                    noun = "file" if extra == 1 else "files"
-                    more_lbl = QLabel(
-                        f'<a href="expand:{gname}" style="color:{t.sep}; text-decoration:none;">'
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;... and {extra} more {noun}</a>"
-                    )
-                    more_lbl.setTextFormat(Qt.TextFormat.RichText)
-                    more_lbl.setOpenExternalLinks(False)
-                    more_lbl.linkActivated.connect(self._on_preview_link)
-                    layout.addWidget(more_lbl)
-                elif is_expanded and len(ms) > 5:
-                    less_lbl = QLabel(
-                        f'<a href="collapse:{gname}" style="color:{t.sep}; text-decoration:none;">'
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;show less</a>"
-                    )
-                    less_lbl.setTextFormat(Qt.TextFormat.RichText)
-                    less_lbl.setOpenExternalLinks(False)
-                    less_lbl.linkActivated.connect(self._on_preview_link)
-                    layout.addWidget(less_lbl)
+        ids_by_group: dict[str, list[str]] = {}
+        for id_val, gname in result.id_group.items():
+            ids_by_group.setdefault(gname, []).append(id_val)
 
-        elif self._added_files:
-            no_match = QLabel(
-                "No matches yet — lower “ID tokens to match” above, or open "
-                "“Adjust matching rules”."
+        for gname in sorted(ids_by_group):
+            ids = sorted(ids_by_group[gname], key=_natural_key)
+            n_matched = sum(1 for i in ids if confirmed.get(i))
+            has_problem = n_matched < len(ids)
+
+            header = QLabel(
+                f'<b style="color:{t.text};">{gname}</b>'
+                f'<span style="color:{t.muted};">  ({len(ids)} IDs · {n_matched} matched)</span>'
             )
-            no_match.setWordWrap(True)
-            no_match.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
-            layout.addWidget(no_match)
+            header.setTextFormat(Qt.TextFormat.RichText)
+            header.setStyleSheet("margin-top: 4px;")
+            layout.addWidget(header)
+            if gname == scroll_to_group:
+                scroll_target = header
 
-        # Then the problems below the matches — each with the detail and the
-        # control to clear it.
-        if self._conflicts:
-            sep = QLabel("Conflicts — resolve each before importing:")
-            sep.setStyleSheet(f"color: {t.warn}; font-weight: bold; margin-top: 2px;")
-            layout.addWidget(sep)
-            for conflict in self._conflicts:
-                layout.addWidget(self._build_conflict_widget(conflict, t))
+            # A tidy (fully matched) group collapses to its first 5; a group with
+            # any unresolved ID shows every row, so nothing needing attention hides.
+            is_expanded = gname in self._expanded_groups
+            visible_ids = ids if (has_problem or is_expanded) else ids[:5]
+            for i in visible_ids:
+                layout.addWidget(
+                    _id_block(i, result.id_candidates.get(i, []), confirmed.get(i, set()))
+                )
 
-        # Files not matched in any CSV row
+            hidden = len(ids) - len(visible_ids)
+            if hidden > 0:
+                more_lbl = QLabel(
+                    f'<a href="expand:{gname}" style="color:{t.sep}; text-decoration:none;">'
+                    f"{indent}... and {hidden} more</a>"
+                )
+                more_lbl.setTextFormat(Qt.TextFormat.RichText)
+                more_lbl.setOpenExternalLinks(False)
+                more_lbl.linkActivated.connect(self._on_preview_link)
+                layout.addWidget(more_lbl)
+            elif is_expanded and not has_problem and len(ids) > 5:
+                less_lbl = QLabel(
+                    f'<a href="collapse:{gname}" style="color:{t.sep}; text-decoration:none;">'
+                    f"{indent}show less</a>"
+                )
+                less_lbl.setTextFormat(Qt.TextFormat.RichText)
+                less_lbl.setOpenExternalLinks(False)
+                less_lbl.linkActivated.connect(self._on_preview_link)
+                layout.addWidget(less_lbl)
+
+        # Orphan files (matched no ID at all) can't appear in an ID list — surface
+        # them quietly so nothing vanishes without a trace.
         if result.files_not_in_csv:
             n = len(result.files_not_in_csv)
             noun = "file" if n == 1 else "files"
-            layout.addWidget(
-                self._build_warning_widget(
-                    key="files",
-                    items=[p.name for p in result.files_not_in_csv],
-                    header=f"{n} {noun} not assigned to any group — skip to continue:",
-                    checkbox_label=f"Skip these {n} {noun}",
-                    ack=self._files_not_matched_ack,
-                    t=t,
-                    on_ack=lambda checked: self._set_files_ack(checked),
-                )
-            )
-
-        # Manifest rows that matched no file
-        if result.unmatched_csv_ids:
-            n = len(result.unmatched_csv_ids)
-            noun = "row" if n == 1 else "rows"
-            layout.addWidget(
-                self._build_warning_widget(
-                    key="rows",
-                    items=result.unmatched_csv_ids,
-                    header=f"{n} manifest {noun} matched no file — skip to continue:",
-                    checkbox_label=f"Skip these {n} {noun}",
-                    ack=self._rows_not_matched_ack,
-                    t=t,
-                    on_ack=lambda checked: self._set_rows_ack(checked),
-                )
-            )
+            orphan = QLabel(f"{n} {noun} matched no manifest ID — won't be imported.")
+            orphan.setWordWrap(True)
+            orphan.setStyleSheet(f"color: {t.muted}; font-size: 11px; margin-top: 6px;")
+            orphan.setToolTip("\n".join(p.name for p in result.files_not_in_csv))
+            layout.addWidget(orphan)
 
         if result.rows_skipped_blank:
             n = result.rows_skipped_blank
@@ -1784,24 +1825,8 @@ class CsvImportWidget(QWidget):
 
         QTimer.singleShot(0, _restore_scroll)
 
-    def _set_files_ack(self, checked: bool) -> None:
-        self._files_not_matched_ack = checked
-        self._emit_validity()
-
-    def _set_rows_ack(self, checked: bool) -> None:
-        self._rows_not_matched_ack = checked
-        self._emit_validity()
-
-    def _build_warning_widget(
-        self,
-        key: str,
-        items: list[str],
-        header: str,
-        t,
-        checkbox_label: str = "",
-        ack: bool = False,
-        on_ack=None,
-    ) -> QWidget:
+    def _build_warning_widget(self, key: str, items: list[str], header: str, t) -> QWidget:
+        """Expandable amber list — used for the blocking duplicate-ID case."""
         w = QWidget()
         vbox = QVBoxLayout(w)
         vbox.setContentsMargins(0, 4, 0, 8)
@@ -1839,18 +1864,60 @@ class CsvImportWidget(QWidget):
             less_lbl.linkActivated.connect(self._on_preview_link)
             vbox.addWidget(less_lbl)
 
-        if checkbox_label and on_ack is not None:
-            cb_row = QHBoxLayout()
-            cb_row.setContentsMargins(0, 2, 0, 0)
-            cb_row.setSpacing(0)
-            cb = QCheckBox(checkbox_label)
-            cb.setChecked(ack)
-            cb.toggled.connect(on_ack)
-            cb_row.addWidget(cb)
-            cb_row.addStretch()
-            vbox.addLayout(cb_row)
-
         return w
+
+    def _open_manual_resolve(self) -> None:
+        """Opt-in escape hatch: a modal listing every conflict with the existing
+        multiselect / ignore-all widgets. Whatever the user picks here overrides
+        the automatic matching; cross-group duplicates are warned at import time."""
+        if not self._conflicts:
+            return
+        t = _get_theme()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Resolve conflicts manually")
+        dlg.resize(560, 520)
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(16, 16, 16, 14)
+        v.setSpacing(10)
+
+        intro = QLabel(
+            "These IDs have no single confident match. Tick the file(s) each should "
+            "use, or exclude it. Manual choices override the automatic matching — "
+            "the same file may be assigned to more than one group (you'll be warned "
+            "at import)."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
+        v.addWidget(intro)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setObjectName("previewArea")
+        inner = QWidget()
+        iv = QVBoxLayout(inner)
+        iv.setContentsMargins(8, 8, 8, 8)
+        iv.setSpacing(6)
+        for conflict in self._conflicts:
+            iv.addWidget(self._build_conflict_widget(conflict, t))
+        iv.addStretch()
+        scroll.setWidget(inner)
+        v.addWidget(scroll, stretch=1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        done_btn = QPushButton("Done")
+        done_btn.setObjectName("secondaryButton")
+        done_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(done_btn)
+        v.addLayout(btn_row)
+
+        base = self.window().styleSheet() if self.window() is not None else ""
+        dlg.setStyleSheet(base + _csv_widget_stylesheet(t))
+        dlg.exec()
+        # Selections were mutated live; re-render to reflect them.
+        self._rebuild_preview(self._last_result)
+        self._update_resolve_button()
+        self._emit_validity()
 
     def _build_conflict_widget(self, conflict: _Conflict, t) -> QWidget:
         w = QWidget()
@@ -1922,6 +1989,24 @@ class CsvImportWidget(QWidget):
         return w
 
 
+def confirm_duplicate_files(parent: QWidget, dup_names: list[str]) -> bool:
+    """If any files are assigned to more than one group, warn (don't block) and
+    return whether to proceed. No duplicates → returns True immediately."""
+    if not dup_names:
+        return True
+    n = len(dup_names)
+    shown = "\n".join(dup_names[:10]) + ("\n…" if n > 10 else "")
+    resp = QMessageBox.warning(
+        parent,
+        "Files in multiple groups",
+        f"{n} file{'' if n == 1 else 's'} are assigned to more than one group:\n\n"
+        f"{shown}\n\nImport anyway?",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    return resp == QMessageBox.StandardButton.Yes
+
+
 # ── Standalone dialog wrapper ─────────────────────────────────────────────────
 
 
@@ -1961,7 +2046,9 @@ class CsvImportDialog(QDialog):
         return self._widget.result_groups()
 
     def _on_accept(self) -> None:
-        if self._widget.is_valid():
+        if self._widget.is_valid() and confirm_duplicate_files(
+            self, self._widget.files_in_multiple_groups()
+        ):
             self.accept()
 
     def _apply_stylesheet(self) -> None:

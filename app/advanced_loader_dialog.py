@@ -20,7 +20,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.csv_import_dialog import CsvImportWidget, _csv_widget_stylesheet
+from app.csv_import_dialog import (
+    CsvImportWidget,
+    _csv_widget_stylesheet,
+    confirm_duplicate_files,
+)
 from app.directory_tree_widget import DirectoryTreeWidget
 from app.theme import get_theme as _get_theme
 
@@ -127,6 +131,12 @@ class AdvancedLoaderDialog(QDialog):
             self._ok_btn.setEnabled(valid)
 
     def _on_ok(self) -> None:
+        # The CSV wizard allows the same file in several groups (via manual
+        # conflict resolution). That's legitimate but worth a heads-up.
+        if self._stack.currentIndex() == 1 and not confirm_duplicate_files(
+            self, self._csv_widget.files_in_multiple_groups()
+        ):
+            return
         self.accept()
 
     # ── Stylesheet ────────────────────────────────────────────────────────────
