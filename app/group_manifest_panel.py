@@ -50,7 +50,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.confirm_dialog import ask, grumpy_teacher, warning_face
+from app.confirm_dialog import ask
 from app.styles import base_stylesheet
 from app.text_utils import natural_key
 from app.theme import get_theme as _get_theme
@@ -654,7 +654,6 @@ class GroupManifestPanel(QWidget):
             self,
             "Remove group",
             f'"{name}" contains {len(self._manifests[name])} file(s). Remove it anyway?',
-            warning_face(),
             yes_label="Remove",
             no_label="Cancel",
         ):
@@ -761,7 +760,6 @@ class GroupManifestPanel(QWidget):
                 f"{count} {noun} you're adding to \"{group_name}\" "
                 f"{'is' if count == 1 else 'are'} already in another group.\n\n"
                 f"Add {'it' if count == 1 else 'them'} anyway?",
-                grumpy_teacher(),
                 yes_label="Add anyway",
                 no_label="Skip",
             )

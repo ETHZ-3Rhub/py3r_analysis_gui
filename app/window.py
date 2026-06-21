@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 
 from app import arenas as arena_pkg
 from app.comparisons_panel import ComparisonsPanel
-from app.confirm_dialog import ask, grumpy_teacher, pipeline_reference_image
+from app.confirm_dialog import ask, pipeline_reference_image
 from app.gating import TooltipOnDisabled, build_gated_section, set_gated_enabled
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
 from app.options_dialog import AdvancedOptionsDialog
@@ -272,7 +272,6 @@ class MainWindow(QWidget):
                     "Switch source?",
                     "Switching source clears every group's file list, since the files "
                     "no longer match the new type. Continue?",
-                    grumpy_teacher(),
                     yes_label="Clear and switch",
                     no_label="Cancel",
                 ):
