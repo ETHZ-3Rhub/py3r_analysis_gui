@@ -5,10 +5,7 @@ Embedded as CsvImportWidget inside AdvancedLoaderDialog.
 
 from __future__ import annotations
 
-import csv
-import re
-from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from collections import Counter
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
@@ -35,6 +32,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.csv_matching import (
+    Conflict,
+    MatchResult,
+    build_result_groups,
+    col_values_summary,
+    compute_matches,
+    highlight,
+    read_csv,
+)
 from app.gating import TooltipOnDisabled
 from app.text_utils import natural_key
 from app.theme import get_theme as _get_theme
@@ -56,389 +62,6 @@ class _FocusActivatesRadio(QObject):
         if event.type() == QEvent.Type.FocusIn:
             self._radio.setChecked(True)
         return super().eventFilter(obj, event)
-
-
-# ── Pure matching functions ──────────────────────────────────────────────────
-
-
-def _apply_zero_tolerance(s: str) -> str:
-    """Strip leading zeros from each numeric run: '0012' → '12', 'OFT01' → 'OFT1'."""
-    return re.sub(r"(?<!\d)0+(\d)", r"\1", s)
-
-
-def _token_spans(
-    s: str, nonalpha: bool, boundary_strings: list[str], case_sensitive: bool
-) -> list[tuple[str, int, int]]:
-    """Return (raw_token, start, end) for each token in s — the raw substring and
-    its character span in s. Splits on non-alphanumeric runs if nonalpha, else on
-    the boundary strings."""
-    if nonalpha:
-        return [(m.group(), m.start(), m.end()) for m in re.finditer(r"[a-zA-Z0-9]+", s)]
-    seps = [b for b in boundary_strings if b]
-    if not seps:
-        return [(s, 0, len(s))] if s else []
-    pattern = "|".join(re.escape(sep) for sep in sorted(seps, key=len, reverse=True))
-    flags = 0 if case_sensitive else re.IGNORECASE
-    spans: list[tuple[str, int, int]] = []
-    pos = 0
-    for m in re.finditer(pattern, s, flags):
-        if m.start() > pos:
-            spans.append((s[pos : m.start()], pos, m.start()))
-        pos = m.end()
-    if pos < len(s):
-        spans.append((s[pos:], pos, len(s)))
-    return spans
-
-
-def _tokenize(
-    s: str,
-    nonalpha: bool,
-    boundary_strings: list[str],
-    case_sensitive: bool,
-    tolerate_zeros: bool,
-    ignore_containing: list[str],
-) -> list[tuple[str, int, int]]:
-    """Tokenise and normalise s, keeping each token's span in the raw string.
-
-    Returns (normalised_value, start, end) per surviving token. Pipeline: split →
-    case-fold → strip leading zeros → drop tokens containing an ignore string. The
-    span always refers to the original s, so it can highlight the raw text.
-    """
-    ignore = [g if case_sensitive else g.lower() for g in ignore_containing if g]
-    out: list[tuple[str, int, int]] = []
-    for raw, start, end in _token_spans(s, nonalpha, boundary_strings, case_sensitive):
-        val = raw if case_sensitive else raw.lower()
-        if tolerate_zeros:
-            val = _apply_zero_tolerance(val)
-        if ignore and any(g in val for g in ignore):
-            continue
-        out.append((val, start, end))
-    return out
-
-
-def _preprocess_tokens(
-    s: str,
-    nonalpha: bool,
-    boundary_strings: list[str],
-    case_sensitive: bool,
-    tolerate_zeros: bool,
-    ignore_containing: list[str],
-) -> list[str]:
-    """The normalised token values of s (see _tokenize), without spans."""
-    return [
-        v
-        for v, _, _ in _tokenize(
-            s, nonalpha, boundary_strings, case_sensitive, tolerate_zeros, ignore_containing
-        )
-    ]
-
-
-def _lcs_indices(a: list[str], b: list[str]) -> tuple[list[int], list[int]]:
-    """Longest common subsequence of a and b, returned as the matched index lists
-    into a and b (order kept, gaps allowed)."""
-    m, n = len(a), len(b)
-    dp = [[0] * (n + 1) for _ in range(m + 1)]
-    for i in range(m - 1, -1, -1):
-        for j in range(n - 1, -1, -1):
-            dp[i][j] = dp[i + 1][j + 1] + 1 if a[i] == b[j] else max(dp[i + 1][j], dp[i][j + 1])
-    ai: list[int] = []
-    bi: list[int] = []
-    i = j = 0
-    while i < m and j < n:
-        if a[i] == b[j]:
-            ai.append(i)
-            bi.append(j)
-            i += 1
-            j += 1
-        elif dp[i + 1][j] >= dp[i][j + 1]:
-            i += 1
-        else:
-            j += 1
-    return ai, bi
-
-
-def _subarray_indices(a: list[str], b: list[str]) -> tuple[list[int], list[int]]:
-    """Longest contiguous common subarray of a and b (O(n*m) DP), as the matched
-    index ranges into a and b."""
-    if not a or not b:
-        return [], []
-    n = len(b)
-    best, end_a, end_b = 0, 0, 0
-    prev = [0] * (n + 1)
-    for i in range(len(a)):
-        curr = [0] * (n + 1)
-        for j in range(n):
-            if a[i] == b[j]:
-                curr[j + 1] = prev[j] + 1
-                if curr[j + 1] > best:
-                    best = curr[j + 1]
-                    end_a, end_b = i + 1, j + 1
-        prev = curr
-    return list(range(end_a - best, end_a)), list(range(end_b - best, end_b))
-
-
-def _window_indices(a: list[str], b: list[str], min_n: int) -> tuple[list[int], list[int]] | None:
-    """Largest N≥min_n with a same-multiset window a[i:i+N] / b[j:j+N]; the matched
-    index ranges into a and b, or None."""
-    for size in range(min(len(a), len(b)), min_n - 1, -1):
-        for i in range(len(a) - size + 1):
-            wa = Counter(a[i : i + size])
-            for j in range(len(b) - size + 1):
-                if Counter(b[j : j + size]) == wa:
-                    return list(range(i, i + size)), list(range(j, j + size))
-    return None
-
-
-def _find_match(
-    handle_tokens: list[str],
-    stem_tokens: list[str],
-    min_tokens: int,
-    match_order: bool,
-    match_uninterrupted: bool,
-) -> tuple[list[int], list[int]] | None:
-    """Return (handle_indices, stem_indices) for the matched tokens, or None if the
-    threshold isn't met.
-
-    The manifest ID (handle) is the needle; the file stem the haystack. The two
-    flags select the algorithm and apply bidirectionally — the structure must hold
-    in both token sequences. The returned indices are the exact tokens the match
-    rests on, in each sequence, so the caller can highlight precisely what decided
-    it. min_tokens == 0 means 'all' (threshold = len(handle_tokens)).
-    """
-    if not handle_tokens or not stem_tokens:
-        return None
-    effective_min = len(handle_tokens) if min_tokens == 0 else min_tokens
-    if effective_min <= 0:
-        return None
-
-    if not match_order and not match_uninterrupted:
-        common = set(handle_tokens) & set(stem_tokens)
-        if len(common) < effective_min:
-            return None
-        return (
-            [i for i, t in enumerate(handle_tokens) if t in common],
-            [j for j, t in enumerate(stem_tokens) if t in common],
-        )
-    if match_order and not match_uninterrupted:
-        ai, bi = _lcs_indices(handle_tokens, stem_tokens)
-        return (ai, bi) if len(ai) >= effective_min else None
-    if not match_order and match_uninterrupted:
-        return _window_indices(handle_tokens, stem_tokens, effective_min)
-    ai, bi = _subarray_indices(handle_tokens, stem_tokens)
-    return (ai, bi) if len(ai) >= effective_min else None
-
-
-def _col_values_summary(unique_vals: list[str], max_shown: int = 4) -> str:
-    if not unique_vals:
-        return ""
-    shown = ", ".join(unique_vals[:max_shown])
-    extra = len(unique_vals) - max_shown
-    return f"{shown}  ...+{extra}" if extra > 0 else shown
-
-
-def _group_name_for(row: dict, group_cols: list[str]) -> str | None:
-    """Join group-col values with '_'. Returns None if any value is blank."""
-    parts = []
-    for col in group_cols:
-        val = str(row.get(col, "")).strip()
-        if not val or val.lower() in ("nan", "none"):
-            return None
-        parts.append(val)
-    return "_".join(parts) if parts else None
-
-
-def _read_csv(path: Path) -> tuple[list[dict], list[str], str]:
-    """Try UTF-8-BOM then Latin-1. Returns (rows, col_names, error)."""
-    for encoding in ("utf-8-sig", "latin-1"):
-        try:
-            with path.open(newline="", encoding=encoding) as f:
-                reader = csv.DictReader(f)
-                rows = list(reader)
-                cols = list(reader.fieldnames or [])
-            return rows, cols, ""
-        except UnicodeDecodeError:
-            continue
-        except OSError as e:
-            return [], [], str(e)
-    return [], [], f"Could not decode {path.name} as UTF-8 or Latin-1."
-
-
-# ── Data classes ─────────────────────────────────────────────────────────────
-
-
-@dataclass
-class _Match:
-    path: Path
-    id_val: str
-    # character spans of the matched tokens, for highlighting: id_spans into
-    # id_val, name_spans into path.stem (a prefix of path.name)
-    id_spans: list[tuple[int, int]]
-    name_spans: list[tuple[int, int]]
-    group_name: str
-
-
-@dataclass
-class _Conflict:
-    label: str
-    options: list[_Match]
-    # None = unresolved; frozenset() = excluded; frozenset({0,2,...}) = include those indices
-    selection: frozenset | None = None
-
-
-@dataclass
-class _MatchResult:
-    clean_matches: list[_Match]
-    files_not_in_csv: list[Path]
-    rows_skipped_blank: int
-    conflicts: list[_Conflict]
-    groups_over_limit: bool
-    unmatched_csv_ids: list[str]
-    n_ids_with_group: int = 0
-    # group → ids, and id → its candidate file matches, for the ID-centric preview.
-    id_group: dict[str, str] = field(default_factory=dict)
-    id_candidates: dict[str, list[_Match]] = field(default_factory=dict)
-    error: str = ""
-
-
-# ── Matching logic ────────────────────────────────────────────────────────────
-
-
-def _compute_matches(
-    rows: list[dict],
-    match_col: str,
-    group_cols: list[str],
-    files: list[Path],
-    *,
-    nonalpha: bool,
-    boundary_strings: list[str],
-    case_sensitive: bool,
-    tolerate_zeros: bool,
-    ignore_containing: list[str],
-    min_tokens: int,
-    match_order: bool,
-    match_uninterrupted: bool,
-) -> _MatchResult:
-    if not rows or not files:
-        return _MatchResult([], list(files) if files else [], 0, [], False, [])
-
-    rows_skipped_blank = 0
-    candidate_matches: dict[Path, list[_Match]] = defaultdict(list)
-    id_candidates: dict[str, list[_Match]] = defaultdict(list)
-    id_group: dict[str, str] = {}
-    ids_with_group: set[str] = set()
-
-    stem_toks = {
-        f: _tokenize(
-            f.stem, nonalpha, boundary_strings, case_sensitive, tolerate_zeros, ignore_containing
-        )
-        for f in files
-    }
-
-    for row in rows:
-        id_val = str(row.get(match_col, "")).strip()
-        if not id_val:
-            continue
-        group_name = _group_name_for(row, group_cols)
-        if group_name is None:
-            rows_skipped_blank += 1
-            continue
-        ids_with_group.add(id_val)
-        id_group[id_val] = group_name
-        handle_toks = _tokenize(
-            id_val, nonalpha, boundary_strings, case_sensitive, tolerate_zeros, ignore_containing
-        )
-        handle_vals = [v for v, _, _ in handle_toks]
-        for f in files:
-            file_toks = stem_toks[f]
-            matched = _find_match(
-                handle_vals,
-                [v for v, _, _ in file_toks],
-                min_tokens,
-                match_order,
-                match_uninterrupted,
-            )
-            if matched is not None:
-                h_idx, s_idx = matched
-                match = _Match(
-                    path=f,
-                    id_val=id_val,
-                    id_spans=[handle_toks[i][1:] for i in h_idx],
-                    name_spans=[file_toks[j][1:] for j in s_idx],
-                    group_name=group_name,
-                )
-                candidate_matches[f].append(match)
-                id_candidates[id_val].append(match)
-
-    files_not_in_csv = [f for f in files if not candidate_matches[f]]
-    ids_that_matched: set[str] = {m.id_val for ms in candidate_matches.values() for m in ms}
-    unmatched_csv_ids = sorted(ids_with_group - ids_that_matched)
-    conflicts: list[_Conflict] = []
-
-    for f, ms in candidate_matches.items():
-        if len(ms) > 1:
-            conflicts.append(_Conflict(label=f"{f.name} matches {len(ms)} rows", options=ms))
-
-    single: dict[Path, _Match] = {f: ms[0] for f, ms in candidate_matches.items() if len(ms) == 1}
-    id_to_matches: dict[str, list[_Match]] = defaultdict(list)
-    for m in single.values():
-        id_to_matches[m.id_val].append(m)
-
-    multi_file_ids = {iv for iv, ms in id_to_matches.items() if len(ms) > 1}
-    clean_matches = [m for m in single.values() if m.id_val not in multi_file_ids]
-
-    for id_val, ms in id_to_matches.items():
-        if len(ms) > 1:
-            conflicts.append(_Conflict(label=f"Row '{id_val}' matches {len(ms)} files", options=ms))
-
-    all_group_names = {m.group_name for m in clean_matches}
-    for c in conflicts:
-        for m in c.options:
-            all_group_names.add(m.group_name)
-
-    return _MatchResult(
-        clean_matches=clean_matches,
-        files_not_in_csv=files_not_in_csv,
-        rows_skipped_blank=rows_skipped_blank,
-        conflicts=conflicts,
-        groups_over_limit=len(all_group_names) > 12,
-        unmatched_csv_ids=unmatched_csv_ids,
-        n_ids_with_group=len(ids_with_group),
-        id_group=dict(id_group),
-        id_candidates=dict(id_candidates),
-    )
-
-
-def _build_result_groups(
-    clean_matches: list[_Match],
-    conflicts: list[_Conflict],
-) -> dict[str, list[Path]]:
-    groups: dict[str, list[Path]] = {}
-    for m in clean_matches:
-        groups.setdefault(m.group_name, []).append(m.path)
-    for c in conflicts:
-        if not isinstance(c.selection, frozenset) or len(c.selection) == 0:
-            continue  # unresolved or explicitly excluded
-        for idx in c.selection:
-            m = c.options[idx]
-            groups.setdefault(m.group_name, []).append(m.path)
-    return groups
-
-
-def _highlight(full: str, spans: list[tuple[int, int]], accent: str) -> str:
-    """Bold the given character spans in full. Spans come straight from the match,
-    so exactly the tokens the decision rests on are highlighted."""
-    if not spans:
-        return full
-    out: list[str] = []
-    pos = 0
-    for start, end in sorted(spans):
-        if start < pos:
-            continue  # overlaps an already-bolded span
-        out.append(full[pos:start])
-        out.append(f'<b style="color:{accent};">{full[start:end]}</b>')
-        pos = end
-    out.append(full[pos:])
-    return "".join(out)
 
 
 # ── Shared stylesheet helper ──────────────────────────────────────────────────
@@ -602,8 +225,8 @@ class CsvImportWidget(QWidget):
         self._csv_cols: list[str] = []
         self._csv_path: Path | None = None
         self._added_files: list[Path] = []
-        self._conflicts: list[_Conflict] = []
-        self._last_result: _MatchResult | None = None
+        self._conflicts: list[Conflict] = []
+        self._last_result: MatchResult | None = None
         self._expanded_groups: set[str] = set()
         self._expanded_id_files: set[str] = set()
         self._expanded_warnings: set[str] = set()
@@ -632,10 +255,10 @@ class CsvImportWidget(QWidget):
     def result_groups(self) -> dict[str, list[Path]]:
         # Only clean 1:1 matches import — ambiguous/unmatched IDs are left for the
         # user to fix in their CSV (they're flagged in the preview and warned at
-        # import). _build_result_groups with no conflicts == clean matches only.
+        # import). build_result_groups with no conflicts == clean matches only.
         if self._last_result is None:
             return {}
-        return _build_result_groups(self._last_result.clean_matches, [])
+        return build_result_groups(self._last_result.clean_matches, [])
 
     def unmatched_summary(self) -> tuple[int, int]:
         """(files that won't import, manifest IDs without a clean 1:1 match) — for
@@ -1243,7 +866,7 @@ class CsvImportWidget(QWidget):
         )
         if not path:
             return
-        rows, cols, error = _read_csv(Path(path))
+        rows, cols, error = read_csv(Path(path))
         if error:
             self._csv_name_lbl.setText(f"Error: {error}")
             return
@@ -1283,7 +906,7 @@ class CsvImportWidget(QWidget):
                     if str(row.get(col, "")).strip()
                 }
             )
-            summary = _col_values_summary(unique_vals)
+            summary = col_values_summary(unique_vals)
             label = f"{col}    —    {summary}" if summary else col
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, col)
@@ -1427,7 +1050,7 @@ class CsvImportWidget(QWidget):
         ]
 
     def _matching_config(self) -> dict:
-        """Current matching controls as kwargs for _compute_matches."""
+        """Current matching controls as kwargs for compute_matches."""
         return dict(
             nonalpha=self._nonalpha_radio.isChecked(),
             boundary_strings=self._boundary_strings,
@@ -1448,7 +1071,7 @@ class CsvImportWidget(QWidget):
         caret = "▾" if self._adjust_toggle.isChecked() else "▸"
         self._adjust_toggle.setText(f"{caret}  Additional matching rules")
 
-    def _update_banner(self, result: _MatchResult | None) -> None:
+    def _update_banner(self, result: MatchResult | None) -> None:
         """Lead section 5 with an agnostic tally of how the match currently stands.
 
         The counts read the same whether things line up or not — no alarm before
@@ -1498,7 +1121,7 @@ class CsvImportWidget(QWidget):
             self._emit_validity()
             return
 
-        result = _compute_matches(
+        result = compute_matches(
             self._rows,
             match_col,
             group_cols,
@@ -1532,7 +1155,7 @@ class CsvImportWidget(QWidget):
         self._rebuild_preview(self._last_result, scroll_to_group=scroll_to_group)
 
     def _rebuild_preview(
-        self, result: _MatchResult | None, scroll_to_group: str | None = None
+        self, result: MatchResult | None, scroll_to_group: str | None = None
     ) -> None:
         t = _get_theme()
         self._update_banner(result)
@@ -1618,7 +1241,7 @@ class CsvImportWidget(QWidget):
                 result.id_candidates.get(id_val, []), key=lambda m: natural_key(m.path.name)
             )
             id_spans = [s for m in candidates for s in m.id_spans]
-            id_html = _highlight(id_val, id_spans, t.accent)
+            id_html = highlight(id_val, id_spans, t.accent)
 
             # One ? to the left of the whole ID when it isn't a clean 1:1 — far
             # calmer than a ? per file, and the eye lands straight on the problems.
@@ -1656,7 +1279,7 @@ class CsvImportWidget(QWidget):
             for k, m in enumerate(visible):
                 r = row + k
                 grid.addWidget(_rich(rarrow), r, 2, top)
-                fname_html = _highlight(m.path.name, m.name_spans, t.accent)
+                fname_html = highlight(m.path.name, m.name_spans, t.accent)
                 grid.addWidget(_rich(fname_html, color=t.muted), r, 3, top)
             row += len(visible)
 
