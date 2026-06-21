@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from app.csv_import_dialog import (
     CsvImportWidget,
     _csv_widget_stylesheet,
-    confirm_duplicate_files,
+    confirm_partial_import,
 )
 from app.directory_tree_widget import DirectoryTreeWidget
 from app.theme import get_theme as _get_theme
@@ -131,10 +131,10 @@ class AdvancedLoaderDialog(QDialog):
             self._ok_btn.setEnabled(valid)
 
     def _on_ok(self) -> None:
-        # The CSV wizard allows the same file in several groups (via manual
-        # conflict resolution). That's legitimate but worth a heads-up.
-        if self._stack.currentIndex() == 1 and not confirm_duplicate_files(
-            self, self._csv_widget.files_in_multiple_groups()
+        # Only clean matches import; warn if some recordings won't be included so
+        # the user can go fix their manifest instead of silently losing data.
+        if self._stack.currentIndex() == 1 and not confirm_partial_import(
+            self, *self._csv_widget.unmatched_summary()
         ):
             return
         self.accept()

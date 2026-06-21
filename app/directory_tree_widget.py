@@ -15,7 +15,6 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -148,6 +147,9 @@ class DirectoryTreeWidget(QWidget):
         super().__init__(parent)
         self._file_exts = file_exts
         self._root: Path | None = None
+        # _all_entries = every folder-with-files found anywhere; _entries = the
+        # subset within the currently selected depth range.
+        self._all_entries: list[tuple[tuple[str, ...], list[Path]]] = []
         self._entries: list[tuple[tuple[str, ...], list[Path]]] = []
         self._checked_levels: set[int] = set()
         self._seen_levels: set[int] = set()
@@ -155,7 +157,7 @@ class DirectoryTreeWidget(QWidget):
         self._expanded_groups: set[str] = set()
 
         self._build_ui()
-        self._refresh()
+        self._rescan()
 
     def is_valid(self) -> bool:
         return bool(self._result)
@@ -223,24 +225,22 @@ class DirectoryTreeWidget(QWidget):
         depth_row.addWidget(QLabel("Min:"))
         self._min_spin = QSpinBox()
         self._min_spin.setRange(1, 99)
-        self._min_spin.setValue(1)
+        self._min_spin.setToolTip(
+            "Shallowest folder depth to collect from. Bounded by where files were "
+            "actually found; pushes Max up if it would cross it."
+        )
         self._min_spin.valueChanged.connect(self._on_min_changed)
         depth_row.addWidget(self._min_spin)
         depth_row.addSpacing(8)
         depth_row.addWidget(QLabel("Max:"))
         self._max_spin = QSpinBox()
         self._max_spin.setRange(1, 99)
-        self._max_spin.setValue(1)
+        self._max_spin.setToolTip(
+            "Deepest folder depth to collect from. Bounded by where files were "
+            "actually found; pushes Min down if it would cross it."
+        )
         self._max_spin.valueChanged.connect(self._on_max_changed)
         depth_row.addWidget(self._max_spin)
-        depth_row.addSpacing(8)
-        self._link_check = QCheckBox("Link")
-        self._link_check.setChecked(True)
-        self._link_check.setToolTip(
-            "When checked, Min and Max move together. Uncheck to set them independently."
-        )
-        self._link_check.toggled.connect(self._on_link_toggled)
-        depth_row.addWidget(self._link_check)
         depth_row.addStretch()
         s3.addLayout(depth_row)
 
@@ -296,41 +296,21 @@ class DirectoryTreeWidget(QWidget):
     # ── Depth spin handlers ───────────────────────────────────────────────────
 
     def _on_min_changed(self, value: int) -> None:
-        if self._link_check.isChecked():
+        # Min pushes Max up if it would cross it. Re-filtering the cached scan is
+        # cheap, so no filesystem rescan is needed for a depth change.
+        if value > self._max_spin.value():
             self._max_spin.blockSignals(True)
             self._max_spin.setValue(value)
             self._max_spin.blockSignals(False)
-        else:
-            # clamp: min must not exceed max
-            if value > self._max_spin.value():
-                self._min_spin.blockSignals(True)
-                self._min_spin.setValue(self._max_spin.value())
-                self._min_spin.blockSignals(False)
-                return
-        self._refresh()
+        self._apply_depth_filter()
 
     def _on_max_changed(self, value: int) -> None:
-        if self._link_check.isChecked():
+        # Max pushes Min down if it would cross it.
+        if value < self._min_spin.value():
             self._min_spin.blockSignals(True)
             self._min_spin.setValue(value)
             self._min_spin.blockSignals(False)
-        else:
-            # clamp: max must not be less than min
-            if value < self._min_spin.value():
-                self._max_spin.blockSignals(True)
-                self._max_spin.setValue(self._min_spin.value())
-                self._max_spin.blockSignals(False)
-                return
-        self._refresh()
-
-    def _on_link_toggled(self, checked: bool) -> None:
-        if checked:
-            # snap both to current max on re-link
-            max_val = self._max_spin.value()
-            self._min_spin.blockSignals(True)
-            self._min_spin.setValue(max_val)
-            self._min_spin.blockSignals(False)
-        self._refresh()
+        self._apply_depth_filter()
 
     # ── Root picker ───────────────────────────────────────────────────────────
 
@@ -344,7 +324,7 @@ class DirectoryTreeWidget(QWidget):
         self._expanded_groups.clear()
         self._checked_levels.clear()
         self._seen_levels.clear()
-        self._refresh()
+        self._rescan()
 
     # ── Level checkbox handler ────────────────────────────────────────────────
 
@@ -367,17 +347,41 @@ class DirectoryTreeWidget(QWidget):
 
     # ── Scan + recompute + preview ────────────────────────────────────────────
 
-    def _refresh(self) -> None:
-        """Full rescan: walk filesystem, rebuild level list, recompute groups."""
+    def _rescan(self) -> None:
+        """Walk the whole tree once, then bound the depth spinboxes to the range of
+        depths where files were actually found and select that full range."""
         if self._root is not None:
-            self._entries = _walk_tree(
-                self._root,
-                self._min_spin.value(),
-                self._max_spin.value(),
-                self._file_exts,
-            )
+            self._all_entries = _walk_tree(self._root, 1, 99, self._file_exts)
         else:
-            self._entries = []
+            self._all_entries = []
+
+        depths = sorted({len(parts) for parts, _ in self._all_entries})
+        self._min_spin.blockSignals(True)
+        self._max_spin.blockSignals(True)
+        if depths:
+            lo, hi = depths[0], depths[-1]
+            self._min_spin.setRange(lo, hi)
+            self._max_spin.setRange(lo, hi)
+            self._min_spin.setValue(lo)
+            self._max_spin.setValue(hi)
+            self._min_spin.setEnabled(lo != hi)
+            self._max_spin.setEnabled(lo != hi)
+        else:
+            # No files anywhere — nothing to choose.
+            self._min_spin.setRange(1, 1)
+            self._max_spin.setRange(1, 1)
+            self._min_spin.setEnabled(False)
+            self._max_spin.setEnabled(False)
+        self._min_spin.blockSignals(False)
+        self._max_spin.blockSignals(False)
+
+        self._apply_depth_filter()
+
+    def _apply_depth_filter(self) -> None:
+        """Filter the cached scan to the selected depth range, then recompute. Cheap
+        — no filesystem access — so depth tweaks are instant."""
+        lo, hi = self._min_spin.value(), self._max_spin.value()
+        self._entries = [e for e in self._all_entries if lo <= len(e[0]) <= hi]
         self._rebuild_levels()
         self._recompute()
 
