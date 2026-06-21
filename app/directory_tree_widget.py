@@ -15,8 +15,8 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -43,15 +43,12 @@ def _walk_tree(
 ) -> list[tuple[tuple[str, ...], list[Path]]]:
     """Return [(parts, [Path, ...]), ...] for all matching folders in [min_depth, max_depth].
 
-    parts = path segments from root to the folder (1-based depth).
+    parts = path segments from root to the folder; depth = len(parts). Depth 0 is
+    the root folder itself (parts == ()), so files sitting directly in the root are
+    included when min_depth is 0.
     """
     entries: list[tuple[tuple[str, ...], list[Path]]] = []
-    try:
-        children = sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith("."))
-    except (PermissionError, OSError):
-        return []
-    for child in children:
-        _recurse(root, child, 1, min_depth, max_depth, file_exts, entries)
+    _recurse(root, root, 0, min_depth, max_depth, file_exts, entries)
     return entries
 
 
@@ -147,6 +144,9 @@ class DirectoryTreeWidget(QWidget):
         super().__init__(parent)
         self._file_exts = file_exts
         self._root: Path | None = None
+        # _all_entries = every folder-with-files found anywhere; _entries = the
+        # subset within the currently selected depth range.
+        self._all_entries: list[tuple[tuple[str, ...], list[Path]]] = []
         self._entries: list[tuple[tuple[str, ...], list[Path]]] = []
         self._checked_levels: set[int] = set()
         self._seen_levels: set[int] = set()
@@ -154,7 +154,7 @@ class DirectoryTreeWidget(QWidget):
         self._expanded_groups: set[str] = set()
 
         self._build_ui()
-        self._refresh()
+        self._rescan()
 
     def is_valid(self) -> bool:
         return bool(self._result)
@@ -167,21 +167,29 @@ class DirectoryTreeWidget(QWidget):
     def _build_ui(self) -> None:
         t = _get_theme()
 
-        def _header(text: str, tooltip: str = "") -> QLabel:
+        def _sub_header(text: str) -> QLabel:
             lbl = QLabel(text)
             lbl.setStyleSheet(
                 f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
             )
-            if tooltip:
-                lbl.setToolTip(tooltip)
             return lbl
+
+        def _sep() -> QFrame:
+            f = QFrame()
+            f.setFrameShape(QFrame.Shape.HLine)
+            f.setStyleSheet(f"color: {t.sep}; margin: 4px 0;")
+            return f
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
 
-        # ── Root directory ────────────────────────────────────────────────────
-        outer.addWidget(_header("Root directory"))
+        # ── Step 2: Root directory (always visible) ───────────────────────────
+        self._hdr2 = QLabel("2.  Root directory")
+        self._hdr2.setStyleSheet(
+            f"color: {t.accent}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        )
+        outer.addWidget(self._hdr2)
 
         root_row = QHBoxLayout()
         root_row.setSpacing(8)
@@ -194,97 +202,113 @@ class DirectoryTreeWidget(QWidget):
         root_row.addWidget(self._root_lbl, stretch=1)
         outer.addLayout(root_row)
 
-        # ── Depth ─────────────────────────────────────────────────────────────
-        outer.addWidget(_header("Depth"))
+        # ── Step 3: Depth + levels + preview (hidden until root chosen) ───────
+        self._step3_container = QWidget()
+        self._step3_container.setVisible(False)
+        s3 = QVBoxLayout(self._step3_container)
+        s3.setContentsMargins(0, 0, 0, 0)
+        s3.setSpacing(8)
+
+        s3.addWidget(_sep())
+
+        self._hdr3 = QLabel("3.  Depth & groups")
+        self._hdr3.setStyleSheet(
+            f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        )
+        s3.addWidget(self._hdr3)
 
         depth_row = QHBoxLayout()
         depth_row.setSpacing(8)
-
         depth_row.addWidget(QLabel("Min:"))
         self._min_spin = QSpinBox()
         self._min_spin.setRange(1, 99)
-        self._min_spin.setValue(1)
+        self._min_spin.setToolTip(
+            "Shallowest folder depth to collect from (0 = files directly in the root "
+            "folder). Bounded by where files were actually found; pushes Max up if it "
+            "would cross it."
+        )
         self._min_spin.valueChanged.connect(self._on_min_changed)
         depth_row.addWidget(self._min_spin)
-
         depth_row.addSpacing(8)
         depth_row.addWidget(QLabel("Max:"))
         self._max_spin = QSpinBox()
         self._max_spin.setRange(1, 99)
-        self._max_spin.setValue(1)
+        self._max_spin.setToolTip(
+            "Deepest folder depth to collect from. Bounded by where files were "
+            "actually found; pushes Min down if it would cross it."
+        )
         self._max_spin.valueChanged.connect(self._on_max_changed)
         depth_row.addWidget(self._max_spin)
-
-        depth_row.addSpacing(8)
-        self._link_check = QCheckBox("Link")
-        self._link_check.setChecked(True)
-        self._link_check.setToolTip(
-            "When checked, Min and Max move together. Uncheck to set them independently."
-        )
-        self._link_check.toggled.connect(self._on_link_toggled)
-        depth_row.addWidget(self._link_check)
-
         depth_row.addStretch()
-        outer.addLayout(depth_row)
+        s3.addLayout(depth_row)
 
-        # ── Group by levels ───────────────────────────────────────────────────
-        outer.addWidget(_header("Group by levels"))
+        s3.addWidget(_sub_header("Group by levels"))
 
         self._levels_placeholder = QLabel("Choose a folder to see grouping levels.")
         self._levels_placeholder.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
-        outer.addWidget(self._levels_placeholder)
+        s3.addWidget(self._levels_placeholder)
 
         self._levels_list = _CheckableListWidget()
         self._levels_list.setMaximumHeight(120)
         self._levels_list.setVisible(False)
         self._levels_list.itemChanged.connect(self._on_level_changed)
-        outer.addWidget(self._levels_list)
+        s3.addWidget(self._levels_list)
 
-        # ── Preview ───────────────────────────────────────────────────────────
         self._preview_area = QScrollArea()
         self._preview_area.setObjectName("previewArea")
         self._preview_area.setWidgetResizable(True)
-        self._preview_area.setMinimumHeight(160)
-        outer.addWidget(self._preview_area, stretch=1)
+        self._preview_area.setMinimumHeight(100)
+        s3.addWidget(self._preview_area, stretch=1)
+
+        outer.addWidget(self._step3_container, stretch=1)
+
+        # Trailing stretch — pins step 2 to the top before step 3 appears.
+        # Without it, the only stretch item (step 3) is hidden, so the box layout
+        # sees zero total stretch and spreads the slack evenly around every item,
+        # vertically centring step 2. Once step 3 is shown its preview area takes
+        # the slack instead, so this collapses to 0 (see _update_step_visibility).
+        self._outer_layout = outer
+        self._bottom_stretch_index = outer.count()
+        outer.addStretch(1)
+
+    # ── Step visibility ───────────────────────────────────────────────────────
+
+    def _update_step_visibility(self) -> None:
+        t = _get_theme()
+        root_chosen = self._root is not None
+        self._step3_container.setVisible(root_chosen)
+
+        # While step 3 is up its preview takes the slack; otherwise the trailing
+        # spacer takes it so step 2 stays pinned to the top instead of being
+        # vertically centred in the empty space below it.
+        self._outer_layout.setStretch(self._bottom_stretch_index, 0 if root_chosen else 1)
+
+        _active = f"color: {t.accent}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        _done = f"color: {t.muted}; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        if root_chosen:
+            self._hdr2.setStyleSheet(_done)
+            self._hdr3.setStyleSheet(_active)
+        else:
+            self._hdr2.setStyleSheet(_active)
 
     # ── Depth spin handlers ───────────────────────────────────────────────────
 
     def _on_min_changed(self, value: int) -> None:
-        if self._link_check.isChecked():
+        # Min pushes Max up if it would cross it. Re-filtering the cached scan is
+        # cheap, so no filesystem rescan is needed for a depth change.
+        if value > self._max_spin.value():
             self._max_spin.blockSignals(True)
             self._max_spin.setValue(value)
             self._max_spin.blockSignals(False)
-        else:
-            # clamp: min must not exceed max
-            if value > self._max_spin.value():
-                self._min_spin.blockSignals(True)
-                self._min_spin.setValue(self._max_spin.value())
-                self._min_spin.blockSignals(False)
-                return
-        self._refresh()
+        self._apply_depth_filter()
 
     def _on_max_changed(self, value: int) -> None:
-        if self._link_check.isChecked():
+        # Max pushes Min down if it would cross it.
+        if value < self._min_spin.value():
             self._min_spin.blockSignals(True)
             self._min_spin.setValue(value)
             self._min_spin.blockSignals(False)
-        else:
-            # clamp: max must not be less than min
-            if value < self._min_spin.value():
-                self._max_spin.blockSignals(True)
-                self._max_spin.setValue(self._min_spin.value())
-                self._max_spin.blockSignals(False)
-                return
-        self._refresh()
-
-    def _on_link_toggled(self, checked: bool) -> None:
-        if checked:
-            # snap both to current max on re-link
-            max_val = self._max_spin.value()
-            self._min_spin.blockSignals(True)
-            self._min_spin.setValue(max_val)
-            self._min_spin.blockSignals(False)
-        self._refresh()
+        self._apply_depth_filter()
 
     # ── Root picker ───────────────────────────────────────────────────────────
 
@@ -298,7 +322,7 @@ class DirectoryTreeWidget(QWidget):
         self._expanded_groups.clear()
         self._checked_levels.clear()
         self._seen_levels.clear()
-        self._refresh()
+        self._rescan()
 
     # ── Level checkbox handler ────────────────────────────────────────────────
 
@@ -321,17 +345,42 @@ class DirectoryTreeWidget(QWidget):
 
     # ── Scan + recompute + preview ────────────────────────────────────────────
 
-    def _refresh(self) -> None:
-        """Full rescan: walk filesystem, rebuild level list, recompute groups."""
+    def _rescan(self) -> None:
+        """Walk the whole tree once, then bound the depth spinboxes to the range of
+        depths where files were actually found and select that full range."""
         if self._root is not None:
-            self._entries = _walk_tree(
-                self._root,
-                self._min_spin.value(),
-                self._max_spin.value(),
-                self._file_exts,
-            )
+            # min_depth 0 so files directly in the root are collected too.
+            self._all_entries = _walk_tree(self._root, 0, 99, self._file_exts)
         else:
-            self._entries = []
+            self._all_entries = []
+
+        depths = sorted({len(parts) for parts, _ in self._all_entries})
+        self._min_spin.blockSignals(True)
+        self._max_spin.blockSignals(True)
+        if depths:
+            lo, hi = depths[0], depths[-1]
+            self._min_spin.setRange(lo, hi)
+            self._max_spin.setRange(lo, hi)
+            self._min_spin.setValue(lo)
+            self._max_spin.setValue(hi)
+            self._min_spin.setEnabled(lo != hi)
+            self._max_spin.setEnabled(lo != hi)
+        else:
+            # No files anywhere — nothing to choose.
+            self._min_spin.setRange(1, 1)
+            self._max_spin.setRange(1, 1)
+            self._min_spin.setEnabled(False)
+            self._max_spin.setEnabled(False)
+        self._min_spin.blockSignals(False)
+        self._max_spin.blockSignals(False)
+
+        self._apply_depth_filter()
+
+    def _apply_depth_filter(self) -> None:
+        """Filter the cached scan to the selected depth range, then recompute. Cheap
+        — no filesystem access — so depth tweaks are instant."""
+        lo, hi = self._min_spin.value(), self._max_spin.value()
+        self._entries = [e for e in self._all_entries if lo <= len(e[0]) <= hi]
         self._rebuild_levels()
         self._recompute()
 
@@ -340,13 +389,21 @@ class DirectoryTreeWidget(QWidget):
         self._levels_list.blockSignals(True)
         self._levels_list.clear()
 
-        if not self._entries:
+        # Depth 0 (root files) contributes no folder names, so there may be entries
+        # but no levels to choose between.
+        max_depth = max((len(parts) for parts, _ in self._entries), default=0)
+        if max_depth == 0:
+            if self._entries and self._root is not None:
+                self._levels_placeholder.setText(
+                    "All files are in the root folder — they'll form one group named "
+                    f"“{self._root.name}”."
+                )
+            else:
+                self._levels_placeholder.setText("No matching files at the chosen depth.")
             self._levels_placeholder.setVisible(True)
             self._levels_list.setVisible(False)
             self._levels_list.blockSignals(False)
             return
-
-        max_depth = max(len(parts) for parts, _ in self._entries)
 
         for level in range(1, max_depth + 1):
             unique_vals = sorted(
@@ -378,8 +435,10 @@ class DirectoryTreeWidget(QWidget):
 
     def _recompute(self) -> None:
         """Recompute groups from cached entries + current checked levels, then refresh preview."""
-        self._result = _compute_groups(self._entries, self._checked_levels)
+        default_name = self._root.name if self._root is not None else "Group"
+        self._result = _compute_groups(self._entries, self._checked_levels, default_name)
         self._expanded_groups &= set(self._result)
+        self._update_step_visibility()
         self._rebuild_preview()
         self.validity_changed.emit(self.is_valid())
 
