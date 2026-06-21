@@ -23,7 +23,6 @@ group — kept out of the main view so the always-visible list stays simple.
 from __future__ import annotations
 
 import csv
-import re
 from pathlib import Path
 
 from PySide6.QtCore import QModelIndex, Qt, Signal
@@ -52,6 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.confirm_dialog import ask, grumpy_teacher, warning_face
+from app.text_utils import natural_key
 from app.theme import get_theme as _get_theme
 
 # --- REVIEWED 2026-06-08: kept deliberately, not oversights -----------------
@@ -133,7 +133,7 @@ class _PathSortItem(QTableWidgetItem):
 
     def __lt__(self, other: object) -> bool:  # type: ignore[override]
         if isinstance(other, _PathSortItem):
-            return _natural_key(self._sort_key) < _natural_key(other._sort_key)
+            return natural_key(self._sort_key) < natural_key(other._sort_key)
         return super().__lt__(other)
 
 
@@ -145,7 +145,7 @@ class _PlainTextSortItem(QTableWidgetItem):
 
     def __lt__(self, other: object) -> bool:  # type: ignore[override]
         if isinstance(other, QTableWidgetItem):
-            return _natural_key(self.text()) < _natural_key(other.text())
+            return natural_key(self.text()) < natural_key(other.text())
         return super().__lt__(other)
 
 
@@ -188,12 +188,6 @@ def _looks_like_yolo3r_csv(path: Path) -> bool:
     except OSError:
         return False
     return header is not None and _YOLO3R_HEADER_MARKERS.issubset(header)
-
-
-def _natural_key(s: str) -> list[int | str]:
-    """Split a string into alternating text/integer chunks for natural sort.
-    "oft2.csv" → ["oft", 2, ".csv"] so numeric runs compare by value."""
-    return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", s)]
 
 
 def _ext_label(file_exts: set[str]) -> str:

@@ -1,7 +1,6 @@
 """Import-groups-from-CSV wizard.
 
-Primary use: embedded as CsvImportWidget inside AdvancedLoaderDialog.
-Also available standalone via the thin CsvImportDialog wrapper.
+Embedded as CsvImportWidget inside AdvancedLoaderDialog.
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
-    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -33,57 +31,14 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QScrollArea,
     QSpinBox,
-    QStyle,
-    QStyleOptionViewItem,
-    QToolTip,
     QVBoxLayout,
     QWidget,
 )
 
-from app.group_manifest_panel import _natural_key
+from app.gating import TooltipOnDisabled
+from app.text_utils import natural_key
 from app.theme import get_theme as _get_theme
-
-# ── Tooltip-on-disabled shim (same pattern as app/gating.py) ─────────────────
-
-
-class _TooltipOnDisabled(QObject):
-    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
-        if isinstance(obj, QWidget) and not obj.isEnabled() and event.type() == QEvent.Type.ToolTip:
-            tip = obj.toolTip()
-            if tip:
-                QToolTip.showText(event.globalPos(), tip, obj)  # type: ignore[attr-defined]
-            return True
-        return super().eventFilter(obj, event)
-
-
-class _CheckableListWidget(QListWidget):
-    """QListWidget where clicking anywhere on a row toggles its checkbox.
-
-    Normally only clicking the indicator itself toggles the check state.
-    This subclass intercepts mouse presses: if the click lands outside the
-    indicator rect, it toggles manually and skips the normal press (avoiding
-    double-toggle when the indicator IS clicked).
-    """
-
-    def mousePressEvent(self, event) -> None:  # type: ignore[override]
-        item = self.itemAt(event.pos())
-        if item is not None and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
-            opt = QStyleOptionViewItem()
-            opt.initFrom(self)
-            opt.rect = self.visualItemRect(item)
-            opt.features = QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
-            check_rect = self.style().subElementRect(
-                QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, self
-            )
-            if not check_rect.contains(event.pos()):
-                new_state = (
-                    Qt.CheckState.Unchecked
-                    if item.checkState() == Qt.CheckState.Checked
-                    else Qt.CheckState.Checked
-                )
-                item.setCheckState(new_state)
-                return
-        super().mousePressEvent(event)
+from app.widgets import CheckableListWidget
 
 
 class _FocusActivatesRadio(QObject):
@@ -655,7 +610,7 @@ class CsvImportWidget(QWidget):
         self._duplicate_ids: list[str] = []
         self._boundary_strings: list[str] = []
         self._ignore_strings: list[str] = []
-        self._tooltip_filter = _TooltipOnDisabled(self)
+        self._tooltip_filter = TooltipOnDisabled(self)
 
         self._build_ui()
         self._update_controls_state()
@@ -867,7 +822,7 @@ class CsvImportWidget(QWidget):
         )
         s4.addWidget(self._hdr4)
 
-        self._group_cols_list = _CheckableListWidget()
+        self._group_cols_list = CheckableListWidget()
         self._group_cols_list.setObjectName("csvGroupColsList")
         self._group_cols_list.setFixedHeight(92)
         # No selection/focus highlight — rows are toggled by their checkbox, and
@@ -1375,7 +1330,7 @@ class CsvImportWidget(QWidget):
             return
         dupes = set(self._duplicate_ids)
         values = [v for v in (str(row.get(col, "")).strip() for row in self._rows) if v]
-        for val in sorted(values, key=_natural_key):
+        for val in sorted(values, key=natural_key):
             item = QListWidgetItem(val)
             item.setToolTip(val)
             if val in dupes:
@@ -1455,7 +1410,7 @@ class CsvImportWidget(QWidget):
             self._dup_name_lbl.setVisible(False)
 
         self._file_preview.clear()
-        for p in sorted(files, key=lambda q: _natural_key(q.name)):
+        for p in sorted(files, key=lambda q: natural_key(q.name)):
             item = QListWidgetItem(p.name)
             item.setToolTip(str(p))
             if p.name in dup_names:
@@ -1660,7 +1615,7 @@ class CsvImportWidget(QWidget):
 
         def _add_id_rows(row: int, id_val: str) -> int:
             candidates = sorted(
-                result.id_candidates.get(id_val, []), key=lambda m: _natural_key(m.path.name)
+                result.id_candidates.get(id_val, []), key=lambda m: natural_key(m.path.name)
             )
             id_spans = [s for m in candidates for s in m.id_spans]
             id_html = _highlight(id_val, id_spans, t.accent)
@@ -1725,7 +1680,7 @@ class CsvImportWidget(QWidget):
 
         grid_row = 0
         for gname in sorted(ids_by_group):
-            ids = sorted(ids_by_group[gname], key=_natural_key)
+            ids = sorted(ids_by_group[gname], key=natural_key)
             n_matched = sum(1 for i in ids if i in clean_ids)
 
             header = _rich(
@@ -1848,73 +1803,3 @@ def confirm_partial_import(parent: QWidget, n_files: int, n_ids: int) -> bool:
         QMessageBox.StandardButton.No,
     )
     return resp == QMessageBox.StandardButton.Yes
-
-
-# ── Standalone dialog wrapper ─────────────────────────────────────────────────
-
-
-class CsvImportDialog(QDialog):
-    """Thin standalone wrapper around CsvImportWidget. Call result_groups() after exec()."""
-
-    def __init__(self, file_exts: set[str], parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Import groups from CSV")
-        self.resize(660, 660)
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 16, 16, 14)
-        outer.setSpacing(10)
-
-        self._widget = CsvImportWidget(file_exts, self)
-        outer.addWidget(self._widget, stretch=1)
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setObjectName("secondaryButton")
-        cancel_btn.clicked.connect(self.reject)
-        self._ok_btn = QPushButton("Import Groups")
-        self._ok_btn.setObjectName("importBtn")
-        self._ok_btn.setEnabled(False)
-        self._ok_btn.clicked.connect(self._on_accept)
-        btn_row.addWidget(cancel_btn)
-        btn_row.addSpacing(8)
-        btn_row.addWidget(self._ok_btn)
-        outer.addLayout(btn_row)
-
-        self._widget.validity_changed.connect(self._ok_btn.setEnabled)
-        self._apply_stylesheet()
-
-    def result_groups(self) -> dict[str, list[Path]]:
-        return self._widget.result_groups()
-
-    def _on_accept(self) -> None:
-        if self._widget.is_valid() and confirm_partial_import(
-            self, *self._widget.unmatched_summary()
-        ):
-            self.accept()
-
-    def _apply_stylesheet(self) -> None:
-        t = _get_theme()
-        base = ""
-        if self.parent() is not None:
-            win = self.parent().window()
-            if win is not None:
-                base = win.styleSheet()
-        self.setStyleSheet(
-            base
-            + _csv_widget_stylesheet(t)
-            + f"""
-            QPushButton#importBtn {{
-                background-color: {t.accent};
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 6px 20px;
-                min-width: 80px;
-                font-weight: bold;
-            }}
-            QPushButton#importBtn:hover {{ background-color: {t.accent_hover}; }}
-            QPushButton#importBtn:disabled {{ background-color: {t.muted}; color: {t.bg}; }}
-        """
-        )

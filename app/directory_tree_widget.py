@@ -19,18 +19,17 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
     QListWidgetItem,
     QPushButton,
     QScrollArea,
     QSpinBox,
-    QStyle,
-    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
 
+from app.text_utils import natural_key
 from app.theme import get_theme as _get_theme
+from app.widgets import CheckableListWidget
 
 # ── Pure walk logic ───────────────────────────────────────────────────────────
 
@@ -64,9 +63,12 @@ def _recurse(
     if min_depth <= depth <= max_depth:
         try:
             files = sorted(
-                p
-                for p in current.iterdir()
-                if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in file_exts
+                (
+                    p
+                    for p in current.iterdir()
+                    if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in file_exts
+                ),
+                key=lambda p: natural_key(p.name),
             )
         except (PermissionError, OSError):
             files = []
@@ -77,7 +79,8 @@ def _recurse(
     if depth < max_depth:
         try:
             subdirs = sorted(
-                p for p in current.iterdir() if p.is_dir() and not p.name.startswith(".")
+                (p for p in current.iterdir() if p.is_dir() and not p.name.startswith(".")),
+                key=lambda p: natural_key(p.name),
             )
         except (PermissionError, OSError):
             subdirs = []
@@ -102,34 +105,10 @@ def _compute_groups(
         if name not in merged:
             merged[name] = []
         merged[name].extend(files)
-    return {name: sorted(set(files)) for name, files in merged.items()}
-
-
-# ── Local _CheckableListWidget (intentionally duplicated from csv_import_dialog) ──
-
-
-class _CheckableListWidget(QListWidget):
-    """QListWidget where clicking anywhere on a row toggles its checkbox."""
-
-    def mousePressEvent(self, event) -> None:  # type: ignore[override]
-        item = self.itemAt(event.pos())
-        if item is not None and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
-            opt = QStyleOptionViewItem()
-            opt.initFrom(self)
-            opt.rect = self.visualItemRect(item)
-            opt.features = QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
-            check_rect = self.style().subElementRect(
-                QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, self
-            )
-            if not check_rect.contains(event.pos()):
-                new_state = (
-                    Qt.CheckState.Unchecked
-                    if item.checkState() == Qt.CheckState.Checked
-                    else Qt.CheckState.Checked
-                )
-                item.setCheckState(new_state)
-                return
-        super().mousePressEvent(event)
+    return {
+        name: sorted(set(files), key=lambda p: natural_key(p.name))
+        for name, files in merged.items()
+    }
 
 
 # ── Widget ────────────────────────────────────────────────────────────────────
@@ -248,7 +227,7 @@ class DirectoryTreeWidget(QWidget):
         self._levels_placeholder.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
         s3.addWidget(self._levels_placeholder)
 
-        self._levels_list = _CheckableListWidget()
+        self._levels_list = CheckableListWidget()
         self._levels_list.setMaximumHeight(120)
         self._levels_list.setVisible(False)
         self._levels_list.itemChanged.connect(self._on_level_changed)
