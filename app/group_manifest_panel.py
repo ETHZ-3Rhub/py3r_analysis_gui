@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.confirm_dialog import ask, grumpy_teacher, warning_face
+from app.styles import base_stylesheet
 from app.text_utils import natural_key
 from app.theme import get_theme as _get_theme
 
@@ -213,11 +214,13 @@ class _ManifestDialog(QDialog):
         self._panel = panel
         self._group_name = group_name
         self.setWindowTitle(group_name)
-        # Top-level windows (QDialog included) do NOT inherit a parent
-        # widget's `setStyleSheet()` — only the QApplication-wide one — so
-        # without this, the table/buttons/tooltips inside fall back to plain
-        # system (light) styling while everything else in the app is dark.
-        self.setStyleSheet(panel.window().styleSheet())
+        # Top-level windows (QDialog included) do NOT inherit a parent widget's
+        # `setStyleSheet()` — only the QApplication-wide one — so without this,
+        # the table/buttons/tooltips inside fall back to plain system (light)
+        # styling while everything else in the app is dark. Built from the
+        # shared helper rather than copied off the parent window, so the dialog
+        # doesn't depend on having a styled `MainWindow` ancestor.
+        self.setStyleSheet(base_stylesheet(_get_theme()))
         self.resize(560, 380)
         self._build_ui()
         self._refresh_table()
