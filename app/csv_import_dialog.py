@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -83,31 +84,6 @@ class _CheckableListWidget(QListWidget):
                 item.setCheckState(new_state)
                 return
         super().mousePressEvent(event)
-
-
-class _ElideLeftLabel(QLabel):
-    """QLabel that elides from the left so the filename end is always visible.
-
-    Recomputes the elided display text on every resize. Full path stored as
-    tooltip so the user can always see the complete path on hover.
-    """
-
-    def __init__(self, full_text: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._full_text = full_text
-        self.setToolTip(full_text)
-        self.setMinimumWidth(0)
-
-    def resizeEvent(self, event) -> None:  # type: ignore[override]
-        super().resizeEvent(event)
-        elided = self.fontMetrics().elidedText(
-            self._full_text, Qt.TextElideMode.ElideLeft, self.width()
-        )
-        QLabel.setText(self, elided)
-
-    def minimumSizeHint(self) -> QSize:
-        hint = super().minimumSizeHint()
-        return QSize(0, hint.height())
 
 
 class _FocusActivatesRadio(QObject):
@@ -645,6 +621,15 @@ def _csv_widget_stylesheet(t) -> str:
             font-size: 12px;
         }}
         QPushButton#adjustToggle:hover {{ color: {t.accent}; }}
+        QPushButton#ignoreX {{
+            background: transparent;
+            border: none;
+            color: {t.muted};
+            font-size: 12px;
+            padding: 0 2px;
+            min-width: 14px;
+        }}
+        QPushButton#ignoreX:hover {{ color: {t.error}; }}
     """
 
 
@@ -671,6 +656,7 @@ class CsvImportWidget(QWidget):
         self._last_result: _MatchResult | None = None
         self._expanded_groups: set[str] = set()
         self._expanded_warnings: set[str] = set()
+        self._manual_mode: bool = False
         self._duplicate_ids: list[str] = []
         self._boundary_strings: list[str] = []
         self._ignore_strings: list[str] = []
@@ -1142,12 +1128,11 @@ class CsvImportWidget(QWidget):
         adj.addLayout(flags_row)
         adj.addStretch()
 
-        # Body row: the adjust panel (left, narrow) beside the preview (right).
-        # Collapsed, the preview takes the full width; expanded, the panel drops
-        # in on the left and the preview only narrows — it never loses vertical
-        # lines, and expanding adds no height to the dialog. This also makes the
-        # toggle→target relationship obvious. The panel lives in its own scroll
-        # area so it can never clip its controls, however short the column gets.
+        # Body row: the preview (left, stretches) beside the adjust panel (right,
+        # narrow). The panel sits on the right, directly under its top-right toggle,
+        # so expanding it leaves the left-aligned preview text exactly where it was —
+        # only the preview narrows. The panel lives in its own scroll area so it can
+        # never clip its controls, however short the column gets.
         self._adjust_scroll = QScrollArea()
         self._adjust_scroll.setObjectName("sepChipsArea")  # borderless/transparent
         self._adjust_scroll.setWidgetResizable(True)
@@ -1159,13 +1144,12 @@ class CsvImportWidget(QWidget):
 
         body_row = QHBoxLayout()
         body_row.setSpacing(14)
-        body_row.addWidget(self._adjust_scroll)
-
         self._preview_area = QScrollArea()
         self._preview_area.setObjectName("previewArea")
         self._preview_area.setWidgetResizable(True)
         self._preview_area.setMinimumHeight(80)
         body_row.addWidget(self._preview_area, stretch=1)
+        body_row.addWidget(self._adjust_scroll)
         s5.addLayout(body_row, stretch=1)
 
         # Manual conflict resolution — a deliberate, opt-in escape hatch, shown
@@ -1174,8 +1158,9 @@ class CsvImportWidget(QWidget):
         # whatever the user does here is on them (duplicates are warned at import).
         self._resolve_btn = QPushButton("Resolve conflicts manually…")
         self._resolve_btn.setObjectName("secondaryButton")
+        self._resolve_btn.setCheckable(True)
         self._resolve_btn.setVisible(False)
-        self._resolve_btn.clicked.connect(self._open_manual_resolve)
+        self._resolve_btn.toggled.connect(self._toggle_manual_mode)
         resolve_row = QHBoxLayout()
         resolve_row.addWidget(self._resolve_btn)
         resolve_row.addStretch()
@@ -1579,6 +1564,9 @@ class CsvImportWidget(QWidget):
             self._banner.setStyleSheet(f"color: {t.muted}; font-size: 12px; padding: 4px 0;")
 
     def _refresh(self) -> None:
+        # Any change to the matching criteria leaves manual mode — the conflicts it
+        # was editing may no longer exist (changing criteria is the intended fix).
+        self._manual_mode = False
         self._update_step_visibility()
         self._update_adjust_summary()
         match_col = self._match_combo.currentText()
@@ -1615,13 +1603,19 @@ class CsvImportWidget(QWidget):
     def _update_resolve_button(self) -> None:
         """Show the manual-resolve button only when there are conflicts to resolve,
         labelling it with the count of still-unresolved ones."""
-        n = sum(1 for c in self._conflicts if c.selection is None)
         self._resolve_btn.setVisible(bool(self._conflicts))
-        total = len(self._conflicts)
-        if n:
-            self._resolve_btn.setText(f"Resolve {n} conflict{'' if n == 1 else 's'} manually…")
+        self._resolve_btn.blockSignals(True)
+        self._resolve_btn.setChecked(self._manual_mode)
+        self._resolve_btn.blockSignals(False)
+        if self._manual_mode:
+            self._resolve_btn.setText("Done resolving")
         else:
-            self._resolve_btn.setText(f"Adjust {total} manual choice{'' if total == 1 else 's'}…")
+            n = sum(1 for c in self._conflicts if c.selection is None)
+            self._resolve_btn.setText(
+                f"Resolve {n} conflict{'' if n == 1 else 's'} manually…"
+                if n
+                else "Adjust manual choices…"
+            )
 
     def _emit_validity(self) -> None:
         self.validity_changed.emit(self.is_valid())
@@ -1686,111 +1680,143 @@ class CsvImportWidget(QWidget):
             )
             return
 
-        # The didactic ID-centric list: every manifest ID, grouped, with the
-        # file(s) it matches beneath it. A confirmed 1:1 (a clean match, or a
-        # manual pick) shows ← ; anything unsettled — no file, several files, or a
-        # file also claimed by another ID — shows ? and carries a tooltip saying
-        # why, so the fix (more / fewer words) is legible.
+        # The didactic ID-centric list, laid out in a grid so the ←/? column and
+        # the filenames line up across every row (a proportional font can't be
+        # aligned with padding). Columns: 0 = ignore-✕ (manual mode only), 1 = ID,
+        # 2 = ← / ? / checkbox, 3 = filename. A confirmed 1:1 (clean match, or a
+        # manual pick) shows ← ; anything unsettled shows ? with a tooltip saying
+        # why. In manual mode each unsettled file gets a checkbox and each ambiguous
+        # ID an ✕ to drop the whole row.
         confirmed = self._confirmed_by_id()
+        clean_ids = {m.id_val for m in result.clean_matches}
         arrow = f'<span style="color:{t.sep};">&larr;</span>'
         qmark = f'<span style="color:{t.warn}; font-weight:bold;">?</span>'
-        indent = "&nbsp;&nbsp;&nbsp;&nbsp;"
 
-        def _id_block(id_val: str, candidates: list[_Match], conf: set[Path]) -> QLabel:
+        grid_widget = QWidget()
+        grid = QGridLayout(grid_widget)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(3)
+        grid.setColumnStretch(3, 1)
+        top = Qt.AlignmentFlag.AlignTop
+
+        def _rich(html: str, *, color: str | None = None, tip: str | None = None) -> QLabel:
+            lbl = QLabel(html)
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setWordWrap(False)
+            lbl.setAlignment(top | Qt.AlignmentFlag.AlignLeft)
+            if color:
+                lbl.setStyleSheet(f"color: {color};")
+            if tip:
+                lbl.setToolTip(tip)
+            return lbl
+
+        def _is_picked(id_val: str, path: Path) -> bool:
+            entry = self._manual_entry(id_val, path)
+            if entry is None:
+                return False
+            conflict, idx = entry
+            return isinstance(conflict.selection, frozenset) and idx in conflict.selection
+
+        def _add_id_rows(row: int, id_val: str) -> int:
+            candidates = result.id_candidates.get(id_val, [])
+            conf = confirmed.get(id_val, set())
+            is_ambiguous = bool(candidates) and id_val not in clean_ids
+            manual = self._manual_mode and is_ambiguous
+
             id_spans = [s for m in candidates for s in m.id_spans]
             id_html = _highlight(id_val, id_spans, t.accent)
+
+            if manual:
+                x_btn = QPushButton("✕")
+                x_btn.setObjectName("ignoreX")
+                x_btn.setToolTip("Ignore this ID — use none of these files")
+                x_btn.clicked.connect(lambda _=False, i=id_val: self._ignore_id(i))
+                grid.addWidget(x_btn, row, 0, top)
+
+            tip = None
+            if not self._manual_mode:
+                if not candidates:
+                    tip = (
+                        "No filename matched this ID. Lower the word count to loosen "
+                        "matching — otherwise it won't be imported."
+                    )
+                elif is_ambiguous:
+                    tip = (
+                        f"This ID matches {len(candidates)} filenames, so there's no "
+                        "single confident match. Raise the word count to narrow it "
+                        "down, or use “Resolve manually”."
+                        if len(candidates) >= 2
+                        else "The matching file also matches another ID, so this "
+                        "pairing isn't confident. Raise the word count to separate "
+                        "them, or use “Resolve manually”."
+                    )
+            grid.addWidget(_rich(id_html, color=t.text, tip=tip), row, 1, top)
+
             if not candidates:
-                lines = [
-                    f'{indent}<span style="color:{t.text};">{id_html}</span>'
-                    f"&nbsp;&nbsp;{qmark}&nbsp;&nbsp;"
-                    f'<span style="color:{t.muted};">(no matching file)</span>'
-                ]
-            else:
-                lines = []
-                for k, m in enumerate(candidates):
-                    glyph = arrow if m.path in conf else qmark
-                    fname_html = _highlight(m.path.name, m.name_spans, t.accent)
-                    head = (
-                        f'{indent}<span style="color:{t.text};">{id_html}</span>'
-                        if k == 0
-                        else f"{indent}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+                grid.addWidget(_rich(qmark), row, 2, top)
+                grid.addWidget(_rich("(no matching file)", color=t.muted), row, 3, top)
+                return row + 1
+
+            for k, m in enumerate(candidates):
+                r = row + k
+                if manual:
+                    cb = QCheckBox()
+                    cb.setChecked(_is_picked(id_val, m.path))
+                    cb.toggled.connect(
+                        lambda checked, i=id_val, p=m.path: self._set_manual_pick(i, p, checked)
                     )
-                    lines.append(
-                        f"{head}&nbsp;&nbsp;{glyph}&nbsp;&nbsp;"
-                        f'<span style="color:{t.muted};">{fname_html}</span>'
-                    )
-            lbl = QLabel("<br>".join(lines))
-            lbl.setTextFormat(Qt.TextFormat.RichText)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-            lbl.setWordWrap(False)
-            if not conf:
-                n = len(candidates)
-                if n == 0:
-                    lbl.setToolTip(
-                        "No filename matched this ID. Lower the word count above to "
-                        "loosen matching — otherwise it just won't be imported."
-                    )
-                elif n >= 2:
-                    lbl.setToolTip(
-                        f"This ID matches {n} filenames, so there's no single confident "
-                        "match. Raise the word count to narrow it down, or resolve it "
-                        "manually below."
-                    )
+                    grid.addWidget(cb, r, 2, top)
                 else:
-                    lbl.setToolTip(
-                        "The matching file also matches another ID, so this pairing "
-                        "isn't confident. Raise the word count to separate them, or "
-                        "resolve it manually below."
-                    )
-            return lbl
+                    glyph = arrow if m.path in conf else qmark
+                    grid.addWidget(_rich(glyph), r, 2, top)
+                fname_html = _highlight(m.path.name, m.name_spans, t.accent)
+                grid.addWidget(_rich(fname_html, color=t.muted), r, 3, top)
+            return row + len(candidates)
+
+        def _span_link(row: int, href: str, text: str) -> int:
+            link = _rich(
+                f'<a href="{href}" style="color:{t.sep}; text-decoration:none;">{text}</a>'
+            )
+            link.setOpenExternalLinks(False)
+            link.linkActivated.connect(self._on_preview_link)
+            grid.addWidget(link, row, 1, 1, 3)
+            return row + 1
 
         ids_by_group: dict[str, list[str]] = {}
         for id_val, gname in result.id_group.items():
             ids_by_group.setdefault(gname, []).append(id_val)
 
+        grid_row = 0
         for gname in sorted(ids_by_group):
             ids = sorted(ids_by_group[gname], key=_natural_key)
             n_matched = sum(1 for i in ids if confirmed.get(i))
             has_problem = n_matched < len(ids)
 
-            header = QLabel(
+            header = _rich(
                 f'<b style="color:{t.text};">{gname}</b>'
                 f'<span style="color:{t.muted};">  ({len(ids)} IDs · {n_matched} matched)</span>'
             )
-            header.setTextFormat(Qt.TextFormat.RichText)
             header.setStyleSheet("margin-top: 4px;")
-            layout.addWidget(header)
+            grid.addWidget(header, grid_row, 0, 1, 4)
             if gname == scroll_to_group:
                 scroll_target = header
+            grid_row += 1
 
             # A tidy (fully matched) group collapses to its first 5; a group with
             # any unresolved ID shows every row, so nothing needing attention hides.
             is_expanded = gname in self._expanded_groups
             visible_ids = ids if (has_problem or is_expanded) else ids[:5]
             for i in visible_ids:
-                layout.addWidget(
-                    _id_block(i, result.id_candidates.get(i, []), confirmed.get(i, set()))
-                )
+                grid_row = _add_id_rows(grid_row, i)
 
             hidden = len(ids) - len(visible_ids)
             if hidden > 0:
-                more_lbl = QLabel(
-                    f'<a href="expand:{gname}" style="color:{t.sep}; text-decoration:none;">'
-                    f"{indent}... and {hidden} more</a>"
-                )
-                more_lbl.setTextFormat(Qt.TextFormat.RichText)
-                more_lbl.setOpenExternalLinks(False)
-                more_lbl.linkActivated.connect(self._on_preview_link)
-                layout.addWidget(more_lbl)
+                grid_row = _span_link(grid_row, f"expand:{gname}", f"... and {hidden} more")
             elif is_expanded and not has_problem and len(ids) > 5:
-                less_lbl = QLabel(
-                    f'<a href="collapse:{gname}" style="color:{t.sep}; text-decoration:none;">'
-                    f"{indent}show less</a>"
-                )
-                less_lbl.setTextFormat(Qt.TextFormat.RichText)
-                less_lbl.setOpenExternalLinks(False)
-                less_lbl.linkActivated.connect(self._on_preview_link)
-                layout.addWidget(less_lbl)
+                grid_row = _span_link(grid_row, f"collapse:{gname}", "show less")
+
+        layout.addWidget(grid_widget)
 
         # Orphan files (matched no ID at all) can't appear in an ID list — surface
         # them quietly so nothing vanishes without a trace.
@@ -1866,127 +1892,50 @@ class CsvImportWidget(QWidget):
 
         return w
 
-    def _open_manual_resolve(self) -> None:
-        """Opt-in escape hatch: a modal listing every conflict with the existing
-        multiselect / ignore-all widgets. Whatever the user picks here overrides
-        the automatic matching; cross-group duplicates are warned at import time."""
-        if not self._conflicts:
-            return
-        t = _get_theme()
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Resolve conflicts manually")
-        dlg.resize(560, 520)
-        v = QVBoxLayout(dlg)
-        v.setContentsMargins(16, 16, 16, 14)
-        v.setSpacing(10)
+    def _toggle_manual_mode(self, checked: bool) -> None:
+        """Flip inline manual-resolve mode: ? glyphs become checkboxes (and each
+        ambiguous ID an ✕). Clicking the button again — or changing any matching
+        criterion — leaves the mode."""
+        self._manual_mode = checked
+        self._rebuild_preview(self._last_result)
+        self._update_resolve_button()
 
-        intro = QLabel(
-            "These IDs have no single confident match. Tick the file(s) each should "
-            "use, or exclude it. Manual choices override the automatic matching — "
-            "the same file may be assigned to more than one group (you'll be warned "
-            "at import)."
-        )
-        intro.setWordWrap(True)
-        intro.setStyleSheet(f"color: {t.muted}; font-size: 12px;")
-        v.addWidget(intro)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setObjectName("previewArea")
-        inner = QWidget()
-        iv = QVBoxLayout(inner)
-        iv.setContentsMargins(8, 8, 8, 8)
-        iv.setSpacing(6)
+    def _manual_entry(self, id_val: str, path: Path) -> tuple[_Conflict, int] | None:
+        """The (conflict, option index) for a given (id, file) candidate, or None.
+        Each candidate belongs to at most one conflict, so this is unambiguous."""
         for conflict in self._conflicts:
-            iv.addWidget(self._build_conflict_widget(conflict, t))
-        iv.addStretch()
-        scroll.setWidget(inner)
-        v.addWidget(scroll, stretch=1)
+            for idx, opt in enumerate(conflict.options):
+                if opt.id_val == id_val and opt.path == path:
+                    return conflict, idx
+        return None
 
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        done_btn = QPushButton("Done")
-        done_btn.setObjectName("secondaryButton")
-        done_btn.clicked.connect(dlg.accept)
-        btn_row.addWidget(done_btn)
-        v.addLayout(btn_row)
-
-        base = self.window().styleSheet() if self.window() is not None else ""
-        dlg.setStyleSheet(base + _csv_widget_stylesheet(t))
-        dlg.exec()
-        # Selections were mutated live; re-render to reflect them.
+    def _set_manual_pick(self, id_val: str, path: Path, checked: bool) -> None:
+        entry = self._manual_entry(id_val, path)
+        if entry is None:
+            return
+        conflict, idx = entry
+        sel = set(conflict.selection) if isinstance(conflict.selection, frozenset) else set()
+        sel.add(idx) if checked else sel.discard(idx)
+        conflict.selection = frozenset(sel)
         self._rebuild_preview(self._last_result)
         self._update_resolve_button()
         self._emit_validity()
 
-    def _build_conflict_widget(self, conflict: _Conflict, t) -> QWidget:
-        w = QWidget()
-        vbox = QVBoxLayout(w)
-        vbox.setContentsMargins(0, 4, 0, 8)
-        vbox.setSpacing(3)
-
-        lbl = QLabel(conflict.label + ":")
-        lbl.setStyleSheet(f"color: {t.warn}; font-size: 11px; font-weight: bold;")
-        vbox.addWidget(lbl)
-
-        current = conflict.selection
-        is_excluded = current == frozenset()
-
-        file_checks: list[QCheckBox] = []
-        for i, opt in enumerate(conflict.options):
-            cb_row = QHBoxLayout()
-            cb_row.setContentsMargins(12, 0, 0, 0)
-            cb_row.setSpacing(6)
-            cb = QCheckBox()
-            cb.setChecked(isinstance(current, frozenset) and i in current)
-            cb.setEnabled(not is_excluded)
-            path_lbl = _ElideLeftLabel(str(opt.path))
-            path_lbl.setStyleSheet(f"color: {t.panel_text};")
-            cb_row.addWidget(cb)
-            cb_row.addWidget(path_lbl, stretch=1)
-            file_checks.append(cb)
-            vbox.addLayout(cb_row)
-
-        none_row = QHBoxLayout()
-        none_row.setContentsMargins(12, 2, 0, 0)
-        none_row.setSpacing(0)
-        none_cb = QCheckBox("None — exclude all")
-        none_cb.setChecked(is_excluded)
-        none_row.addWidget(none_cb)
-        none_row.addStretch()
-        vbox.addLayout(none_row)
-
-        def recompute() -> None:
-            sel = frozenset(i for i, c in enumerate(file_checks) if c.isChecked())
-            if none_cb.isChecked():
-                conflict.selection = frozenset()
-            elif sel:
-                conflict.selection = sel
-            else:
-                conflict.selection = None
-            self._emit_validity()
-
-        def on_file_changed(idx: int) -> None:
-            if file_checks[idx].isChecked():
-                none_cb.blockSignals(True)
-                none_cb.setChecked(False)
-                none_cb.blockSignals(False)
-            recompute()
-
-        def on_none_changed(checked: bool) -> None:
-            for fc in file_checks:
-                if checked:
-                    fc.blockSignals(True)
-                    fc.setChecked(False)
-                    fc.blockSignals(False)
-                fc.setEnabled(not checked)
-            recompute()
-
-        for idx, fc in enumerate(file_checks):
-            fc.stateChanged.connect(lambda _state, i=idx: on_file_changed(i))
-        none_cb.toggled.connect(on_none_changed)
-
-        return w
+    def _ignore_id(self, id_val: str) -> None:
+        """Drop every candidate file of this ID from its conflicts — the ✕ action."""
+        if self._last_result is None:
+            return
+        for m in self._last_result.id_candidates.get(id_val, []):
+            entry = self._manual_entry(id_val, m.path)
+            if entry is None:
+                continue
+            conflict, idx = entry
+            sel = set(conflict.selection) if isinstance(conflict.selection, frozenset) else set()
+            sel.discard(idx)
+            conflict.selection = frozenset(sel)
+        self._rebuild_preview(self._last_result)
+        self._update_resolve_button()
+        self._emit_validity()
 
 
 def confirm_duplicate_files(parent: QWidget, dup_names: list[str]) -> bool:
