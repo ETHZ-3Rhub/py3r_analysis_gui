@@ -43,15 +43,12 @@ def _walk_tree(
 ) -> list[tuple[tuple[str, ...], list[Path]]]:
     """Return [(parts, [Path, ...]), ...] for all matching folders in [min_depth, max_depth].
 
-    parts = path segments from root to the folder (1-based depth).
+    parts = path segments from root to the folder; depth = len(parts). Depth 0 is
+    the root folder itself (parts == ()), so files sitting directly in the root are
+    included when min_depth is 0.
     """
     entries: list[tuple[tuple[str, ...], list[Path]]] = []
-    try:
-        children = sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith("."))
-    except (PermissionError, OSError):
-        return []
-    for child in children:
-        _recurse(root, child, 1, min_depth, max_depth, file_exts, entries)
+    _recurse(root, root, 0, min_depth, max_depth, file_exts, entries)
     return entries
 
 
@@ -226,8 +223,9 @@ class DirectoryTreeWidget(QWidget):
         self._min_spin = QSpinBox()
         self._min_spin.setRange(1, 99)
         self._min_spin.setToolTip(
-            "Shallowest folder depth to collect from. Bounded by where files were "
-            "actually found; pushes Max up if it would cross it."
+            "Shallowest folder depth to collect from (0 = files directly in the root "
+            "folder). Bounded by where files were actually found; pushes Max up if it "
+            "would cross it."
         )
         self._min_spin.valueChanged.connect(self._on_min_changed)
         depth_row.addWidget(self._min_spin)
@@ -351,7 +349,8 @@ class DirectoryTreeWidget(QWidget):
         """Walk the whole tree once, then bound the depth spinboxes to the range of
         depths where files were actually found and select that full range."""
         if self._root is not None:
-            self._all_entries = _walk_tree(self._root, 1, 99, self._file_exts)
+            # min_depth 0 so files directly in the root are collected too.
+            self._all_entries = _walk_tree(self._root, 0, 99, self._file_exts)
         else:
             self._all_entries = []
 
@@ -390,13 +389,21 @@ class DirectoryTreeWidget(QWidget):
         self._levels_list.blockSignals(True)
         self._levels_list.clear()
 
-        if not self._entries:
+        # Depth 0 (root files) contributes no folder names, so there may be entries
+        # but no levels to choose between.
+        max_depth = max((len(parts) for parts, _ in self._entries), default=0)
+        if max_depth == 0:
+            if self._entries and self._root is not None:
+                self._levels_placeholder.setText(
+                    "All files are in the root folder — they'll form one group named "
+                    f"“{self._root.name}”."
+                )
+            else:
+                self._levels_placeholder.setText("No matching files at the chosen depth.")
             self._levels_placeholder.setVisible(True)
             self._levels_list.setVisible(False)
             self._levels_list.blockSignals(False)
             return
-
-        max_depth = max(len(parts) for parts, _ in self._entries)
 
         for level in range(1, max_depth + 1):
             unique_vals = sorted(
@@ -428,7 +435,8 @@ class DirectoryTreeWidget(QWidget):
 
     def _recompute(self) -> None:
         """Recompute groups from cached entries + current checked levels, then refresh preview."""
-        self._result = _compute_groups(self._entries, self._checked_levels)
+        default_name = self._root.name if self._root is not None else "Group"
+        self._result = _compute_groups(self._entries, self._checked_levels, default_name)
         self._expanded_groups &= set(self._result)
         self._update_step_visibility()
         self._rebuild_preview()

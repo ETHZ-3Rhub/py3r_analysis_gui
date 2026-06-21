@@ -54,7 +54,7 @@ class AdvancedLoaderDialog(QDialog):
         outer.setSpacing(12)
 
         # Step 1 header
-        self._hdr1 = QLabel("1.  Choose loader")
+        self._hdr1 = QLabel("1.  How do you want to define groups?")
         self._hdr1.setStyleSheet(
             f"color: {t.accent}; font-size: 11px; font-weight: bold; padding-top: 4px;"
         )

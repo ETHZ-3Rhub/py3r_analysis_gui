@@ -590,7 +590,11 @@ def _csv_widget_stylesheet(t) -> str:
             border: 1px solid {t.muted};
             border-radius: 5px;
         }}
-        QScrollArea#previewArea > QWidget > QWidget {{
+        /* Descendant (not just child) so the viewport AND any nested wrapper
+           widgets (e.g. the results grid) get the dark backing rather than falling
+           through to a gold `QWidget` rule from the main window. QLabels are a
+           different class, so they stay transparent over this. */
+        QScrollArea#previewArea QWidget {{
             background-color: {t.display};
         }}
         QScrollArea#sepChipsArea {{
@@ -866,6 +870,10 @@ class CsvImportWidget(QWidget):
         self._group_cols_list = _CheckableListWidget()
         self._group_cols_list.setObjectName("csvGroupColsList")
         self._group_cols_list.setFixedHeight(92)
+        # No selection/focus highlight — rows are toggled by their checkbox, and
+        # selecting the text gave a jarring (sometimes black) highlight.
+        self._group_cols_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._group_cols_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._group_cols_list.itemChanged.connect(self._refresh)
         self._group_cols_list.installEventFilter(self._tooltip_filter)
         s4.addWidget(self._group_cols_list)
@@ -1178,9 +1186,11 @@ class CsvImportWidget(QWidget):
     # ── State management ──────────────────────────────────────────────────────
 
     def _update_controls_state(self) -> None:
-        """Enable/disable controls depending on whether a CSV is loaded."""
+        """Enable/disable controls depending on whether a CSV is loaded. No
+        "load a CSV first" tooltips — these controls are hidden until a CSV is
+        loaded anyway, and setting them left a stale tooltip clobbering the real
+        one once it was."""
         csv_loaded = bool(self._rows)
-        no_csv_tip = "Load a CSV first."
 
         for widget in (
             self._match_combo,
@@ -1196,8 +1206,6 @@ class CsvImportWidget(QWidget):
             self._zeros_check,
         ):
             widget.setEnabled(csv_loaded)
-            if not csv_loaded:
-                widget.setToolTip(no_csv_tip)
 
         # File buttons live in section 3 (only visible once a clean ID column is
         # chosen, which implies csv_loaded), but keep them enabled whenever a CSV
@@ -1210,9 +1218,6 @@ class CsvImportWidget(QWidget):
         strings_active = csv_loaded and self._strings_radio.isChecked()
         self._sep_edit.setEnabled(strings_active)
         self._sep_add_btn.setEnabled(strings_active)
-        if not csv_loaded:
-            self._sep_edit.setToolTip(no_csv_tip)
-            self._sep_add_btn.setToolTip(no_csv_tip)
 
     # ── Event handlers ────────────────────────────────────────────────────────
 
@@ -1654,7 +1659,9 @@ class CsvImportWidget(QWidget):
             return link
 
         def _add_id_rows(row: int, id_val: str) -> int:
-            candidates = result.id_candidates.get(id_val, [])
+            candidates = sorted(
+                result.id_candidates.get(id_val, []), key=lambda m: _natural_key(m.path.name)
+            )
             id_spans = [s for m in candidates for s in m.id_spans]
             id_html = _highlight(id_val, id_spans, t.accent)
 
