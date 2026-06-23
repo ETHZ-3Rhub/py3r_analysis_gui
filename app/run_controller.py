@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.comparisons_panel import ComparisonsPanel
-from app.confirm_dialog import ask, warning_face
+from app.confirm_dialog import ask
 from app.group_manifest_panel import GroupManifestPanel
 from app.runner import PipelineRunner
 from app.theme import get_theme as _get_theme
@@ -212,7 +212,6 @@ class RunController(QObject):
                 self._dialog_parent,
                 "Warnings — proceed?",
                 f"The following issues were detected:\n\n{bullet_list}\n\nProceed anyway?",
-                warning_face(),
                 yes_label="Proceed",
                 no_label="Go back",
             ):

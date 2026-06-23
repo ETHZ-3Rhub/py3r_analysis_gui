@@ -20,12 +20,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.csv_import_dialog import (
-    CsvImportWidget,
-    _csv_widget_stylesheet,
-    confirm_partial_import,
-)
+from app.csv_import_dialog import CsvImportWidget, confirm_partial_import
 from app.directory_tree_widget import DirectoryTreeWidget
+from app.styles import dialog_stylesheet
 from app.theme import get_theme as _get_theme
 
 
@@ -142,26 +139,4 @@ class AdvancedLoaderDialog(QDialog):
     # ── Stylesheet ────────────────────────────────────────────────────────────
 
     def _apply_stylesheet(self) -> None:
-        t = _get_theme()
-        base = ""
-        if self.parent() is not None:
-            win = self.parent().window()
-            if win is not None:
-                base = win.styleSheet()
-        self.setStyleSheet(
-            base
-            + _csv_widget_stylesheet(t)
-            + f"""
-            QPushButton#importBtn {{
-                background-color: {t.accent};
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 6px 20px;
-                min-width: 80px;
-                font-weight: bold;
-            }}
-            QPushButton#importBtn:hover {{ background-color: {t.accent_hover}; }}
-            QPushButton#importBtn:disabled {{ background-color: {t.muted}; color: {t.bg}; }}
-        """
-        )
+        self.setStyleSheet(dialog_stylesheet(_get_theme()))

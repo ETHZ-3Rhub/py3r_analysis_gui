@@ -1,11 +1,11 @@
-"""Themed yes/no confirmation dialogs with custom imagery."""
+"""Themed yes/no confirmation dialogs, with optional arena reference imagery."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -19,32 +19,6 @@ from app.theme import get_theme as _get_theme
 
 _IMG_DIR = Path(__file__).parent / "resources"
 _IMG_SIZE = 180
-
-
-def _load(filename: str | None) -> QPixmap:
-    path = _IMG_DIR / filename if filename else None
-    if path is not None and path.exists():
-        px = QPixmap(str(path))
-        return px.scaled(
-            _IMG_SIZE,
-            _IMG_SIZE,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-    # fallback: solid black square
-    px = QPixmap(_IMG_SIZE, _IMG_SIZE)
-    px.fill(QColor(0, 0, 0))
-    return px
-
-
-def grumpy_teacher() -> QPixmap:
-    """'Are you sure?' — destructive / irreversible action."""
-    return _load("disapproving.png")
-
-
-def warning_face() -> QPixmap:
-    """'Proceed anyway?' — soft warnings before a run."""
-    return _load("disapproving.png")
 
 
 def pipeline_reference_image(pipeline_mod) -> QPixmap | None:
