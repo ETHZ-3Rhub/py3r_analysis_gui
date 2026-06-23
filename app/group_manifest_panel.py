@@ -23,7 +23,6 @@ group — kept out of the main view so the always-visible list stays simple.
 from __future__ import annotations
 
 import csv
-import re
 from pathlib import Path
 
 from PySide6.QtCore import QModelIndex, Qt, Signal
@@ -51,7 +50,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.confirm_dialog import ask, grumpy_teacher, warning_face
+from app.confirm_dialog import ask
+from app.styles import base_stylesheet
+from app.text_utils import natural_key
 from app.theme import get_theme as _get_theme
 
 # --- REVIEWED 2026-06-08: kept deliberately, not oversights -----------------
@@ -133,7 +134,7 @@ class _PathSortItem(QTableWidgetItem):
 
     def __lt__(self, other: object) -> bool:  # type: ignore[override]
         if isinstance(other, _PathSortItem):
-            return _natural_key(self._sort_key) < _natural_key(other._sort_key)
+            return natural_key(self._sort_key) < natural_key(other._sort_key)
         return super().__lt__(other)
 
 
@@ -145,7 +146,7 @@ class _PlainTextSortItem(QTableWidgetItem):
 
     def __lt__(self, other: object) -> bool:  # type: ignore[override]
         if isinstance(other, QTableWidgetItem):
-            return _natural_key(self.text()) < _natural_key(other.text())
+            return natural_key(self.text()) < natural_key(other.text())
         return super().__lt__(other)
 
 
@@ -190,12 +191,6 @@ def _looks_like_yolo3r_csv(path: Path) -> bool:
     return header is not None and _YOLO3R_HEADER_MARKERS.issubset(header)
 
 
-def _natural_key(s: str) -> list[int | str]:
-    """Split a string into alternating text/integer chunks for natural sort.
-    "oft2.csv" → ["oft", 2, ".csv"] so numeric runs compare by value."""
-    return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", s)]
-
-
 def _ext_label(file_exts: set[str]) -> str:
     return "CSV" if file_exts == CSV_EXTS else "video"
 
@@ -219,11 +214,13 @@ class _ManifestDialog(QDialog):
         self._panel = panel
         self._group_name = group_name
         self.setWindowTitle(group_name)
-        # Top-level windows (QDialog included) do NOT inherit a parent
-        # widget's `setStyleSheet()` — only the QApplication-wide one — so
-        # without this, the table/buttons/tooltips inside fall back to plain
-        # system (light) styling while everything else in the app is dark.
-        self.setStyleSheet(panel.window().styleSheet())
+        # Top-level windows (QDialog included) do NOT inherit a parent widget's
+        # `setStyleSheet()` — only the QApplication-wide one — so without this,
+        # the table/buttons/tooltips inside fall back to plain system (light)
+        # styling while everything else in the app is dark. Built from the
+        # shared helper rather than copied off the parent window, so the dialog
+        # doesn't depend on having a styled `MainWindow` ancestor.
+        self.setStyleSheet(base_stylesheet(_get_theme()))
         self.resize(560, 380)
         self._build_ui()
         self._refresh_table()
@@ -657,7 +654,6 @@ class GroupManifestPanel(QWidget):
             self,
             "Remove group",
             f'"{name}" contains {len(self._manifests[name])} file(s). Remove it anyway?',
-            warning_face(),
             yes_label="Remove",
             no_label="Cancel",
         ):
@@ -764,7 +760,6 @@ class GroupManifestPanel(QWidget):
                 f"{count} {noun} you're adding to \"{group_name}\" "
                 f"{'is' if count == 1 else 'are'} already in another group.\n\n"
                 f"Add {'it' if count == 1 else 'them'} anyway?",
-                grumpy_teacher(),
                 yes_label="Add anyway",
                 no_label="Skip",
             )

@@ -28,12 +28,13 @@ from PySide6.QtWidgets import (
 
 from app import arenas as arena_pkg
 from app.comparisons_panel import ComparisonsPanel
-from app.confirm_dialog import ask, grumpy_teacher, pipeline_reference_image
+from app.confirm_dialog import ask, pipeline_reference_image
 from app.gating import TooltipOnDisabled, build_gated_section, set_gated_enabled
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
 from app.options_dialog import AdvancedOptionsDialog
 from app.run_controller import RunController
 from app.settings_dialog import SettingsDialog, get_version
+from app.styles import base_stylesheet
 from app.theme import get_theme as _get_theme
 from app.tracking_env_panel import TrackingEnvPanel
 
@@ -271,7 +272,6 @@ class MainWindow(QWidget):
                     "Switch source?",
                     "Switching source clears every group's file list, since the files "
                     "no longer match the new type. Continue?",
-                    grumpy_teacher(),
                     yes_label="Clear and switch",
                     no_label="Cancel",
                 ):
@@ -383,179 +383,4 @@ class MainWindow(QWidget):
             self._comp_panel.refresh_theme()
         if hasattr(self, "_env_panel"):
             self._env_panel.refresh_theme()
-        self.setStyleSheet(f"""
-            QWidget {{
-                background-color: {_T.bg};
-                color: {_T.panel_text};
-                font-family: "Helvetica Neue", Arial, sans-serif;
-                font-size: 13px;
-            }}
-            QFrame#panel {{
-                background-color: {_T.panel};
-                border-radius: 8px;
-            }}
-            QWidget#gatedSection, QWidget#groupManifestPanel {{
-                background: transparent;
-            }}
-            QLabel {{
-                background: transparent;
-            }}
-            QLabel#sectionTitle {{
-                color: {_T.title};
-                font-weight: bold;
-                font-size: 12px;
-                letter-spacing: 1px;
-                text-transform: uppercase;
-            }}
-            QLabel#sectionTitle:disabled {{
-                color: {_T.muted};
-            }}
-            QPushButton#primaryButton {{
-                background-color: {_T.accent};
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 0;
-                font-size: 14px;
-                font-weight: bold;
-            }}
-            QPushButton#primaryButton:hover {{ background-color: {_T.accent_hover}; }}
-            QPushButton#primaryButton:disabled {{ background-color: {_T.muted}; }}
-            QPushButton#secondaryButton {{
-                background-color: transparent;
-                color: {_T.accent};
-                border: 1px solid {_T.accent};
-                border-radius: 5px;
-                padding: 6px 10px;
-            }}
-            QPushButton#secondaryButton:hover {{ background-color: {_T.accent}; color: white; }}
-            QPushButton#secondaryButton:disabled {{
-                color: {_T.muted};
-                border-color: {_T.muted};
-                background-color: transparent;
-            }}
-            QPushButton#removeButton {{
-                background: transparent;
-                color: {_T.muted};
-                border: none;
-                font-size: 12px;
-            }}
-            QPushButton#removeButton:hover {{ color: {_T.error}; }}
-            QRadioButton::indicator {{
-                width: 14px;
-                height: 14px;
-                border-radius: 8px;
-                border: 2px solid {_T.muted};
-                background-color: transparent;
-            }}
-            QRadioButton::indicator:checked {{
-                border: 2px solid {_T.accent};
-                background-color: {_T.accent};
-            }}
-            QRadioButton::indicator:disabled {{
-                border: 2px solid {_T.sep};
-            }}
-            QComboBox {{
-                background-color: {_T.display};
-                color: {_T.text};
-                border: 1px solid {_T.muted};
-                border-radius: 5px;
-                padding: 6px 10px;
-            }}
-            QComboBox#compCombo {{
-                padding: 3px 6px;
-                font-size: 12px;
-            }}
-            QComboBox::drop-down {{ border: none; width: 24px; }}
-            QComboBox QAbstractItemView {{
-                background-color: {_T.display};
-                color: {_T.text};
-                selection-background-color: {_T.selection_bg};
-            }}
-            QLineEdit {{
-                background-color: {_T.display};
-                color: {_T.text};
-                border: 1px solid {_T.muted};
-                border-radius: 5px;
-                padding: 6px 10px;
-            }}
-            QListWidget#groupList, QListWidget#manifestGroupList {{
-                background-color: {_T.display};
-                color: {_T.text};
-                border: 1px solid {_T.muted};
-                border-radius: 5px;
-            }}
-            QListWidget#groupList::item:selected,
-            QListWidget#manifestGroupList::item:selected {{ background: transparent; }}
-            QListWidget#groupList QWidget,
-            QListWidget#manifestGroupList QWidget {{ background: transparent; }}
-            QListWidget#groupList QComboBox,
-            QListWidget#manifestGroupList QComboBox {{
-                background-color: {_T.display};
-                color: {_T.text};
-            }}
-            QListWidget#groupList QComboBox QAbstractItemView,
-            QListWidget#manifestGroupList QComboBox QAbstractItemView {{
-                background-color: {_T.display};
-                color: {_T.text};
-                selection-background-color: {_T.selection_bg};
-            }}
-            QTableWidget#manifestTable {{
-                background-color: {_T.display};
-                color: {_T.text};
-                border: 1px solid {_T.muted};
-                border-radius: 5px;
-                gridline-color: transparent;
-            }}
-            QTableWidget#manifestTable::item {{
-                padding: 4px 8px;
-                border: none;
-                color: {_T.text};
-            }}
-            QTableWidget#manifestTable::item:selected {{
-                background-color: {_T.selection_bg};
-                color: {_T.text};
-            }}
-            QHeaderView::section {{
-                background-color: transparent;
-                color: {_T.muted};
-                border: none;
-                border-bottom: 1px solid {_T.sep};
-                padding: 4px 8px;
-                font-size: 10px;
-                font-weight: bold;
-                text-transform: uppercase;
-                letter-spacing: 1px;
-            }}
-            QTextEdit#logBox {{
-                background-color: {_T.display};
-                border: 1px solid {_T.muted};
-                border-radius: 5px;
-                font-family: "Menlo", "Consolas", monospace;
-                font-size: 11px;
-                padding: 4px;
-            }}
-            QScrollBar:vertical {{
-                background: {_T.display};
-                width: 8px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {_T.muted};
-                border-radius: 4px;
-            }}
-            QPushButton#settingsButton {{
-                background: transparent;
-                color: {_T.muted};
-                border: none;
-                font-size: 11px;
-                padding: 2px 0;
-                text-align: right;
-            }}
-            QPushButton#settingsButton:hover {{ color: {_T.panel_text}; }}
-            QToolTip {{
-                background-color: {_T.panel};
-                color: {_T.panel_text};
-                border: 1px solid {_T.muted};
-                padding: 4px;
-            }}
-        """)
+        self.setStyleSheet(base_stylesheet(_T))
