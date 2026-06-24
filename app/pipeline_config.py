@@ -217,6 +217,17 @@ def _build(merged: dict, config_path: Path, source: str) -> dict:
             "options": script_raw.get("options", {}),
             "_entry": entry,
         }
+        # The loader only runs when there's an analysis script to read CSVs back
+        # in (tracking-only configs never use it). Validate here so a missing/bad
+        # field is a clean select-time ConfigError, not a raw KeyError mid-run.
+        fps = loader.get("fps")
+        if not isinstance(fps, int | float) or isinstance(fps, bool) or fps <= 0:
+            raise ConfigError("[loader] needs a positive numeric 'fps' (recording frame rate).")
+        fmt = loader.get("format", "yolo3r")
+        if fmt not in ("yolo3r", "dlc"):
+            raise ConfigError(
+                f"[loader] format = {fmt!r} is not supported (use 'yolo3r' or 'dlc')."
+            )
 
     # Trust is authorship, nothing else: a /user config we didn't write is
     # untrusted even if it only references bundled code (it could still extend a
