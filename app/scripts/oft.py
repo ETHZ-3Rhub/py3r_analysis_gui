@@ -136,6 +136,7 @@ def run(
     point_map: dict[str, str] | None = None,
     numbins: int | None = None,
     n_clusters: int = _N_CLUSTERS,
+    classifier_weights: str | None = None,
 ) -> None:
     """Full OFT pipeline across all groups.
 
@@ -160,6 +161,8 @@ def run(
         Per-animal session split into this many equal-frame bins. None → no binning.
     n_clusters:
         k for behavioural clustering.
+    classifier_weights:
+        Path to a pre-trained ONNX behaviour classifier. None → step is skipped.
     """
     import matplotlib
 
@@ -210,7 +213,13 @@ def run(
 
     # ── Clustering ────────────────────────────────────────────────────────────
     print(f"Clustering (k={n_clusters})...")
-    _cluster(fc, n_clusters)
+    embedding_dict = _bfa_embedding_dict(fc)
+    _cluster(fc, n_clusters, embedding_dict)
+
+    # ── Classifier ────────────────────────────────────────────────────────────
+    if classifier_weights:
+        print("Running behaviour classifier...")
+        _classify(fc, embedding_dict, classifier_weights)
 
     print("Rendering QC animations...")
     _shared.export_animations(
@@ -314,7 +323,7 @@ def _compute_features(fc: p3b.FeaturesCollection, pts: dict) -> None:
 
 
 # ── Clustering ────────────────────────────────────────────────────────────────
-def _cluster(fc: p3b.FeaturesCollection, n_clusters: int) -> None:
+def _bfa_embedding_dict(fc: p3b.FeaturesCollection) -> dict:
     import numpy as np
 
     bfa_prefixes = (
@@ -326,12 +335,24 @@ def _cluster(fc: p3b.FeaturesCollection, n_clusters: int) -> None:
     )
     bfa_cols = [c for c in fc[0].data.columns if any(c.startswith(p) for p in bfa_prefixes)]
     offset = list(np.arange(-15, 16, 1))
-    embedding_dict = {f: offset for f in bfa_cols}
-    print(f"  Fitting k={n_clusters} on {len(bfa_cols)} features...")
+    return {f: offset for f in bfa_cols}
+
+
+def _cluster(fc: p3b.FeaturesCollection, n_clusters: int, embedding_dict: dict) -> None:
+    print(f"  Fitting k={n_clusters} on {len(embedding_dict)} features...")
     cluster_labels, _ = fc.cluster_embedding_stream(
         embedding_dict=embedding_dict, n_clusters=n_clusters
     )
     cluster_labels.store(_CLUSTER_COL, overwrite=True)
+
+
+def _classify(fc: p3b.FeaturesCollection, embedding_dict: dict, weights_path: str) -> None:
+    import py3r.behaviour as p3b_
+
+    clf = p3b_.OnnxClassifier(weights_path, embedding_dict)
+    for f in fc:
+        result = clf.predict(f)
+        f.store(result.astype("Int64"), "behaviour_class")
 
 
 # ── Summary computation ───────────────────────────────────────────────────────

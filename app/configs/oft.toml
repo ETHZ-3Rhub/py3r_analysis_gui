@@ -21,6 +21,7 @@ group_tag = "group"
 entry = "oft:run"
 arena_size_m = 0.64
 likelihood_min = 0.9
+# classifier_weights = "/path/to/oft_behaviour.onnx"  # set to enable behaviour classification
 
 [script.options]
 numbins = { min = 2, max = 20 }
