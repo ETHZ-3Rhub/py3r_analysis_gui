@@ -1,7 +1,7 @@
 """Main application window.
 
 Two-panel layout:
-  Left  — source (input type + arena), groups, comparisons
+  Left  — source (input type + pipeline), groups, comparisons
   Right — output folder, run controls, log
 """
 
@@ -92,7 +92,7 @@ class MainWindow(QWidget):
 
         self._run_controller = RunController(
             dialog_parent=self,
-            arena_combo=self._arena_combo,
+            pipeline_combo=self._pipeline_combo,
             options_btn=self._options_btn,
             out_edit=self._out_edit,
             run_btn=self._run_btn,
@@ -192,34 +192,33 @@ class MainWindow(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        # ── Arena — a processing-pipeline choice (model + analysis), not
-        # something that depends on the source file type, so it lives here
-        # among the other run-configuration controls rather than gated on
-        # the left ──────────────────────────────────────────────────────────
-        arena_label = QLabel("Pipeline")
-        arena_label.setObjectName("sectionTitle")
-        layout.addWidget(arena_label)
+        # ── Pipeline — a processing choice (model + analysis), not something
+        # that depends on the source file type, so it lives here among the
+        # other run-configuration controls rather than gated on the left ─────
+        pipeline_label = QLabel("Pipeline")
+        pipeline_label.setObjectName("sectionTitle")
+        layout.addWidget(pipeline_label)
 
-        self._arena_combo = QComboBox()
+        self._pipeline_combo = QComboBox()
         self._populate_pipeline_combo()
-        self._arena_combo.currentIndexChanged.connect(self._on_arena_changed)
-        layout.addWidget(self._arena_combo)
+        self._pipeline_combo.currentIndexChanged.connect(self._on_pipeline_changed)
+        layout.addWidget(self._pipeline_combo)
 
         opts_row = QHBoxLayout()
         opts_row.addStretch()
         self._options_btn = QPushButton("Advanced options")
         self._options_btn.setObjectName("settingsButton")
         self._options_btn.setEnabled(False)
-        self._options_btn.setToolTip("No arena selected.")
+        self._options_btn.setToolTip("No pipeline selected.")
         self._options_btn.clicked.connect(self._open_options)
         opts_row.addWidget(self._options_btn)
         layout.addLayout(opts_row)
 
-        sep_arena = QFrame()
-        sep_arena.setFrameShape(QFrame.Shape.HLine)
-        sep_arena.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
-        self._separators.append(sep_arena)
-        layout.addWidget(sep_arena)
+        sep_pipeline = QFrame()
+        sep_pipeline.setFrameShape(QFrame.Shape.HLine)
+        sep_pipeline.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
+        self._separators.append(sep_pipeline)
+        layout.addWidget(sep_pipeline)
 
         out_label = QLabel("Output folder")
         out_label.setObjectName("sectionTitle")
@@ -345,7 +344,7 @@ class MainWindow(QWidget):
         then user-supplied ones (⚠ + warn colour, prompted before they run)."""
         from PySide6.QtGui import QColor
 
-        combo = self._arena_combo
+        combo = self._pipeline_combo
         combo.clear()
         combo.addItem("— select pipeline —", userData=None)
 
@@ -366,11 +365,11 @@ class MainWindow(QWidget):
                 combo.addItem(f"⚠  {e['label']}", userData=e)
                 combo.model().item(combo.count() - 1).setForeground(QColor(_get_theme().warn))
 
-    def _on_arena_changed(self) -> None:
+    def _on_pipeline_changed(self) -> None:
         self._current_options = {}
         self._resolved = None
 
-        entry = self._arena_combo.currentData()
+        entry = self._pipeline_combo.currentData()
         if entry is None:
             self._run_controller.refresh_run_button()
             return
@@ -379,7 +378,7 @@ class MainWindow(QWidget):
             resolved = pipeline_config.resolve(entry["config_path"])
         except pipeline_config.ConfigError as exc:
             error_with_copy(self, "Pipeline config error", str(exc))
-            self._arena_combo.setCurrentIndex(0)
+            self._pipeline_combo.setCurrentIndex(0)
             return
 
         if resolved["trust"] != "trusted" and not ask(
@@ -391,7 +390,7 @@ class MainWindow(QWidget):
             yes_label="Run",
             no_label="Cancel",
         ):
-            self._arena_combo.setCurrentIndex(0)
+            self._pipeline_combo.setCurrentIndex(0)
             return
 
         ref_img = pipeline_reference_image(resolved)
@@ -403,7 +402,7 @@ class MainWindow(QWidget):
             yes_label="Yes",
             no_label="No",
         ):
-            self._arena_combo.setCurrentIndex(0)
+            self._pipeline_combo.setCurrentIndex(0)
             return
 
         self._resolved = resolved

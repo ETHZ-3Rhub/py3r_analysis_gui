@@ -122,7 +122,7 @@ def test_extends_missing_base_rejected(user_root):
 
 # ── structural validation ────────────────────────────────────────────────────
 def test_no_models_rejected(user_root):
-    text = 'name = "x"\n[script]\nentry = "oft_pipeline:run"\n[loader]\nfps = 30\n'
+    text = 'name = "x"\n[script]\nentry = "oft:run"\n[loader]\nfps = 30\n'
     with pytest.raises(pc.ConfigError, match="no \\[models"):
         pc.resolve(write_cfg(user_root, text))
 
@@ -159,7 +159,7 @@ def _standalone(models=True, script=True, loader=""):
     if models:
         parts.append('[models.m]\nweights = "mouse/mouse_top_main"')
     if script:
-        parts.append('[script]\nentry = "oft_pipeline:run"')
+        parts.append('[script]\nentry = "oft:run"')
     if loader:
         parts.append(loader)
     return "\n".join(parts) + "\n"

@@ -1,4 +1,4 @@
-"""Advanced Options dialog — renders an arena's OPTIONS list as a form."""
+"""Advanced Options dialog — renders a pipeline's advanced options as a form."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def _range_label(lo: int, hi: int) -> QLabel:
 
 
 class AdvancedOptionsDialog(QDialog):
-    """Dialog that builds a form from an arena OPTIONS list.
+    """Dialog that builds a form from a pipeline's option specs.
 
     Each option dict: ``{"name": str, "type": type, "default": any, "label": str}``
 

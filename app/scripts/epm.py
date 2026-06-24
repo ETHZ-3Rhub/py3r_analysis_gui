@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from app.pipelines import _shared
+from app.scripts import _shared
 
 if TYPE_CHECKING:
     import py3r.behaviour as p3b

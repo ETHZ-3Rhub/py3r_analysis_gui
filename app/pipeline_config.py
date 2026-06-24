@@ -1,7 +1,9 @@
 """Pipeline configs — discover, resolve, and import.
 
-A pipeline *is* a TOML config. Built-ins are bundled in ``app/arenas/configs/``;
-users drop more into ``/user/configs/``. Both sources normalise into one
+A pipeline *is* a TOML config. Built-ins are bundled in ``app/configs/``; users
+drop more into ``/user/configs/``. A config's ``[script].entry`` points at the
+analysis code — bundled ``app/scripts/<name>.py`` or a ``/user`` path. Both config
+sources normalise into one
 ``resolved`` dict (see ``resolve``) that the runner and worker consume — so the
 built-ins exercise the exact path user configs use and it cannot bit-rot.
 
@@ -29,7 +31,7 @@ import tomllib
 from pathlib import Path
 from types import ModuleType
 
-_BUNDLED_CONFIGS = Path(__file__).parent / "arenas" / "configs"
+_BUNDLED_CONFIGS = Path(__file__).parent / "configs"
 
 # Top-level keys a delta may set even though they don't "override" a base value.
 _IDENTITY_KEYS = {"extends", "name", "min_app_version", "arena_image"}
@@ -241,7 +243,6 @@ def _build(merged: dict, config_path: Path, source: str) -> dict:
         "id": config_path.stem,
         "name": name,
         "arena_image": merged.get("arena_image"),
-        "min_app_version": merged.get("min_app_version"),
         "models": models,
         "loader": loader,
         "script": script,
@@ -268,7 +269,7 @@ def _resolve_weights(weights: str) -> tuple[Path, str]:
 
 
 def _resolve_entry(entry: str) -> dict:
-    """``module:fn`` → bundled ``app.pipelines.<module>``; a path ending ``.py``
+    """``module:fn`` → bundled ``app.scripts.<module>``; a path ending ``.py``
     or containing ``/`` → ``/user/<path>`` (untrusted)."""
     module, sep, func = entry.partition(":")
     if not sep or not func:
@@ -281,7 +282,7 @@ def _resolve_entry(entry: str) -> dict:
     return {
         "kind": "bundled",
         "source": "bundled",
-        "module": f"app.pipelines.{module}",
+        "module": f"app.scripts.{module}",
         "func": func,
     }
 

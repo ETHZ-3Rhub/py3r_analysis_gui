@@ -1,12 +1,15 @@
-"""Light-Dark Box — py3r_behaviour analysis pipeline.
+"""Open Field Test — py3r_behaviour analysis pipeline.
 
 Receives per-group YOLO3R tracking CSVs and runs:
     load → preprocess → QC plots → features → clustering → summary → export
 
-Dormant: no bundled ldb config ships yet (the LDB tracker model isn't ready),
-so this isn't reachable from the GUI. Kept on the current pipeline contract
-(POINTS + config-driven signature) so it doesn't rot. Point names resolve
-through ``pts`` (canonical -> actual column).
+Nothing in this file knows about the GUI or the tracker. Progress is reported
+via print() — the caller captures stdout if needed.
+
+Point names are resolved through ``pts`` (canonical -> actual column), built from
+``POINTS`` overlaid with the config's ``[script.point_map]``; defaults to
+identity. Heavy imports (py3r, numpy) are deferred into the functions so the
+module is cheap to import when the GUI only needs ``POINTS``.
 """
 
 from __future__ import annotations
@@ -14,12 +17,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from app.pipelines import _shared
+from app.scripts import _shared
 
 if TYPE_CHECKING:
     import py3r.behaviour as p3b
 
-# ── Canonical point names (identity dict; [script.point_map] overrides) ───────
+# ── Canonical point names this pipeline uses (identity dict; a config's
+# [script.point_map] overrides entries for a lab whose model renames a point) ──
 POINTS = {
     name: name
     for name in [
@@ -27,8 +31,6 @@ POINTS = {
         "tr",
         "br",
         "bl",
-        "ml",
-        "mr",
         "nose",
         "headcentre",
         "earr",
@@ -43,24 +45,13 @@ POINTS = {
     ]
 }
 
-_N_CLUSTERS = 25
+# ── Structural constants (canonical names; translated through pts at use) ─────
+_N_CLUSTERS = 10
 _CLUSTER_COL = f"kmeans_{_N_CLUSTERS}"
+
+_CORNERS = ["tl", "tr", "br", "bl"]
+_CORNER_LINES = [("tl", "tr"), ("tr", "br"), ("br", "bl"), ("bl", "tl")]
 _BODY_CENTRE = "bodycentre"
-
-# Box split into light (bottom) / dark (top) halves by the ml-mr divider
-_LIGHT_CORNERS = ["ml", "mr", "br", "bl"]
-_DARK_CORNERS = ["tl", "tr", "mr", "ml"]
-
-_BFA_BODY_POINTS = ["nose", "neck", _BODY_CENTRE, "tailbase"]
-
-_CORNERS = ["tl", "tr", "br", "bl", "ml", "mr"]
-_CORNER_LINES = [
-    ("tl", "tr"),
-    ("tr", "br"),
-    ("br", "bl"),
-    ("bl", "tl"),
-    ("ml", "mr"),
-]
 
 _ANIM_MOUSE_POINTS = [
     "nose",
@@ -90,15 +81,10 @@ _ANIM_BODY_LINES = [
     ("bodycentre", "tailbase"),
 ]
 
-_CLASSICAL_METRICS = [
-    "total_distance",  # bodycentre-derived; resolved through pts in run()
-    "time_true_in_light",
-    "time_true_in_dark",
-    "distance_moved_in_light",
-    "distance_moved_in_dark",
-    "count_onset_in_dark",
-    "latency_first_dark_entry",
-]
+# Zone scale factors
+_CENTRE_SCALE = 0.5
+_PERIPHERY_SCALE = 0.8
+_CORNER_SCALE = 0.2
 
 
 def _line(pts: dict, lines: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -120,18 +106,17 @@ def _anim_style(pts: dict) -> dict:
                     "nan_color": (80, 80, 80),
                 },
             },
+            pts["tl"]: {"color": (0, 255, 0), "radius": 5},
+            pts["tr"]: {"color": (0, 255, 0), "radius": 5},
+            pts["br"]: {"color": (0, 255, 0), "radius": 5},
+            pts["bl"]: {"color": (0, 255, 0), "radius": 5},
         },
         "boundaries": {
-            "light": {
-                "edge_color": (0, 255, 255),
+            "oft": {"edge_color": (0, 200, 0), "edge_width": 1},
+            "centre": {
+                "edge_color": (0, 150, 255),
                 "edge_width": 1,
-                "fill_color": (200, 200, 0),
-                "fill_alpha": 0.1,
-            },
-            "dark": {
-                "edge_color": (150, 0, 150),
-                "edge_width": 1,
-                "fill_color": (50, 0, 50),
+                "fill_color": (0, 100, 200),
                 "fill_alpha": 0.15,
             },
         },
@@ -146,14 +131,36 @@ def run(
     comparisons: list[tuple[str, str]] | None = None,
     video_paths: dict[str, Path] | None = None,
     loader: dict,
-    arena_diagonal_m: float,
+    arena_size_m: float,
     likelihood_min: float,
     point_map: dict[str, str] | None = None,
     numbins: int | None = None,
     n_clusters: int = _N_CLUSTERS,
 ) -> None:
-    """Full LDB pipeline across all groups. See ``oft_pipeline.run`` for the
-    shared parameter conventions."""
+    """Full OFT pipeline across all groups.
+
+    Parameters
+    ----------
+    manifest:
+        ``[(handle, group_name, csv_path), ...]`` — every recording's unique
+        handle, its group, and its tracking CSV.
+    output_dir:
+        Root output folder. Sub-folders are created automatically.
+    comparisons:
+        ``(group_a, group_b)`` pairs for stats / BFA. Empty/None → no pairwise stats.
+    video_paths:
+        ``{handle: Path}`` — source video per handle for QC animation overlay.
+    loader:
+        Loader config (``format``/``fps``/``group_tag``) — passed to the dumb loader.
+    arena_size_m, likelihood_min, point_map:
+        Deployment params. ``arena_size_m`` calibrates the tl→br distance;
+        ``likelihood_min`` is the confidence filter threshold; ``point_map``
+        remaps canonical point names onto this lab's columns.
+    numbins:
+        Per-animal session split into this many equal-frame bins. None → no binning.
+    n_clusters:
+        k for behavioural clustering.
+    """
     import matplotlib
 
     matplotlib.use("Agg")  # non-interactive backend — safe in subprocess
@@ -173,15 +180,18 @@ def run(
 
     group_names = list(dict.fromkeys(group for _, group, _ in manifest))
 
+    # ── Load ──────────────────────────────────────────────────────────────────
     print("Loading tracking data...")
     tc_all = _shared.load(manifest, video_paths, loader)
 
+    # ── Preprocess ────────────────────────────────────────────────────────────
     print("Preprocessing...")
     _shared.preprocess(tc_all, likelihood_min)
     tc_all.each.rescale_by_known_distance(
-        point1=pts["tl"], point2=pts["br"], distance_in_metres=arena_diagonal_m
+        point1=pts["tl"], point2=pts["br"], distance_in_metres=arena_size_m
     )
 
+    # ── QC trajectory plots ───────────────────────────────────────────────────
     print("Saving trajectory QC plots...")
     tc_grouped = tc_all.groupby(tags=[group_tag])
     _shared.plot_trajectory_qc(
@@ -193,10 +203,12 @@ def run(
         lines=_line(pts, _CORNER_LINES),
     )
 
+    # ── Features ──────────────────────────────────────────────────────────────
     print("Computing features...")
     fc = tc_all.to_features()
     _compute_features(fc, pts)
 
+    # ── Clustering ────────────────────────────────────────────────────────────
     print(f"Clustering (k={n_clusters})...")
     _cluster(fc, n_clusters)
 
@@ -205,12 +217,12 @@ def run(
         fc,
         group_names,
         output_dir,
-        points=[pts[p] for p in _ANIM_MOUSE_POINTS],
-        lines=_line(pts, _ANIM_BODY_LINES),
-        boundaries=["light", "dark"],
+        points=[pts[p] for p in _ANIM_MOUSE_POINTS + _CORNERS],
+        lines=_line(pts, _ANIM_BODY_LINES + _CORNER_LINES),
+        boundaries=["oft", "centre"],
         features={
             "Speed (m/s)": f"speed_of_{bc}_in_xy",
-            "In dark": "in_dark",
+            "In centre": f"within_boundary_static_{bc}_in_centre",
             "Cluster": _CLUSTER_COL,
         },
         style=_anim_style(pts),
@@ -220,6 +232,7 @@ def run(
     print("Saving features...")
     fc.save(str(features_dir), data_format="parquet", overwrite=True)
 
+    # ── Summary ───────────────────────────────────────────────────────────────
     print("Computing summaries...")
     sc = fc.to_summary()
     _compute_summaries(sc, pts)
@@ -227,22 +240,26 @@ def run(
     if numbins:
         print(f"Computing {numbins}-bin summaries...")
         _shared.export_binned_summaries(
-            sc, numbins, summaries_dir, "LDB_results", lambda s: _compute_summaries(s, pts)
+            sc, numbins, summaries_dir, "OFT_results", lambda s: _compute_summaries(s, pts)
         )
 
     sc_grouped = sc.groupby(tags=[group_tag])
 
+    # ── Export ────────────────────────────────────────────────────────────────
     print("Exporting tables...")
-    _shared.export_results_table(sc, summaries_dir, "LDB_results.csv")
+    _shared.export_results_table(sc, summaries_dir, "OFT_results.csv")
 
     print("Exporting figures...")
-    metrics = [f"total_distance_{bc}" if m == "total_distance" else m for m in _CLASSICAL_METRICS]
     _shared.export_boxplots(
         sc_grouped,
         group_names,
         comparisons,
         figures_dir,
-        metrics=metrics,
+        metrics=[
+            f"total_distance_{bc}",
+            "time_in_centre",
+            "distance_in_centre",
+        ],
         group_tag=group_tag,
     )
 
@@ -256,27 +273,44 @@ def run(
 def _compute_features(fc: p3b.FeaturesCollection, pts: dict) -> None:
     print("  Spatial boundaries...")
     bc = pts["bodycentre"]
+    corner_pts = [pts[c] for c in _CORNERS]
 
-    fc.each.define_static_boundary([pts[c] for c in _LIGHT_CORNERS], name="light")
-    fc.each.define_static_boundary([pts[c] for c in _DARK_CORNERS], name="dark")
+    fc.each.define_static_boundary(corner_pts, name="oft")
+    fc.each.define_static_boundary(
+        corner_pts, scale_dim1=_CENTRE_SCALE, scale_dim2=_CENTRE_SCALE, name="centre"
+    )
+    fc.each.define_static_boundary(
+        corner_pts, scale_dim1=_PERIPHERY_SCALE, scale_dim2=_PERIPHERY_SCALE, name="not_periphery"
+    )
+    for c in _CORNERS:
+        fc.each.define_static_boundary(
+            corner_pts,
+            scale_dim1=_CORNER_SCALE,
+            scale_dim2=_CORNER_SCALE,
+            name=f"{c}_corner",
+            anchor=pts[c],
+        )
 
-    in_light = fc.each.within_boundary(bc, "light")
-    in_dark = fc.each.within_boundary(bc, "dark")
-    in_light.store("in_light")
-    in_dark.store("in_dark")
+    in_centre = fc.each.within_boundary(bc, "centre")
+    in_centre.store()
 
-    fc.each.compose_state_from_booleans({"light": in_light, "dark": in_dark}).store("zone_state")
+    (fc.each.within_boundary(bc, "oft") & ~fc.each.within_boundary(bc, "not_periphery")).store(
+        "in_periphery"
+    )
+
+    in_corners = {c: fc.each.within_boundary(bc, f"{c}_corner") for c in _CORNERS}
+    (in_corners["tl"] | in_corners["tr"] | in_corners["bl"] | in_corners["br"]).store("in_corner")
+    fc.each.compose_state_from_booleans(in_corners).store("corner_state")
 
     dist_change = fc.each.distance_change(bc)
-    (in_light.astype("Int64") * dist_change).store("dist_change_bodycentre_in_light")
-    (in_dark.astype("Int64") * dist_change).store("dist_change_bodycentre_in_dark")
+    (in_centre.astype("Int64") * dist_change).store("dist_change_bodycentre_in_centre")
 
     print("  Kinematic features...")
 
     _shared.compute_body_kinematics(fc, pts)
 
-    for pt in _BFA_BODY_POINTS:
-        fc.each.distance_to_boundary(pts[pt], "dark", signed=True).store()
+    for pt in ["nose", "neck", "bodycentre", "tailbase"]:
+        fc.each.distance_to_boundary(pts[pt], "oft").store()
 
 
 # ── Clustering ────────────────────────────────────────────────────────────────
@@ -304,13 +338,9 @@ def _cluster(fc: p3b.FeaturesCollection, n_clusters: int) -> None:
 def _compute_summaries(sc: p3b.SummaryCollection, pts: dict) -> None:
     bc = pts["bodycentre"]
     sc.each.total_distance(bc).store()
-    sc.each.time_true("in_light").store("time_true_in_light")
-    sc.each.time_true("in_dark").store("time_true_in_dark")
-    sc.each.sum_column("dist_change_bodycentre_in_light").store("distance_moved_in_light")
-    sc.each.sum_column("dist_change_bodycentre_in_dark").store("distance_moved_in_dark")
-    sc.each.count_onset("in_dark").store("count_onset_in_dark")
-    sc.each.calculate_latency_nth_onset("in_dark").store("latency_first_dark_entry")
-    sc.each.by_state("zone_state", all_states=["light", "dark", "none"]).mean_column(
-        f"speed_of_{bc}_in_xy"
-    ).store("mean_speed_by_zone")
+    sc.each.time_true(f"within_boundary_static_{bc}_in_centre").store("time_in_centre")
+    sc.each.sum_column("dist_change_bodycentre_in_centre").store("distance_in_centre")
+    sc.each.by_state("corner_state", all_states=_CORNERS).mean_column(f"speed_of_{bc}_in_xy").store(
+        "mean_speed_by_corner"
+    )
     sc.each.time_in_state(_CLUSTER_COL).store("time_in_cluster")

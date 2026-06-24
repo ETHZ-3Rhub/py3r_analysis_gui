@@ -1,6 +1,6 @@
-"""Generic pipeline plumbing shared across arena pipelines.
+"""Generic plumbing shared across the bundled analysis scripts.
 
-Plain, opt-in helper functions — a pipeline imports and calls only what it
+Plain, opt-in helper functions — a script imports and calls only what it
 needs. Nothing here is part of the GUI/pipeline contract; the GUI never
 imports this module.
 """

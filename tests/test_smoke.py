@@ -33,4 +33,4 @@ def test_main_window_constructs(qapp):
             window = MainWindow()
     # Only bundled pipelines → all above the divider, plus the leading
     # "— select pipeline —" placeholder (no divider row).
-    assert window._arena_combo.count() == len(pipelines) + 1
+    assert window._pipeline_combo.count() == len(pipelines) + 1

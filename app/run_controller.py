@@ -34,7 +34,7 @@ class RunController(QObject):
         self,
         *,
         dialog_parent: QWidget,
-        arena_combo: QComboBox,
+        pipeline_combo: QComboBox,
         options_btn: QPushButton,
         out_edit: QLineEdit,
         run_btn: QPushButton,
@@ -52,7 +52,7 @@ class RunController(QObject):
     ) -> None:
         super().__init__(parent)
         self._dialog_parent = dialog_parent
-        self._arena_combo = arena_combo
+        self._pipeline_combo = pipeline_combo
         self._get_config = get_config
         self._options_btn = options_btn
         self._out_edit = out_edit
@@ -237,7 +237,7 @@ class RunController(QObject):
         self._log.clear()
         self._open_btn.setVisible(False)
         self._run_btn.setText("■  Cancel")
-        self._arena_combo.setEnabled(False)
+        self._pipeline_combo.setEnabled(False)
         self._out_edit.setEnabled(False)
         self._comp_panel.set_list_enabled(False)
         self._video_radio.setEnabled(False)
@@ -283,7 +283,7 @@ class RunController(QObject):
 
     def reset_controls(self) -> None:
         self._run_btn.setText("▶  Analyse")
-        self._arena_combo.setEnabled(True)
+        self._pipeline_combo.setEnabled(True)
         self._out_edit.setEnabled(True)
         self._comp_panel.set_list_enabled(True)
         self._on_video_radio_refresh()

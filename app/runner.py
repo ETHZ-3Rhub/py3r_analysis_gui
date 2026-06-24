@@ -71,7 +71,7 @@ class PipelineRunner(QThread):
         error: str | None = None
         try:
             self.log.emit(f"Starting {self._config['name']}...")
-            self._run_arena()
+            self._orchestrate()
             if not self._cancelled:
                 self.finished.emit(str(self._output_dir))
         except Exception:
@@ -84,7 +84,7 @@ class PipelineRunner(QThread):
 
     # ── Orchestration ──────────────────────────────────────────────────────────
 
-    def _run_arena(self) -> None:
+    def _orchestrate(self) -> None:
         csv_files = self._csv_files
         n_groups = len(self._groups)
         model_args = self._tracking_model_args()

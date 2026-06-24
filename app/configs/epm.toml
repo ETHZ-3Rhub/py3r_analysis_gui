@@ -1,9 +1,9 @@
-name = "Open Field Test"
-arena_image = "oft_arena.png"
+name = "Elevated Plus Maze"
+arena_image = "epm_arena.png"
 
 [models.environment]
 weights = "environment/environment_main"
-instances = [{ type = "oft", max = 1 }]
+instances = [{ type = "epm", max = 1 }]
 stride = [30, "ffill"]
 batch = 32
 
@@ -18,8 +18,8 @@ fps = 30
 group_tag = "group"
 
 [script]
-entry = "oft_pipeline:run"
-arena_size_m = 0.64
+entry = "epm:run"
+arena_diagonal_m = 0.665
 likelihood_min = 0.9
 
 [script.options]
