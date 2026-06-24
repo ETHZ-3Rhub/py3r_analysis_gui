@@ -1,8 +1,8 @@
-"""Arena orchestrator — runs in a background QThread.
+"""Pipeline orchestrator — runs in a background QThread.
 
-Owns the full run lifecycle: per-group tracking,
-error collection, pipeline execution, and warning file output.
-Arena modules are pure config; all logic lives here.
+Owns the full run lifecycle: per-group tracking, error collection, pipeline
+execution, and warning file output. Configs are pure data (see
+``pipeline_config``); all logic lives here.
 """
 
 from __future__ import annotations
@@ -18,12 +18,12 @@ import traceback
 from datetime import datetime
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from types import ModuleType
 
 from PySide6.QtCore import QThread, Signal
 
 from app import naming
 from app.proc_utils import kill_tree, popen_grouped
+from app.trackers import yolo_tracker
 
 _HEARTBEAT_INTERVAL = 1.0  # seconds of silence before emitting a heartbeat tick
 
@@ -38,7 +38,7 @@ class PipelineRunner(QThread):
 
     def __init__(
         self,
-        arena: ModuleType,
+        config: dict,
         groups: dict[str, list[Path]],
         output_dir: Path,
         comparisons: list[tuple[str, str]],
@@ -47,7 +47,7 @@ class PipelineRunner(QThread):
         options: dict | None = None,
     ) -> None:
         super().__init__()
-        self._arena = arena
+        self._config = config
         self._groups = groups
         self._output_dir = output_dir
         self._comparisons = comparisons
@@ -70,7 +70,7 @@ class PipelineRunner(QThread):
         self._csv_files: dict[str, list[Path]] = {}
         error: str | None = None
         try:
-            self.log.emit(f"Starting {self._arena.NAME}...")
+            self.log.emit(f"Starting {self._config['name']}...")
             self._run_arena()
             if not self._cancelled:
                 self.finished.emit(str(self._output_dir))
@@ -85,9 +85,9 @@ class PipelineRunner(QThread):
     # ── Orchestration ──────────────────────────────────────────────────────────
 
     def _run_arena(self) -> None:
-        arena = self._arena
         csv_files = self._csv_files
         n_groups = len(self._groups)
+        model_args = self._tracking_model_args()
 
         handles = naming.assign_handles(self._groups)
         handle_iter = iter(handles)
@@ -129,7 +129,7 @@ class PipelineRunner(QThread):
 
                 self.log.emit(f"  Tracking {video.name} ({j + 1}/{n_videos})...")
                 try:
-                    proc = arena.TRACKER.track(video, output_csv, **arena.TRACKER_ARGS)
+                    proc = yolo_tracker.track(video, output_csv, models=model_args)
                     self._current_proc = proc
                     self._drain_proc(proc)
                     self._current_proc = None
@@ -152,44 +152,60 @@ class PipelineRunner(QThread):
         if self._cancelled:
             return
 
-        self.log.emit("Running analysis pipeline...")
-        try:
-            self._run_pipeline(manifest, video_paths)
-        except Exception as exc:
-            self._warn(f"Pipeline error: {exc}")
+        if self._config["script"] is None:
+            # Tracking-only pipeline: the CSVs under output_dir/tracking/ are the
+            # deliverable; there is no analysis stage to run.
+            self.log.emit("Tracking complete — no analysis script for this pipeline.")
+        else:
+            self.log.emit("Running analysis pipeline...")
+            try:
+                self._run_pipeline(manifest, video_paths)
+            except Exception as exc:
+                self._warn(f"Pipeline error: {exc}")
 
         if self._warnings:
             self._write_warning_file()
 
         self.log.emit("Done.")
 
+    def _tracking_model_args(self) -> list[dict]:
+        """Flatten the resolved config's models (keyed by role) into the list
+        track.py wants: ``[{"model": <folder>, "instances", "stride", "batch"}]``."""
+        args: list[dict] = []
+        for m in self._config["models"].values():
+            arg = {"model": str(m["weights_dir"]), "instances": m["instances"]}
+            if m.get("stride") is not None:
+                arg["stride"] = m["stride"]
+            if m.get("batch") is not None:
+                arg["batch"] = m["batch"]
+            args.append(arg)
+        return args
+
     def _run_pipeline(
         self, manifest: list[tuple[str, str, Path]], video_paths: dict[str, Path]
     ) -> None:
-        arena = self._arena
+        config = self._config
+        script = config["script"]
 
-        available = {
+        # The dumped loader dict + the [script] deployment params + the resolved
+        # option values all flow to the entry fn as kwargs; fixed run-context is
+        # passed by the names the contract guarantees.
+        kwargs = {
             "manifest": manifest,
-            "video_paths": video_paths,
             "output_dir": self._output_dir,
             "comparisons": self._comparisons,
+            "video_paths": video_paths,
+            "loader": config["loader"],
+            **script["params"],
         }
-
-        pipeline_inputs = getattr(arena, "PIPELINE_INPUTS", {})
-        kwargs = {
-            fn_arg: available[gui_concept]
-            for gui_concept, fn_arg in pipeline_inputs.items()
-            if gui_concept in available
-        }
-
-        for opt in getattr(arena, "OPTIONS", []):
-            kwargs[opt["name"]] = self._options.get(opt["name"], opt["default"])
+        for name, spec in script["options"].items():
+            kwargs[name] = self._options.get(name, spec.get("default"))
 
         # Run the pipeline in its own subprocess: a long-running in-process call
         # can only be stopped via QThread.terminate(), which is unsafe (it can
         # leave native locks held and hang the GUI). A subprocess can be killed
         # outright via the same kill_tree() used for the tracker.
-        payload = {"arena_module": arena.__name__, "kwargs": kwargs}
+        payload = {"resolved": config, "kwargs": kwargs}
         with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
             pickle.dump(payload, f)
             payload_path = Path(f.name)
@@ -276,12 +292,14 @@ class PipelineRunner(QThread):
             app_version = "unknown"
 
         csv_files = self._csv_files
-        arena = self._arena
+        config = self._config
         lines: list[str] = []
         lines.append("py3r Analysis — run report")
         lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
         lines.append(f"App version: {app_version}")
-        lines.append(f"Pipeline: {arena.NAME}")
+        lines.append(f"Pipeline: {config['name']}  (config: {config['config_path'].name})")
+        lines.append("")
+        lines.extend(self._resolved_config_lines())
         lines.append("")
 
         if error:
@@ -336,6 +354,33 @@ class PipelineRunner(QThread):
                     lines.append(f"    {f}")
 
         (self._output_dir / "py3r_analysis_report.txt").write_text("\n".join(lines) + "\n")
+
+    def _resolved_config_lines(self) -> list[str]:
+        """Render the resolved (flattened base + delta) config so 'what actually
+        ran' is fully inspectable even when the on-disk config was a small delta."""
+        config = self._config
+        out = ["Resolved configuration:"]
+        out.append(f"  trust: {config['trust']}")
+        out.append("  models:")
+        for role, m in config["models"].items():
+            extra = []
+            if m.get("stride") is not None:
+                extra.append(f"stride={m['stride']}")
+            if m.get("batch") is not None:
+                extra.append(f"batch={m['batch']}")
+            suffix = f"  ({', '.join(extra)})" if extra else ""
+            out.append(f"    {role}: {m['weights_dir']}  [{m['weights_source']}]{suffix}")
+            out.append(f"      instances: {m['instances']}")
+        out.append(f"  loader: {config['loader']}")
+        if config["script"] is None:
+            out.append("  script: (none — tracking-only pipeline)")
+        else:
+            out.append(
+                f"  script: {config['script']['entry']}  [{config['script']['entry_source']}]"
+            )
+            params = config["script"]["params"]
+            out.append(f"    params: {params if params else '(none)'}")
+        return out
 
     def _write_warning_file(self) -> None:
         path = self._output_dir / "py3r_analysis_ERRORS.txt"

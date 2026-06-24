@@ -9,28 +9,40 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import py3r.behaviour as p3b
+if TYPE_CHECKING:
+    import py3r.behaviour as p3b
 
 # ── Shared defaults ─────────────────────────────────────────────────────────
-LIKELIHOOD_THRESHOLD = 0.9
 INTERPOLATION_LIMIT = 5
 SMOOTH_WINDOW = 3
 
 
-# ── Loading ──────────────────────────────────────────────────────────────────
-def load_and_tag(
+# ── Loading (dumb format parser — does NO science) ───────────────────────────
+def load(
     manifest: list[tuple[str, str, Path]],
     video_paths: dict[str, Path],
-    fps: int,
-    group_tag: str = "group",
+    loader: dict,
 ) -> p3b.TrackingCollection:
-    """Load YOLO3R CSVs, strip column names, and tag each recording with its
-    group (and video path, if available)."""
-    tc_all = p3b.TrackingCollection.from_yolo3r(
-        {handle: str(path) for handle, _group, path in manifest}, fps=fps
-    )
-    tc_all.each.strip_column_names()
+    """Structural format parse only: turn the per-recording files into a
+    TrackingCollection (parser chosen by ``loader['format']``) and tag each
+    recording with its group and video path. Reads the confidence column into
+    place but never thresholds, strips, or smooths — that is all script-side
+    (see ``preprocess``)."""
+    import py3r.behaviour as p3b
+
+    fmt = loader.get("format", "yolo3r")
+    fps = loader["fps"]
+    files = {handle: str(path) for handle, _group, path in manifest}
+    if fmt == "yolo3r":
+        tc_all = p3b.TrackingCollection.from_yolo3r(files, fps=fps)
+    elif fmt == "dlc":
+        tc_all = p3b.TrackingCollection.from_dlc(files, fps=fps)
+    else:
+        raise ValueError(f"unknown loader format: {fmt!r} (expected 'yolo3r' or 'dlc')")
+
+    group_tag = loader.get("group_tag", "group")
     for handle, group_name, _path in manifest:
         tc_all[handle].tags[group_tag] = group_name
         if handle in video_paths:
@@ -38,26 +50,32 @@ def load_and_tag(
     return tc_all
 
 
-# ── Preprocessing ────────────────────────────────────────────────────────────
+# ── Preprocessing (science: cardinality strip + likelihood + smooth) ─────────
 def preprocess(
     tc: p3b.TrackingCollection,
-    threshold: float = LIKELIHOOD_THRESHOLD,
+    likelihood_min: float,
+    *,
     limit: int = INTERPOLATION_LIMIT,
     window: int = SMOOTH_WINDOW,
 ) -> None:
-    """Filter low-confidence points, interpolate gaps, and smooth in place."""
-    tc.each.filter_likelihood(threshold=threshold)
+    """Strip instance qualifiers (single-instance assumption — see task 031),
+    filter low-confidence points at ``likelihood_min``, interpolate gaps, and
+    smooth, in place. The threshold is a script deployment param because its
+    meaning is format-dependent (DLC likelihood != YOLO3R confidence)."""
+    tc.each.strip_column_names()
+    tc.each.filter_likelihood(threshold=likelihood_min)
     tc.each.interpolate(limit=limit)
     tc.each.smooth_all(window=window, method="mean")
 
 
 # ── Body kinematics ──────────────────────────────────────────────────────────
-def compute_body_kinematics(fc: p3b.FeaturesCollection) -> None:
+def compute_body_kinematics(fc: p3b.FeaturesCollection, pts: dict[str, str]) -> None:
     """Speed / azimuth deviation / distance-between / area-of-boundary features
-    over the standard YOLO3R mouse keypoint set. Identical across arenas using
-    this tracker."""
+    over the standard mouse keypoint set. Point names are resolved through *pts*
+    (canonical -> actual column) so a lab whose model renames a point can remap
+    it via the config's ``[script.point_map]`` without touching this code."""
     for pt in ["nose", "neck", "earr", "earl", "bodycentre", "hipl", "hipr", "tailbase"]:
-        fc.each.speed(pt).store()
+        fc.each.speed(pts[pt]).store()
 
     for base, p1, p2 in [
         ("tailbase", "hipr", "hipl"),
@@ -65,7 +83,7 @@ def compute_body_kinematics(fc: p3b.FeaturesCollection) -> None:
         ("neck", "bodycentre", "headcentre"),
         ("headcentre", "earr", "earl"),
     ]:
-        fc.each.azimuth_deviation(base, p1, p2).store()
+        fc.each.azimuth_deviation(pts[base], pts[p1], pts[p2]).store()
 
     for p1, p2 in [
         ("nose", "headcentre"),
@@ -83,15 +101,15 @@ def compute_body_kinematics(fc: p3b.FeaturesCollection) -> None:
         ("nose", "earr"),
         ("nose", "earl"),
     ]:
-        fc.each.distance_between(p1, p2).store()
+        fc.each.distance_between(pts[p1], pts[p2]).store()
 
-    for boundary_name, pts in [
+    for boundary_name, pt_names in [
         ("mouse_rear", ["tailbase", "hipr", "hipl"]),
         ("mouse_mid", ["hipr", "hipl", "bcl", "bcr"]),
         ("mouse_front", ["bcr", "earr", "earl", "bcl"]),
         ("mouse_face", ["earr", "nose", "earl"]),
     ]:
-        fc.each.define_dynamic_boundary(pts, name=boundary_name)
+        fc.each.define_dynamic_boundary([pts[p] for p in pt_names], name=boundary_name)
         fc.each.area_of_boundary(boundary_name).store()
 
 
@@ -203,6 +221,8 @@ def export_binned_summaries(
     filename_prefix: str,
     compute_summaries_fn,
 ) -> None:
+    import py3r.behaviour as p3b
+
     whole_df, _ = sc.to_df(include_tags=True, series="separate")
     bin_dfs = {"whole": whole_df}
     for i, bin_sc in enumerate(sc.make_bins(numbins)):
@@ -272,6 +292,7 @@ def export_bfa(
     import json
 
     import matplotlib.pyplot as plt
+    import py3r.behaviour as p3b
 
     try:
         print("  Computing BFA transition statistics...")

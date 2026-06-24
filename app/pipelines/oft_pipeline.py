@@ -1,29 +1,54 @@
 """Open Field Test — py3r_behaviour analysis pipeline.
 
-Receives per-group folders of YOLO3R tracking CSVs and runs:
+Receives per-group YOLO3R tracking CSVs and runs:
     load → preprocess → QC plots → features → clustering → summary → export
 
-Nothing in this file knows about the GUI, the tracker, or any other arena.
-Progress is reported via print() - the caller captures stdout if needed.
+Nothing in this file knows about the GUI or the tracker. Progress is reported
+via print() — the caller captures stdout if needed.
+
+Point names are resolved through ``pts`` (canonical -> actual column), built from
+``POINTS`` overlaid with the config's ``[script.point_map]``; defaults to
+identity. Heavy imports (py3r, numpy) are deferred into the functions so the
+module is cheap to import when the GUI only needs ``POINTS``.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-
-import numpy as np
-import py3r.behaviour as p3b
+from typing import TYPE_CHECKING
 
 from app.pipelines import _shared
 
-# ── Constants (proprietary hardware — do not expose to GUI) ───────────────────
-_FPS = 30
-_ARENA_SIZE_M = 0.64
+if TYPE_CHECKING:
+    import py3r.behaviour as p3b
+
+# ── Canonical point names this pipeline uses (identity dict; a config's
+# [script.point_map] overrides entries for a lab whose model renames a point) ──
+POINTS = {
+    name: name
+    for name in [
+        "tl",
+        "tr",
+        "br",
+        "bl",
+        "nose",
+        "headcentre",
+        "earr",
+        "earl",
+        "neck",
+        "bcr",
+        "bcl",
+        "bodycentre",
+        "hipr",
+        "hipl",
+        "tailbase",
+    ]
+}
+
+# ── Structural constants (canonical names; translated through pts at use) ─────
 _N_CLUSTERS = 10
 _CLUSTER_COL = f"kmeans_{_N_CLUSTERS}"
-_GROUP_TAG = "group"
 
-# Keypoint names as output by the OFT YOLO3R model (after strip_column_names)
 _CORNERS = ["tl", "tr", "br", "bl"]
 _CORNER_LINES = [("tl", "tr"), ("tr", "br"), ("br", "bl"), ("bl", "tl")]
 _BODY_CENTRE = "bodycentre"
@@ -55,34 +80,6 @@ _ANIM_BODY_LINES = [
     ("hipr", "hipl"),
     ("bodycentre", "tailbase"),
 ]
-_ANIM_STYLE = {
-    "points": {
-        "default": {"color": (0, 255, 255), "radius": 3},
-        "bodycentre": {
-            "radius": 5,
-            "color": {
-                "from": f"speed_of_{_BODY_CENTRE}_in_xy",
-                "cmap": "plasma",
-                "vmin": 0.0,
-                "vmax": 0.5,
-                "nan_color": (80, 80, 80),
-            },
-        },
-        "tl": {"color": (0, 255, 0), "radius": 5},
-        "tr": {"color": (0, 255, 0), "radius": 5},
-        "br": {"color": (0, 255, 0), "radius": 5},
-        "bl": {"color": (0, 255, 0), "radius": 5},
-    },
-    "boundaries": {
-        "oft": {"edge_color": (0, 200, 0), "edge_width": 1},
-        "centre": {
-            "edge_color": (0, 150, 255),
-            "edge_width": 1,
-            "fill_color": (0, 100, 200),
-            "fill_alpha": 0.15,
-        },
-    },
-}
 
 # Zone scale factors
 _CENTRE_SCALE = 0.5
@@ -90,12 +87,53 @@ _PERIPHERY_SCALE = 0.8
 _CORNER_SCALE = 0.2
 
 
+def _line(pts: dict, lines: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    return [(pts[a], pts[b]) for a, b in lines]
+
+
+def _anim_style(pts: dict) -> dict:
+    bc = pts["bodycentre"]
+    return {
+        "points": {
+            "default": {"color": (0, 255, 255), "radius": 3},
+            bc: {
+                "radius": 5,
+                "color": {
+                    "from": f"speed_of_{bc}_in_xy",
+                    "cmap": "plasma",
+                    "vmin": 0.0,
+                    "vmax": 0.5,
+                    "nan_color": (80, 80, 80),
+                },
+            },
+            pts["tl"]: {"color": (0, 255, 0), "radius": 5},
+            pts["tr"]: {"color": (0, 255, 0), "radius": 5},
+            pts["br"]: {"color": (0, 255, 0), "radius": 5},
+            pts["bl"]: {"color": (0, 255, 0), "radius": 5},
+        },
+        "boundaries": {
+            "oft": {"edge_color": (0, 200, 0), "edge_width": 1},
+            "centre": {
+                "edge_color": (0, 150, 255),
+                "edge_width": 1,
+                "fill_color": (0, 100, 200),
+                "fill_alpha": 0.15,
+            },
+        },
+    }
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 def run(
+    *,
     manifest: list[tuple[str, str, Path]],
     output_dir: Path,
     comparisons: list[tuple[str, str]] | None = None,
     video_paths: dict[str, Path] | None = None,
+    loader: dict,
+    arena_size_m: float,
+    likelihood_min: float,
+    point_map: dict[str, str] | None = None,
     numbins: int | None = None,
     n_clusters: int = _N_CLUSTERS,
 ) -> None:
@@ -105,27 +143,33 @@ def run(
     ----------
     manifest:
         ``[(handle, group_name, csv_path), ...]`` — every recording's unique
-        handle (assigned by the GUI), its group, and its YOLO3R CSV.
+        handle, its group, and its tracking CSV.
     output_dir:
-        Root output folder.  Sub-folders are created automatically.
+        Root output folder. Sub-folders are created automatically.
     comparisons:
-        List of ``(group_a, group_b)`` pairs for statistical annotations and BFA plots.
-        Empty or None → pipeline runs without pairwise stats.
+        ``(group_a, group_b)`` pairs for stats / BFA. Empty/None → no pairwise stats.
     video_paths:
-        ``{handle: Path}`` — source video for handles that have one, used for
-        QC animation overlay. None or missing handle → animation renders
-        without video background.
+        ``{handle: Path}`` — source video per handle for QC animation overlay.
+    loader:
+        Loader config (``format``/``fps``/``group_tag``) — passed to the dumb loader.
+    arena_size_m, likelihood_min, point_map:
+        Deployment params. ``arena_size_m`` calibrates the tl→br distance;
+        ``likelihood_min`` is the confidence filter threshold; ``point_map``
+        remaps canonical point names onto this lab's columns.
     numbins:
-        Split each animal's session into this many equal-frame-count bins and
-        write per-bin summary CSVs alongside the whole-session results.
-        None → no binning.
+        Per-animal session split into this many equal-frame bins. None → no binning.
+    n_clusters:
+        k for behavioural clustering.
     """
     import matplotlib
 
-    matplotlib.use("Agg")  # non-interactive backend — safe in QThread
+    matplotlib.use("Agg")  # non-interactive backend — safe in subprocess
 
     comparisons = comparisons or []
     video_paths = video_paths or {}
+    pts = {**POINTS, **(point_map or {})}
+    group_tag = loader.get("group_tag", "group")
+    bc = pts["bodycentre"]
 
     dirs = _shared.make_output_dirs(output_dir)
     qc_dir = dirs["qc_trajectories"]
@@ -138,31 +182,31 @@ def run(
 
     # ── Load ──────────────────────────────────────────────────────────────────
     print("Loading tracking data...")
-    tc_all = _shared.load_and_tag(manifest, video_paths, fps=_FPS, group_tag=_GROUP_TAG)
+    tc_all = _shared.load(manifest, video_paths, loader)
 
     # ── Preprocess ────────────────────────────────────────────────────────────
     print("Preprocessing...")
-    _shared.preprocess(tc_all)
+    _shared.preprocess(tc_all, likelihood_min)
     tc_all.each.rescale_by_known_distance(
-        point1="tl", point2="br", distance_in_metres=_ARENA_SIZE_M
+        point1=pts["tl"], point2=pts["br"], distance_in_metres=arena_size_m
     )
 
     # ── QC trajectory plots ───────────────────────────────────────────────────
     print("Saving trajectory QC plots...")
-    tc_grouped = tc_all.groupby(tags=[_GROUP_TAG])
+    tc_grouped = tc_all.groupby(tags=[group_tag])
     _shared.plot_trajectory_qc(
         tc_grouped,
         group_names,
         qc_dir,
-        trajectories=[_BODY_CENTRE],
-        static=_CORNERS,
-        lines=_CORNER_LINES,
+        trajectories=[bc],
+        static=[pts[c] for c in _CORNERS],
+        lines=_line(pts, _CORNER_LINES),
     )
 
     # ── Features ──────────────────────────────────────────────────────────────
     print("Computing features...")
     fc = tc_all.to_features()
-    _compute_features(fc)
+    _compute_features(fc, pts)
 
     # ── Clustering ────────────────────────────────────────────────────────────
     print(f"Clustering (k={n_clusters})...")
@@ -173,16 +217,16 @@ def run(
         fc,
         group_names,
         output_dir,
-        points=_ANIM_MOUSE_POINTS + _CORNERS,
-        lines=_ANIM_BODY_LINES + _CORNER_LINES,
+        points=[pts[p] for p in _ANIM_MOUSE_POINTS + _CORNERS],
+        lines=_line(pts, _ANIM_BODY_LINES + _CORNER_LINES),
         boundaries=["oft", "centre"],
         features={
-            "Speed (m/s)": f"speed_of_{_BODY_CENTRE}_in_xy",
-            "In centre": "within_boundary_static_bodycentre_in_centre",
+            "Speed (m/s)": f"speed_of_{bc}_in_xy",
+            "In centre": f"within_boundary_static_{bc}_in_centre",
             "Cluster": _CLUSTER_COL,
         },
-        style=_ANIM_STYLE,
-        group_tag=_GROUP_TAG,
+        style=_anim_style(pts),
+        group_tag=group_tag,
     )
 
     print("Saving features...")
@@ -191,15 +235,15 @@ def run(
     # ── Summary ───────────────────────────────────────────────────────────────
     print("Computing summaries...")
     sc = fc.to_summary()
-    _compute_summaries(sc)
+    _compute_summaries(sc, pts)
 
     if numbins:
         print(f"Computing {numbins}-bin summaries...")
         _shared.export_binned_summaries(
-            sc, numbins, summaries_dir, "OFT_results", _compute_summaries
+            sc, numbins, summaries_dir, "OFT_results", lambda s: _compute_summaries(s, pts)
         )
 
-    sc_grouped = sc.groupby(tags=[_GROUP_TAG])
+    sc_grouped = sc.groupby(tags=[group_tag])
 
     # ── Export ────────────────────────────────────────────────────────────────
     print("Exporting tables...")
@@ -212,11 +256,11 @@ def run(
         comparisons,
         figures_dir,
         metrics=[
-            "total_distance_bodycentre",
+            f"total_distance_{bc}",
             "time_in_centre",
             "distance_in_centre",
         ],
-        group_tag=_GROUP_TAG,
+        group_tag=group_tag,
     )
 
     print("Running BFA...")
@@ -226,50 +270,53 @@ def run(
 
 
 # ── Feature computation ───────────────────────────────────────────────────────
-def _compute_features(fc: p3b.FeaturesCollection) -> None:
+def _compute_features(fc: p3b.FeaturesCollection, pts: dict) -> None:
     print("  Spatial boundaries...")
+    bc = pts["bodycentre"]
+    corner_pts = [pts[c] for c in _CORNERS]
 
-    fc.each.define_static_boundary(_CORNERS, name="oft")
+    fc.each.define_static_boundary(corner_pts, name="oft")
     fc.each.define_static_boundary(
-        _CORNERS, scale_dim1=_CENTRE_SCALE, scale_dim2=_CENTRE_SCALE, name="centre"
+        corner_pts, scale_dim1=_CENTRE_SCALE, scale_dim2=_CENTRE_SCALE, name="centre"
     )
     fc.each.define_static_boundary(
-        _CORNERS, scale_dim1=_PERIPHERY_SCALE, scale_dim2=_PERIPHERY_SCALE, name="not_periphery"
+        corner_pts, scale_dim1=_PERIPHERY_SCALE, scale_dim2=_PERIPHERY_SCALE, name="not_periphery"
     )
     for c in _CORNERS:
         fc.each.define_static_boundary(
-            _CORNERS,
+            corner_pts,
             scale_dim1=_CORNER_SCALE,
             scale_dim2=_CORNER_SCALE,
             name=f"{c}_corner",
-            anchor=c,
+            anchor=pts[c],
         )
 
-    in_centre = fc.each.within_boundary(_BODY_CENTRE, "centre")
+    in_centre = fc.each.within_boundary(bc, "centre")
     in_centre.store()
 
-    (
-        fc.each.within_boundary(_BODY_CENTRE, "oft")
-        & ~fc.each.within_boundary(_BODY_CENTRE, "not_periphery")
-    ).store("in_periphery")
+    (fc.each.within_boundary(bc, "oft") & ~fc.each.within_boundary(bc, "not_periphery")).store(
+        "in_periphery"
+    )
 
-    in_corners = {c: fc.each.within_boundary(_BODY_CENTRE, f"{c}_corner") for c in _CORNERS}
+    in_corners = {c: fc.each.within_boundary(bc, f"{c}_corner") for c in _CORNERS}
     (in_corners["tl"] | in_corners["tr"] | in_corners["bl"] | in_corners["br"]).store("in_corner")
     fc.each.compose_state_from_booleans(in_corners).store("corner_state")
 
-    dist_change = fc.each.distance_change(_BODY_CENTRE)
+    dist_change = fc.each.distance_change(bc)
     (in_centre.astype("Int64") * dist_change).store("dist_change_bodycentre_in_centre")
 
     print("  Kinematic features...")
 
-    _shared.compute_body_kinematics(fc)
+    _shared.compute_body_kinematics(fc, pts)
 
-    for pt in ["nose", "neck", _BODY_CENTRE, "tailbase"]:
-        fc.each.distance_to_boundary(pt, "oft").store()
+    for pt in ["nose", "neck", "bodycentre", "tailbase"]:
+        fc.each.distance_to_boundary(pts[pt], "oft").store()
 
 
 # ── Clustering ────────────────────────────────────────────────────────────────
 def _cluster(fc: p3b.FeaturesCollection, n_clusters: int) -> None:
+    import numpy as np
+
     bfa_prefixes = (
         "speed_of_",
         "azimuth_deviation_",
@@ -288,11 +335,12 @@ def _cluster(fc: p3b.FeaturesCollection, n_clusters: int) -> None:
 
 
 # ── Summary computation ───────────────────────────────────────────────────────
-def _compute_summaries(sc: p3b.SummaryCollection) -> None:
-    sc.each.total_distance(_BODY_CENTRE).store()
-    sc.each.time_true("within_boundary_static_bodycentre_in_centre").store("time_in_centre")
+def _compute_summaries(sc: p3b.SummaryCollection, pts: dict) -> None:
+    bc = pts["bodycentre"]
+    sc.each.total_distance(bc).store()
+    sc.each.time_true(f"within_boundary_static_{bc}_in_centre").store("time_in_centre")
     sc.each.sum_column("dist_change_bodycentre_in_centre").store("distance_in_centre")
-    sc.each.by_state("corner_state", all_states=_CORNERS).mean_column(
-        f"speed_of_{_BODY_CENTRE}_in_xy"
-    ).store("mean_speed_by_corner")
+    sc.each.by_state("corner_state", all_states=_CORNERS).mean_column(f"speed_of_{bc}_in_xy").store(
+        "mean_speed_by_corner"
+    )
     sc.each.time_in_state(_CLUSTER_COL).store("time_in_cluster")

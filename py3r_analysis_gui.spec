@@ -58,6 +58,8 @@ a = Analysis(
         ("assets/icon.ico", "assets"),
         ("assets/icon.png", "assets"),
         ("app/resources", "app/resources"),
+        # Bundled pipeline configs (discovered at runtime by app.pipeline_config).
+        ("app/arenas/configs", "app/arenas/configs"),
         # Pinned tracking-stack versions, read by app.tracking_env_setup.
         ("versions.yaml", "."),
         # track.py is run as a script in tracking_env's interpreter, not
