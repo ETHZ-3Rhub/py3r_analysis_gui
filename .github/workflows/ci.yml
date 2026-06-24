@@ -24,6 +24,28 @@ jobs:
       - name: Ruff lint
         run: ruff check .
 
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # No py3r 'analysis' extra: nothing under test imports it (the bundled
+      # scripts defer py3r into run(), which the suite never executes), so we
+      # keep the install light. The base deps + dev tools are enough.
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -q
+
   version-check:
     if: github.base_ref == 'main'
     runs-on: ubuntu-latest

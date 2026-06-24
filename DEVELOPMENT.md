@@ -31,6 +31,17 @@ Two separate environments are needed:
 | `py3r_gui` | GUI + analysis | PySide6, py3r_behaviour, py3r_analysis_gui |
 | `tracking_env` | Tracking | PyTorch, ultralytics |
 
+Install this package into the `py3r_gui` environment. `py3r_behaviour` is an
+optional `analysis` extra (needed to *run* a pipeline, but not to launch the GUI
+or run the tests), so install it with the extra during development:
+
+```bash
+# From repo root, with py3r_gui environment active:
+pip install -e ".[analysis,dev]"
+# py3r_behaviour resolves from PyPI; to work against your sibling clone instead:
+#   pip install -e ../py3r_behaviour
+```
+
 Create the tracking environment by running the GUI and using
 Settings → Reinstall tracking environment.
 
