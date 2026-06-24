@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 
 from app import pipeline_config
 from app.comparisons_panel import ComparisonsPanel
-from app.confirm_dialog import ask, ask_trust, error_with_copy, pipeline_reference_image
+from app.confirm_dialog import ask, error_with_copy, pipeline_reference_image
 from app.gating import TooltipOnDisabled, build_gated_section, set_gated_enabled
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
 from app.options_dialog import AdvancedOptionsDialog
@@ -341,23 +341,21 @@ class MainWindow(QWidget):
             self._out_edit.setText(folder)
 
     def _populate_pipeline_combo(self) -> None:
-        """One combo: trusted (bundled-code-only) entries first, a non-selectable
-        divider, then entries that execute /user code (⚠ + warn colour). A
-        config-extended built-in running only bundled code stays above."""
+        """One combo: bundled (py3r) pipelines first, a non-selectable divider,
+        then user-supplied ones (⚠ + warn colour, prompted before they run)."""
         from PySide6.QtGui import QColor
 
         combo = self._arena_combo
         combo.clear()
         combo.addItem("— select pipeline —", userData=None)
 
-        def is_above(e: dict) -> bool:
-            return e["source"] == "bundled" or e["trust"] == "trusted"
-
         above = sorted(
-            (e for e in self._pipelines if is_above(e)), key=lambda e: e["label"].lower()
+            (e for e in self._pipelines if e["source"] == "bundled"),
+            key=lambda e: e["label"].lower(),
         )
         below = sorted(
-            (e for e in self._pipelines if not is_above(e)), key=lambda e: e["label"].lower()
+            (e for e in self._pipelines if e["source"] != "bundled"),
+            key=lambda e: e["label"].lower(),
         )
         for e in above:
             combo.addItem(e["label"], userData=e)
@@ -384,18 +382,15 @@ class MainWindow(QWidget):
             self._arena_combo.setCurrentIndex(0)
             return
 
-        if not pipeline_config.is_trusted(resolved):
-            accepted, remember = ask_trust(self, resolved["name"])
-            if not accepted:
-                self._arena_combo.setCurrentIndex(0)
-                return
-            if remember:
-                pipeline_config.remember_trust(resolved)
-
-        try:
-            pipeline_config.validate(resolved)
-        except pipeline_config.ConfigError as exc:
-            error_with_copy(self, "Pipeline config error", str(exc))
+        if resolved["trust"] != "trusted" and not ask(
+            self,
+            "Run custom pipeline?",
+            f"“{resolved['name']}” comes from your /user folder — this did not come "
+            "from the py3r team.\n\nCustom code can do anything your account can. Only "
+            "run it if you trust whoever sent you this pipeline.",
+            yes_label="Run",
+            no_label="Cancel",
+        ):
             self._arena_combo.setCurrentIndex(0)
             return
 

@@ -8,7 +8,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -168,32 +167,6 @@ def info(
     """Show a themed single-button informational dialog."""
     dlg = _ConfirmDialog(parent, title, message, pixmap, ok_label, None)
     dlg.exec()
-
-
-def ask_trust(parent: QWidget | None, name: str) -> tuple[bool, bool]:
-    """Trust confirmation for a pipeline that executes /user code or weights.
-    Returns ``(accepted, dont_warn_again)``."""
-    dlg = _TrustDialog(parent, name)
-    accepted = dlg.exec() == QDialog.DialogCode.Accepted
-    return accepted, (accepted and dlg.dont_warn())
-
-
-class _TrustDialog(_ConfirmDialog):
-    def __init__(self, parent: QWidget | None, name: str) -> None:
-        message = (
-            f"“{name}” runs custom code or model weights from your /user folder — "
-            "this did not come from the py3r team.\n\n"
-            "Custom code can do anything your account can. Only run it if you trust "
-            "whoever sent you this pipeline."
-        )
-        # Build the standard confirm UI, then slip a checkbox above the buttons.
-        super().__init__(parent, "Run custom pipeline?", message, None, "Run", "Cancel")
-        self._dont_warn = QCheckBox("Don't warn me again for this pipeline")
-        layout = self.layout()
-        layout.insertWidget(layout.count() - 1, self._dont_warn)
-
-    def dont_warn(self) -> bool:
-        return self._dont_warn.isChecked()
 
 
 def error_with_copy(parent: QWidget | None, title: str, message: str) -> None:

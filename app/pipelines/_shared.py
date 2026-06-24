@@ -19,6 +19,23 @@ INTERPOLATION_LIMIT = 5
 SMOOTH_WINDOW = 3
 
 
+# ── Point-name resolution ────────────────────────────────────────────────────
+def resolve_points(points: dict[str, str], point_map: dict[str, str] | None) -> dict[str, str]:
+    """Overlay a config's ``[script.point_map]`` onto a pipeline's ``POINTS``
+    (canonical -> actual column name). Keys the pipeline doesn't know are printed
+    as a friendly warning and ignored — this is the *only* check, and it lives
+    here (where the pipeline's own POINTS is in hand) rather than in the GUI,
+    which never imports pipeline code. Works the same for user pipelines."""
+    point_map = point_map or {}
+    unknown = sorted(set(point_map) - set(points))
+    if unknown:
+        print(
+            f"  Warning: point_map names points this pipeline doesn't use: {unknown} "
+            f"(known: {sorted(points)}). Ignoring them."
+        )
+    return {**points, **{k: v for k, v in point_map.items() if k in points}}
+
+
 # ── Loading (dumb format parser — does NO science) ───────────────────────────
 def load(
     manifest: list[tuple[str, str, Path]],

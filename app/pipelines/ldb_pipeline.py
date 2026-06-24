@@ -160,7 +160,7 @@ def run(
 
     comparisons = comparisons or []
     video_paths = video_paths or {}
-    pts = {**POINTS, **(point_map or {})}
+    pts = _shared.resolve_points(POINTS, point_map)
     group_tag = loader.get("group_tag", "group")
     bc = pts["bodycentre"]
 

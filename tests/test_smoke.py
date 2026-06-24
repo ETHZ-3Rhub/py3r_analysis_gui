@@ -25,8 +25,12 @@ def test_discovers_bundled_pipelines():
 
 
 def test_main_window_constructs(qapp):
-    pipelines = pipeline_config.discover()
-    window = MainWindow()
-    # No user configs in a clean checkout → all entries above the divider, plus
-    # the leading "— select pipeline —" placeholder (no divider row).
+    # Patch user_dir to an empty temp dir so a dev /user folder (configs that
+    # would add a divider + below-the-line rows) doesn't skew the count.
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch.object(pipeline_config, "user_dir", return_value=Path(tmp)):
+            pipelines = pipeline_config.discover()
+            window = MainWindow()
+    # Only bundled pipelines → all above the divider, plus the leading
+    # "— select pipeline —" placeholder (no divider row).
     assert window._arena_combo.count() == len(pipelines) + 1

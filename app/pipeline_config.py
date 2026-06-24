@@ -1,15 +1,21 @@
-"""Pipeline configs — discover, resolve, validate, and trust.
+"""Pipeline configs — discover, resolve, and import.
 
 A pipeline *is* a TOML config. Built-ins are bundled in ``app/arenas/configs/``;
 users drop more into ``/user/configs/``. Both sources normalise into one
 ``resolved`` dict (see ``resolve``) that the runner and worker consume — so the
 built-ins exercise the exact path user configs use and it cannot bit-rot.
 
+Trust is dead simple: anything under ``/user/`` is untrusted (we didn't write
+it), full stop — the GUI prompts before running it. We don't inspect *what* it
+references; authorship is the whole rule.
+
 Plain functions + dicts. The only class is ``ConfigError``, whose message is
 shown verbatim (copyable) to whoever has to fix the config.
 
-Heavy / Qt imports are kept out of module scope: this module is imported by the
-pipeline-worker subprocess (for ``import_entry``), which must stay light.
+No heavy / Qt imports at module scope: this module is imported by the
+pipeline-worker subprocess (for ``import_entry``) and must stay light. It also
+never imports pipeline *code* on the GUI side — point-name checks live inside
+the pipeline run, where py3r is already loaded.
 """
 
 from __future__ import annotations
@@ -29,7 +35,7 @@ _BUNDLED_CONFIGS = Path(__file__).parent / "arenas" / "configs"
 _IDENTITY_KEYS = {"extends", "name", "min_app_version", "arena_image"}
 
 # Subtable a delta may introduce wholesale even if the base omits it (its keys
-# are point names, validated against the script's POINTS, not the base config).
+# are point names handled by the pipeline at run time, not base-config keys).
 _ADDABLE_PATH = "script.point_map"
 
 
@@ -67,16 +73,14 @@ def _bundled_models_root() -> Path | None:
         return None
 
 
-# ── Startup discovery (cheap; never validates, never imports scripts) ─────────
+# ── Startup discovery (cheap: lists files, reads names — never resolves) ──────
 def discover() -> list[dict]:
     """Enumerate bundled + user configs into list entries for the pipeline combo.
 
-    Each entry: ``{config_path, source, id, label, parsed, trust}``. ``trust`` is
-    ``"trusted"`` for bundled and resolvable bundled-only user configs,
-    ``"untrusted"`` for user configs that reference /user code/weights, and
-    ``"unknown"`` for ones that won't parse or resolve (placed below the divider,
-    surfacing their error only when selected). ``ignore.txt`` suppresses bundled
-    ids. Never raises.
+    Each entry: ``{config_path, source, id, label}``. ``source`` ("bundled" /
+    "user") is the only thing the combo needs — it drives both above/below-divider
+    placement and the trust prompt, so discovery never has to resolve anything.
+    ``ignore.txt`` suppresses bundled ids. Never raises.
     """
     entries: list[dict] = []
     for path in sorted(_BUNDLED_CONFIGS.glob("*.toml")):
@@ -91,29 +95,14 @@ def discover() -> list[dict]:
 
 
 def _enumerate(path: Path, source: str) -> dict:
-    entry = {
-        "config_path": path,
-        "source": source,
-        "id": path.stem,
-        "label": path.name,
-        "parsed": True,
-        "trust": "trusted" if source == "bundled" else "unknown",
-    }
+    """A combo entry. Reads only the display name (cheap TOML parse); a file that
+    won't parse keeps its filename as a label and surfaces its error on select."""
+    label = path.name
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        label = tomllib.loads(path.read_text(encoding="utf-8")).get("name") or path.name
     except Exception:
-        entry["parsed"] = False
-        return entry
-    entry["label"] = data.get("name") or path.name
-    if source == "user":
-        # Trust drives above/below-divider placement, so it must be known at
-        # startup. resolve() is cheap (no script import); swallow its errors —
-        # they resurface on select.
-        try:
-            entry["trust"] = resolve(path)["trust"]
-        except ConfigError:
-            entry["trust"] = "unknown"
-    return entry
+        pass
+    return {"config_path": path, "source": source, "id": path.stem, "label": label}
 
 
 def _read_ignore() -> set[str]:
@@ -193,6 +182,10 @@ def _merge_table(base: dict, delta: dict, path: str) -> dict:
 def _build(merged: dict, config_path: Path, source: str) -> dict:
     name = merged.get("name") or config_path.stem
 
+    mav = merged.get("min_app_version")
+    if mav and _version_tuple(_app_version()) < _version_tuple(mav):
+        raise ConfigError(f"this pipeline needs app version ≥ {mav} (you have {_app_version()}).")
+
     models: dict[str, dict] = {}
     for role, m in merged.get("models", {}).items():
         if "weights" not in m:
@@ -225,17 +218,11 @@ def _build(merged: dict, config_path: Path, source: str) -> dict:
             "_entry": entry,
         }
 
-    trust = "trusted"
-    user_resources: list[Path] = []
-    if source == "user":
-        user_resources.append(config_path)
-    for m in models.values():
-        if m["weights_source"] == "user":
-            trust = "untrusted"
-            user_resources.append(m["weights_dir"])
-    if script is not None and script["entry_source"] == "user":
-        trust = "untrusted"
-        user_resources.append(script["_entry"]["path"])
+    # Trust is authorship, nothing else: a /user config we didn't write is
+    # untrusted even if it only references bundled code (it could still extend a
+    # base, swap params, or be edited later — and the rule stays trivial to reason
+    # about). The GUI prompts before running anything untrusted.
+    trust = "trusted" if source == "bundled" else "untrusted"
 
     return {
         "config_path": config_path,
@@ -248,7 +235,6 @@ def _build(merged: dict, config_path: Path, source: str) -> dict:
         "loader": loader,
         "script": script,
         "trust": trust,
-        "user_resources": user_resources,
     }
 
 
@@ -297,33 +283,7 @@ def _is_under(path: Path, parent: Path) -> bool:
         return False
 
 
-# ── Validation (version + point_map keys; may import a *bundled* script) ──────
-def validate(resolved: dict) -> None:
-    """Final config-load checks. Call only after any trust has been cleared.
-    Raises ConfigError. ``point_map`` keys are checked against the script's
-    ``POINTS`` for bundled scripts only — we don't import /user code here."""
-    mav = resolved.get("min_app_version")
-    if mav and _version_tuple(_app_version()) < _version_tuple(mav):
-        raise ConfigError(f"this pipeline needs app version ≥ {mav} (you have {_app_version()}).")
-
-    script = resolved["script"]
-    if script is None:
-        return
-    point_map = script["params"].get("point_map") or {}
-    if not point_map or script["entry_source"] != "bundled":
-        return
-    module, _fn = import_entry(resolved)
-    points = getattr(module, "POINTS", None)
-    if points is None:
-        return
-    unknown = sorted(set(point_map) - set(points))
-    if unknown:
-        raise ConfigError(
-            f"point_map references unknown points: {unknown}. "
-            f"This pipeline knows: {sorted(points)}."
-        )
-
-
+# ── Import (the one place pipeline code is loaded — in the worker) ────────────
 def import_entry(resolved: dict) -> tuple[ModuleType, object]:
     """Import the script module and return (module, entry_fn). Bundled modules
     import normally; /user scripts load from file path (code execution — the
@@ -349,47 +309,3 @@ def _app_version() -> str:
 
 def _version_tuple(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in re.findall(r"\d+", v)) or (0,)
-
-
-# ── Trust (checksum over the /user resources the config pulls in) ────────────
-def trust_digest(resolved: dict) -> str:
-    """SHA-256 over a sorted manifest of the /user resources this config pulls
-    in (config file + user script + user model files). Bundled-only configs have
-    no user resources and never reach the trust dialog."""
-    import hashlib
-
-    base = user_dir()
-    manifest: list[str] = []
-    for res in resolved["user_resources"]:
-        for f in _iter_files(res):
-            try:
-                rel = f.resolve().relative_to(base.resolve()).as_posix()
-            except ValueError:
-                rel = f.name
-            manifest.append(f"{rel}:{hashlib.sha256(f.read_bytes()).hexdigest()}")
-    manifest.sort()
-    return hashlib.sha256("\n".join(manifest).encode("utf-8")).hexdigest()
-
-
-def _iter_files(res: Path):
-    if res.is_dir():
-        yield from sorted(p for p in res.rglob("*") if p.is_file())
-    elif res.is_file():
-        yield res
-
-
-def is_trusted(resolved: dict) -> bool:
-    """True if the config is bundled-only, or the user previously accepted this
-    exact bundle (checksum match in app settings)."""
-    if resolved["trust"] == "trusted":
-        return True
-    from PySide6.QtCore import QSettings
-
-    stored = QSettings("py3r", "analysis_gui").value(f"trust/{resolved['id']}")
-    return stored == trust_digest(resolved)
-
-
-def remember_trust(resolved: dict) -> None:
-    from PySide6.QtCore import QSettings
-
-    QSettings("py3r", "analysis_gui").setValue(f"trust/{resolved['id']}", trust_digest(resolved))
