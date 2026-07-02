@@ -1,0 +1,22 @@
+site_name: py3r Analysis  # overwritten at build time by mkdocs_hooks.py
+site_description: Help documentation for py3r Analysis
+docs_dir: docs/src
+site_dir: docs/site
+
+theme:
+  name: material
+  palette:
+    scheme: default
+  features:
+    - content.code.copy
+  hide:
+    - toc
+
+hooks:
+  - mkdocs_hooks.py
+
+nav:
+  - Overview: index.md
+  - Configs: configs.md
+  - Models: models.md
+  - Scripts: scripts.md

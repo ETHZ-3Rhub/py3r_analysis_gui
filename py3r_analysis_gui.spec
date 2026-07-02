@@ -61,6 +61,8 @@ a = Analysis(
         ("app/configs", "app/configs"),
         # Pinned tracking-stack versions, read by app.tracking_env_setup.
         ("versions.yaml", "."),
+        # Help docs — built by mkdocs, opened in browser via the Help button.
+        ("docs/site", "docs"),
         # track.py is run as a script in tracking_env's interpreter, not
         # imported — PyInstaller won't pick it up automatically.
         ("app/trackers/track.py", "app/trackers"),
