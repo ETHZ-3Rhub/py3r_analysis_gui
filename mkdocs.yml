@@ -9,8 +9,7 @@ theme:
     scheme: default
   features:
     - content.code.copy
-  hide:
-    - toc
+    - toc.integrate
 
 hooks:
   - mkdocs_hooks.py
