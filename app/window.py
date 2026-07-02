@@ -43,16 +43,19 @@ _T = _get_theme()  # cached at import for inline widget-creation calls
 _BADGE_WIDTH = 44
 
 
+_OPTION_TYPES: dict[str, type] = {"int": int, "float": float, "bool": bool, "str": str}
+
+
 def _options_spec(options: dict) -> list[dict]:
     """Convert a config's ``[script.options]`` table into the row dicts the
     AdvancedOptionsDialog renders. An option with no ``default`` is optional
-    (off until ticked) — the dialog's int+None path. min/max are only forwarded
-    when present so the dialog never sees a None range."""
+    (off until ticked) — the dialog's int/float+None path. min/max are only
+    forwarded when present so the dialog never sees a None range."""
     spec: list[dict] = []
     for name, opt in options.items():
         row = {
             "name": name,
-            "type": int,
+            "type": _OPTION_TYPES.get(opt.get("type", "int"), int),
             "default": opt.get("default"),
             "label": opt.get("label", name),
         }
@@ -383,12 +386,12 @@ class MainWindow(QWidget):
 
         if resolved["trust"] != "trusted" and not ask(
             self,
-            "Run custom pipeline?",
-            f"“{resolved['name']}” comes from your /user folder — this did not come "
-            "from the py3r team.\n\nCustom code can do anything your account can. Only "
-            "run it if you trust whoever sent you this pipeline.",
-            yes_label="Run",
-            no_label="Cancel",
+            "Trust this pipeline?",
+            f'"{resolved["name"]}" can run code and/or models that were not created by '
+            "the ETH 3R Hub. Only run it if you trust the author(s).\n\n"
+            "Do you trust the author(s)?",
+            yes_label="Yes",
+            no_label="No",
         ):
             self._pipeline_combo.setCurrentIndex(0)
             return

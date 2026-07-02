@@ -26,3 +26,4 @@ likelihood_min = 0.9
 [script.options]
 numbins = { min = 2, max = 20 }
 n_clusters = { default = 10, min = 5, max = 50 }
+likelihood_min = { type = "float", default = 0.9, min = 0.6, max = 0.95, label = "Likelihood threshold" }
