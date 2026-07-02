@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "py3r-analysis-gui"
-version = "0.3.2"
+version = "0.4.0"
 description = "Simple GUI for yolo3r tracking and py3r behaviour analysis pipelines"
 authors = [{ name = "Tom Lorimer" }]
 requires-python = ">=3.11"
@@ -15,7 +15,6 @@ dependencies = [
     "pandas>=2.0,<3.0",
     "pyyaml>=6.0",
     "uv>=0.5",
-    "py3r-behaviour",   # installed from ../py3r_behaviour in dev; bundled in release
 ]
 
 [project.scripts]
@@ -26,9 +25,17 @@ where = ["."]
 include = ["app*"]
 
 [project.optional-dependencies]
+# The py3r_behaviour analysis stack. Needed to actually *run* a pipeline, but not
+# to import the app, build the GUI, or run the test suite — so it's an extra,
+# which keeps the base install (and CI) light. In dev, install from the sibling
+# ../py3r_behaviour clone; at release it's bundled into the frozen build.
+analysis = [
+    "py3r-behaviour",
+]
 dev = [
     "pre-commit>=4.0,<5.0",
     "ruff==0.8.4",   # must match rev: in .pre-commit-config.yaml
+    "pytest>=8.0",
 ]
 
 [tool.ruff]

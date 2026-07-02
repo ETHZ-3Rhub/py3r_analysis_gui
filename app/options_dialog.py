@@ -1,4 +1,4 @@
-"""Advanced Options dialog — renders an arena's OPTIONS list as a form."""
+"""Advanced Options dialog — renders a pipeline's advanced options as a form."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
+    QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -19,14 +20,14 @@ from PySide6.QtWidgets import (
 from app.theme import get_theme as _get_theme
 
 
-def _range_label(lo: int, hi: int) -> QLabel:
+def _range_label(lo: int | float, hi: int | float) -> QLabel:
     lbl = QLabel(f"{lo}–{hi}")
     lbl.setStyleSheet(f"color: {_get_theme().muted}; font-size: 11px;")
     return lbl
 
 
 class AdvancedOptionsDialog(QDialog):
-    """Dialog that builds a form from an arena OPTIONS list.
+    """Dialog that builds a form from a pipeline's option specs.
 
     Each option dict: ``{"name": str, "type": type, "default": any, "label": str}``
 
@@ -106,6 +107,53 @@ class AdvancedOptionsDialog(QDialog):
                 else:
                     form.addRow(QLabel(label + ":"), spin)
 
+            elif typ is float and default is None:
+                # Optional float: checkbox enables the spinbox
+                row = QWidget()
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(8)
+
+                check = QCheckBox()
+                spin = QDoubleSpinBox()
+                lo, hi = opt.get("min", 0.0), opt.get("max", 1.0)
+                spin.setRange(lo, hi)
+                spin.setDecimals(3)
+                spin.setSingleStep(0.01)
+                spin.setValue(float(current_val) if current_val is not None else lo)
+                spin.setEnabled(current_val is not None)
+                check.setChecked(current_val is not None)
+                check.toggled.connect(spin.setEnabled)
+
+                row_layout.addWidget(check)
+                row_layout.addWidget(spin)
+                if "min" in opt and "max" in opt:
+                    row_layout.addWidget(_range_label(lo, hi))
+                row_layout.addStretch()
+
+                self._widgets[name] = (check, spin)
+                form.addRow(QLabel(label + ":"), row)
+
+            elif typ is float:
+                spin = QDoubleSpinBox()
+                lo, hi = opt.get("min", 0.0), opt.get("max", 1.0)
+                spin.setRange(lo, hi)
+                spin.setDecimals(3)
+                spin.setSingleStep(0.01)
+                spin.setValue(float(current_val) if current_val is not None else float(default))
+                self._widgets[name] = spin
+                if "min" in opt and "max" in opt:
+                    spin_row = QWidget()
+                    spin_row_layout = QHBoxLayout(spin_row)
+                    spin_row_layout.setContentsMargins(0, 0, 0, 0)
+                    spin_row_layout.setSpacing(8)
+                    spin_row_layout.addWidget(spin)
+                    spin_row_layout.addWidget(_range_label(lo, hi))
+                    spin_row_layout.addStretch()
+                    form.addRow(QLabel(label + ":"), spin_row)
+                else:
+                    form.addRow(QLabel(label + ":"), spin)
+
             elif typ is bool:
                 check = QCheckBox()
                 val = current_val if current_val is not None else default
@@ -143,7 +191,7 @@ class AdvancedOptionsDialog(QDialog):
             if isinstance(widget, tuple):
                 check, spin = widget
                 result[name] = spin.value() if check.isChecked() else None
-            elif isinstance(widget, QSpinBox):
+            elif isinstance(widget, QSpinBox | QDoubleSpinBox):
                 result[name] = widget.value()
             elif isinstance(widget, QCheckBox):
                 result[name] = widget.isChecked()
@@ -168,7 +216,7 @@ class AdvancedOptionsDialog(QDialog):
                 border-radius: 4px;
                 padding: 4px 8px;
             }}
-            QSpinBox {{
+            QSpinBox, QDoubleSpinBox {{
                 background-color: {_T.display};
                 color: {_T.text};
                 border: 1px solid {_T.muted};
@@ -176,30 +224,33 @@ class AdvancedOptionsDialog(QDialog):
                 padding: 3px 3px 3px 8px;
                 min-width: 64px;
             }}
-            QSpinBox:disabled {{
+            QSpinBox:disabled, QDoubleSpinBox:disabled {{
                 color: {_T.muted};
                 background-color: {_T.bg};
                 border-color: {_T.bg};
             }}
-            QSpinBox::up-button, QSpinBox::down-button {{
+            QSpinBox::up-button, QSpinBox::down-button,
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
                 subcontrol-origin: border;
                 width: 18px;
                 background-color: {_T.sep};
                 border-left: 1px solid {_T.muted};
             }}
-            QSpinBox::up-button {{
+            QSpinBox::up-button, QDoubleSpinBox::up-button {{
                 subcontrol-position: top right;
                 border-bottom: 1px solid {_T.muted};
                 border-top-right-radius: 3px;
             }}
-            QSpinBox::down-button {{
+            QSpinBox::down-button, QDoubleSpinBox::down-button {{
                 subcontrol-position: bottom right;
                 border-bottom-right-radius: 3px;
             }}
-            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+            QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
                 background-color: {_T.muted};
             }}
-            QSpinBox::up-button:disabled, QSpinBox::down-button:disabled {{
+            QSpinBox::up-button:disabled, QSpinBox::down-button:disabled,
+            QDoubleSpinBox::up-button:disabled, QDoubleSpinBox::down-button:disabled {{
                 background-color: {_T.bg};
                 border-color: {_T.bg};
             }}

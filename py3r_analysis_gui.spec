@@ -21,10 +21,9 @@ pycirclize_datas, pycirclize_binaries, pycirclize_hiddenimports = collect_all("p
 seaborn_datas, seaborn_binaries, seaborn_hiddenimports = collect_all("seaborn")
 statannotations_datas, statannotations_binaries, statannotations_hiddenimports = collect_all("statannotations")
 
-# Pull in all arena and pipeline modules so the auto-discovery works at runtime
+# Pull in all pipeline script modules so a config's entry can be imported at runtime
 hidden_imports = (
-    collect_submodules("app.arenas")
-    + collect_submodules("app.pipelines")
+    collect_submodules("app.scripts")
     + py3r_hiddenimports
     + umap_hiddenimports
     + pycirclize_hiddenimports
@@ -58,8 +57,12 @@ a = Analysis(
         ("assets/icon.ico", "assets"),
         ("assets/icon.png", "assets"),
         ("app/resources", "app/resources"),
+        # Bundled pipeline configs (discovered at runtime by app.pipeline_config).
+        ("app/configs", "app/configs"),
         # Pinned tracking-stack versions, read by app.tracking_env_setup.
         ("versions.yaml", "."),
+        # Help docs — built by mkdocs, opened in browser via the Help button.
+        ("docs/site", "docs"),
         # track.py is run as a script in tracking_env's interpreter, not
         # imported — PyInstaller won't pick it up automatically.
         ("app/trackers/track.py", "app/trackers"),

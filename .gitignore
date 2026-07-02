@@ -15,8 +15,17 @@ build/
 # PyInstaller
 *.spec.bak
 
+# MkDocs build output
+docs/site/
+
+# Generated download page (docs-site/generate.py output)
+docs-site/_build/
+
 # Downloaded by build.bat — not committed
 vendor/
+
+# User-supplied pipelines
+/user/
 
 # OS
 .DS_Store

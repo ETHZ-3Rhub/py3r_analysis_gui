@@ -7,10 +7,12 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -21,13 +23,20 @@ _IMG_DIR = Path(__file__).parent / "resources"
 _IMG_SIZE = 180
 
 
-def pipeline_reference_image(pipeline_mod) -> QPixmap | None:
+def pipeline_reference_image(resolved: dict) -> QPixmap | None:
     """Reference photo of the arena a pipeline expects. Returns None if the
-    pipeline module has no ARENA_IMAGE attribute or the file doesn't exist."""
-    filename = getattr(pipeline_mod, "ARENA_IMAGE", None)
+    config has no ``arena_image`` or the file doesn't exist. Bundled images live
+    in app/resources/; a user config's image sits beside it in /user/configs/."""
+    filename = resolved.get("arena_image")
     if not filename:
         return None
-    path = _IMG_DIR / filename
+    if resolved["source"] == "user":
+        from app import pipeline_config
+
+        base = pipeline_config.user_configs_dir()
+    else:
+        base = _IMG_DIR
+    path = base / filename
     if not path.exists():
         return None
     px = QPixmap(str(path))
@@ -158,3 +167,86 @@ def info(
     """Show a themed single-button informational dialog."""
     dlg = _ConfirmDialog(parent, title, message, pixmap, ok_label, None)
     dlg.exec()
+
+
+def error_with_copy(parent: QWidget | None, title: str, message: str) -> None:
+    """Show a config error in full with a Copy button — aimed at forwarding the
+    error back to whoever authored the config."""
+    _CopyErrorDialog(parent, title, message).exec()
+
+
+class _CopyErrorDialog(QDialog):
+    def __init__(self, parent: QWidget | None, title: str, message: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(460)
+        self._message = message
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 20, 20, 16)
+        outer.setSpacing(12)
+
+        box = QTextEdit()
+        box.setReadOnly(True)
+        box.setObjectName("logBox")
+        box.setPlainText(message)
+        box.setMinimumHeight(140)
+        outer.addWidget(box)
+
+        btn_row = QHBoxLayout()
+        self._copy_btn = QPushButton("Copy")
+        self._copy_btn.setObjectName("dlgBtn")
+        self._copy_btn.clicked.connect(self._copy)
+        btn_row.addWidget(self._copy_btn)
+        btn_row.addStretch()
+        ok_btn = QPushButton("OK")
+        ok_btn.setObjectName("dlgBtnPrimary")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self.accept)
+        btn_row.addWidget(ok_btn)
+        outer.addLayout(btn_row)
+
+        self._apply_stylesheet()
+
+    def _copy(self) -> None:
+        QApplication.clipboard().setText(self._message)
+        self._copy_btn.setText("Copied!")
+
+    def _apply_stylesheet(self) -> None:
+        t = _get_theme()
+        self.setStyleSheet(f"""
+            QDialog, QWidget {{
+                background-color: {t.bg};
+                color: {t.panel_text};
+                font-family: "Helvetica Neue", Arial, sans-serif;
+                font-size: 13px;
+            }}
+            QTextEdit#logBox {{
+                background-color: {t.display};
+                border: 1px solid {t.muted};
+                border-radius: 5px;
+                font-family: "Consolas", monospace;
+                font-size: 12px;
+                padding: 6px;
+                color: {t.text};
+            }}
+            QPushButton#dlgBtn {{
+                background-color: transparent;
+                color: {t.accent};
+                border: 1px solid {t.accent};
+                border-radius: 5px;
+                padding: 6px 20px;
+                min-width: 72px;
+            }}
+            QPushButton#dlgBtn:hover {{ background-color: {t.accent}; color: white; }}
+            QPushButton#dlgBtnPrimary {{
+                background-color: {t.accent};
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 6px 20px;
+                min-width: 72px;
+                font-weight: bold;
+            }}
+            QPushButton#dlgBtnPrimary:hover {{ background-color: {t.accent_hover}; }}
+        """)

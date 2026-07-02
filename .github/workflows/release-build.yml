@@ -54,7 +54,10 @@ jobs:
       - name: Install project
         run: |
           pip install -e .
-          pip install pyinstaller
+          pip install pyinstaller "mkdocs<2" "mkdocs-material<10"
+
+      - name: Build docs
+        run: mkdocs build
 
       - name: Fetch uv.exe
         shell: powershell
@@ -71,6 +74,11 @@ jobs:
       - name: Copy model weights
         shell: cmd
         run: xcopy "_pose_models\pose_estimation" "dist\py3r_analysis\models" /E /I /Y
+
+      - name: Add AGPL-3.0 licence to models
+        shell: powershell
+        run: |
+          Invoke-WebRequest -Uri https://www.gnu.org/licenses/agpl-3.0.txt -OutFile "dist\py3r_analysis\models\LICENSE"
 
       - name: Zip artifact
         shell: powershell

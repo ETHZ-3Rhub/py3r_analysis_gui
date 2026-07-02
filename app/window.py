@@ -1,13 +1,15 @@
 """Main application window.
 
 Two-panel layout:
-  Left  — source (input type + arena), groups, comparisons
+  Left  — source (input type + pipeline), groups, comparisons
   Right — output folder, run controls, log
 """
 
 from __future__ import annotations
 
 import os
+import webbrowser
+from pathlib import Path
 
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
@@ -26,9 +28,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app import arenas as arena_pkg
+from app import pipeline_config
 from app.comparisons_panel import ComparisonsPanel
-from app.confirm_dialog import ask, pipeline_reference_image
+from app.confirm_dialog import ask, error_with_copy, pipeline_reference_image
 from app.gating import TooltipOnDisabled, build_gated_section, set_gated_enabled
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
 from app.options_dialog import AdvancedOptionsDialog
@@ -43,6 +45,30 @@ _T = _get_theme()  # cached at import for inline widget-creation calls
 _BADGE_WIDTH = 44
 
 
+_OPTION_TYPES: dict[str, type] = {"int": int, "float": float, "bool": bool, "str": str}
+
+
+def _options_spec(options: dict) -> list[dict]:
+    """Convert a config's ``[script.options]`` table into the row dicts the
+    AdvancedOptionsDialog renders. An option with no ``default`` is optional
+    (off until ticked) — the dialog's int/float+None path. min/max are only
+    forwarded when present so the dialog never sees a None range."""
+    spec: list[dict] = []
+    for name, opt in options.items():
+        row = {
+            "name": name,
+            "type": _OPTION_TYPES.get(opt.get("type", "int"), int),
+            "default": opt.get("default"),
+            "label": opt.get("label", name),
+        }
+        if "min" in opt:
+            row["min"] = opt["min"]
+        if "max" in opt:
+            row["max"] = opt["max"]
+        spec.append(row)
+    return spec
+
+
 class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
@@ -51,7 +77,8 @@ class MainWindow(QWidget):
         self._separators: list[QFrame] = []
         self._apply_stylesheet()
 
-        self._arenas = arena_pkg.discover()
+        self._pipelines = pipeline_config.discover()
+        self._resolved: dict | None = None  # resolved config for the current selection
         self._last_source_is_csv: bool | None = None  # None until a source is first chosen
         self._current_options: dict = {}
 
@@ -70,7 +97,7 @@ class MainWindow(QWidget):
 
         self._run_controller = RunController(
             dialog_parent=self,
-            arena_combo=self._arena_combo,
+            pipeline_combo=self._pipeline_combo,
             options_btn=self._options_btn,
             out_edit=self._out_edit,
             run_btn=self._run_btn,
@@ -81,6 +108,7 @@ class MainWindow(QWidget):
             video_radio=self._video_radio,
             csv_radio=self._csv_radio,
             env_panel=self._env_panel,
+            get_config=lambda: self._resolved,
             get_options=lambda: self._current_options,
             on_video_radio_refresh=self._update_video_radio_availability,
             parent=self,
@@ -169,36 +197,33 @@ class MainWindow(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        # ── Arena — a processing-pipeline choice (model + analysis), not
-        # something that depends on the source file type, so it lives here
-        # among the other run-configuration controls rather than gated on
-        # the left ──────────────────────────────────────────────────────────
-        arena_label = QLabel("Pipeline")
-        arena_label.setObjectName("sectionTitle")
-        layout.addWidget(arena_label)
+        # ── Pipeline — a processing choice (model + analysis), not something
+        # that depends on the source file type, so it lives here among the
+        # other run-configuration controls rather than gated on the left ─────
+        pipeline_label = QLabel("Pipeline")
+        pipeline_label.setObjectName("sectionTitle")
+        layout.addWidget(pipeline_label)
 
-        self._arena_combo = QComboBox()
-        self._arena_combo.addItem("— select pipeline —", userData=None)
-        for mod in self._arenas:
-            self._arena_combo.addItem(mod.NAME, userData=mod)
-        self._arena_combo.currentIndexChanged.connect(self._on_arena_changed)
-        layout.addWidget(self._arena_combo)
+        self._pipeline_combo = QComboBox()
+        self._populate_pipeline_combo()
+        self._pipeline_combo.currentIndexChanged.connect(self._on_pipeline_changed)
+        layout.addWidget(self._pipeline_combo)
 
         opts_row = QHBoxLayout()
         opts_row.addStretch()
         self._options_btn = QPushButton("Advanced options")
         self._options_btn.setObjectName("settingsButton")
         self._options_btn.setEnabled(False)
-        self._options_btn.setToolTip("No arena selected.")
+        self._options_btn.setToolTip("No pipeline selected.")
         self._options_btn.clicked.connect(self._open_options)
         opts_row.addWidget(self._options_btn)
         layout.addLayout(opts_row)
 
-        sep_arena = QFrame()
-        sep_arena.setFrameShape(QFrame.Shape.HLine)
-        sep_arena.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
-        self._separators.append(sep_arena)
-        layout.addWidget(sep_arena)
+        sep_pipeline = QFrame()
+        sep_pipeline.setFrameShape(QFrame.Shape.HLine)
+        sep_pipeline.setStyleSheet(f"color: {_T.sep}; margin: 4px 0;")
+        self._separators.append(sep_pipeline)
+        layout.addWidget(sep_pipeline)
 
         out_label = QLabel("Output folder")
         out_label.setObjectName("sectionTitle")
@@ -238,6 +263,13 @@ class MainWindow(QWidget):
 
         self._env_panel = TrackingEnvPanel()
         bottom_row.addWidget(self._env_panel)
+
+        help_btn = QPushButton("?  Help")
+        help_btn.setObjectName("settingsButton")
+        help_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        help_btn.clicked.connect(self._open_help)
+        bottom_row.addWidget(help_btn)
+        bottom_row.addSpacing(12)
 
         settings_btn = QPushButton("⚙  Settings")
         settings_btn.setObjectName("settingsButton")
@@ -319,39 +351,94 @@ class MainWindow(QWidget):
         if folder:
             self._out_edit.setText(folder)
 
-    def _on_arena_changed(self) -> None:
+    def _populate_pipeline_combo(self) -> None:
+        """One combo: bundled (py3r) pipelines first, a non-selectable divider,
+        then user-supplied ones (⚠ + warn colour, prompted before they run)."""
+        from PySide6.QtGui import QColor
+
+        combo = self._pipeline_combo
+        combo.clear()
+        combo.addItem("— select pipeline —", userData=None)
+
+        above = sorted(
+            (e for e in self._pipelines if e["source"] == "bundled"),
+            key=lambda e: e["label"].lower(),
+        )
+        below = sorted(
+            (e for e in self._pipelines if e["source"] != "bundled"),
+            key=lambda e: e["label"].lower(),
+        )
+        for e in above:
+            combo.addItem(e["label"], userData=e)
+        if below:
+            combo.addItem("— user supplied pipelines —", userData=None)
+            combo.model().item(combo.count() - 1).setEnabled(False)
+            for e in below:
+                combo.addItem(f"⚠  {e['label']}", userData=e)
+                combo.model().item(combo.count() - 1).setForeground(QColor(_get_theme().warn))
+
+    def _on_pipeline_changed(self) -> None:
         self._current_options = {}
+        self._resolved = None
 
-        arena_mod = self._arena_combo.currentData()
-        if arena_mod is not None:
-            ref_img = pipeline_reference_image(arena_mod)
-            if ref_img is not None and not ask(
-                self,
-                "Confirm pipeline",
-                f"Does your arena look like this?\n\n({arena_mod.NAME})",
-                ref_img,
-                yes_label="Yes",
-                no_label="No",
-            ):
-                self._arena_combo.setCurrentIndex(0)
-                return
+        entry = self._pipeline_combo.currentData()
+        if entry is None:
+            self._run_controller.refresh_run_button()
+            return
 
+        try:
+            resolved = pipeline_config.resolve(entry["config_path"])
+        except pipeline_config.ConfigError as exc:
+            error_with_copy(self, "Pipeline config error", str(exc))
+            self._pipeline_combo.setCurrentIndex(0)
+            return
+
+        if resolved["trust"] != "trusted" and not ask(
+            self,
+            "Trust this pipeline?",
+            f'"{resolved["name"]}" can run code and/or models that were not created by '
+            "the ETH 3R Hub. Only run it if you trust the author(s).\n\n"
+            "Do you trust the author(s)?",
+            yes_label="Yes",
+            no_label="No",
+        ):
+            self._pipeline_combo.setCurrentIndex(0)
+            return
+
+        ref_img = pipeline_reference_image(resolved)
+        if ref_img is not None and not ask(
+            self,
+            "Confirm pipeline",
+            f"Does your arena look like this?\n\n({resolved['name']})",
+            ref_img,
+            yes_label="Yes",
+            no_label="No",
+        ):
+            self._pipeline_combo.setCurrentIndex(0)
+            return
+
+        self._resolved = resolved
         self._run_controller.refresh_run_button()
 
     def _open_options(self) -> None:
-        arena_mod = self._arena_combo.currentData()
-        options = getattr(arena_mod, "OPTIONS", []) if arena_mod else []
+        if self._resolved is None or self._resolved["script"] is None:
+            return
+        options = self._resolved["script"]["options"]
         if not options:
             return
         from PySide6.QtWidgets import QDialog
 
-        dlg = AdvancedOptionsDialog(options, self._current_options, parent=self)
+        dlg = AdvancedOptionsDialog(_options_spec(options), self._current_options, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._current_options = dlg.values()
 
     def _on_env_status_changed(self) -> None:
         self._update_video_radio_availability()
         self._run_controller.refresh_run_button()
+
+    def _open_help(self) -> None:
+        docs = Path(__file__).parent.parent / "docs" / "index.html"
+        webbrowser.open(docs.as_uri())
 
     def _open_settings(self) -> None:
         SettingsDialog(self._env_panel, self).exec()
