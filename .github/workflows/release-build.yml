@@ -54,7 +54,7 @@ jobs:
       - name: Install project
         run: |
           pip install -e .
-          pip install pyinstaller mkdocs-material
+          pip install pyinstaller "mkdocs<2" "mkdocs-material<10"
 
       - name: Build docs
         run: mkdocs build
