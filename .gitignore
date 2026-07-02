@@ -15,6 +15,9 @@ build/
 # PyInstaller
 *.spec.bak
 
+# MkDocs build output
+docs/site/
+
 # Downloaded by build.bat — not committed
 vendor/
 
