@@ -37,10 +37,12 @@ def run_worker(payload_path: Path) -> int:
         payload = pickle.load(f)
 
     from app import pipeline_config
+    from app.scripts._shared import load as _load_tc
 
     _module, entry_fn = pipeline_config.import_entry(payload["resolved"])
     try:
-        entry_fn(**payload["kwargs"])
+        tc = _load_tc(**payload["load"])
+        entry_fn(tc=tc, **payload["kwargs"])
     except Exception:
         traceback.print_exc()
         return 1
