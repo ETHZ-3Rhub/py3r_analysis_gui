@@ -386,12 +386,12 @@ class MainWindow(QWidget):
 
         if resolved["trust"] != "trusted" and not ask(
             self,
-            "Run custom pipeline?",
-            f"“{resolved['name']}” comes from your /user folder — this did not come "
-            "from the py3r team.\n\nCustom code can do anything your account can. Only "
-            "run it if you trust whoever sent you this pipeline.",
-            yes_label="Run",
-            no_label="Cancel",
+            "Trust this pipeline?",
+            f'"{resolved["name"]}" can run code and/or models that were not created by '
+            "the ETH 3R Hub. Only run it if you trust the author(s).\n\n"
+            "Do you trust the author(s)?",
+            yes_label="Yes",
+            no_label="No",
         ):
             self._pipeline_combo.setCurrentIndex(0)
             return
