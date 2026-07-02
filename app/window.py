@@ -43,16 +43,19 @@ _T = _get_theme()  # cached at import for inline widget-creation calls
 _BADGE_WIDTH = 44
 
 
+_OPTION_TYPES: dict[str, type] = {"int": int, "float": float, "bool": bool, "str": str}
+
+
 def _options_spec(options: dict) -> list[dict]:
     """Convert a config's ``[script.options]`` table into the row dicts the
     AdvancedOptionsDialog renders. An option with no ``default`` is optional
-    (off until ticked) — the dialog's int+None path. min/max are only forwarded
-    when present so the dialog never sees a None range."""
+    (off until ticked) — the dialog's int/float+None path. min/max are only
+    forwarded when present so the dialog never sees a None range."""
     spec: list[dict] = []
     for name, opt in options.items():
         row = {
             "name": name,
-            "type": int,
+            "type": _OPTION_TYPES.get(opt.get("type", "int"), int),
             "default": opt.get("default"),
             "label": opt.get("label", name),
         }
