@@ -38,6 +38,9 @@ jobs:
       # No py3r 'analysis' extra: nothing under test imports it (the bundled
       # scripts defer py3r into run(), which the suite never executes), so we
       # keep the install light. The base deps + dev tools are enough.
+      - name: Install system Qt dependencies
+        run: sudo apt-get install -y libegl1 libgl1 libglib2.0-0
+
       - name: Install
         run: pip install -e ".[dev]"
 
