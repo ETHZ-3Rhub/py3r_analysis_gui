@@ -34,7 +34,7 @@ class RunController(QObject):
         self,
         *,
         dialog_parent: QWidget,
-        arena_combo: QComboBox,
+        pipeline_combo: QComboBox,
         options_btn: QPushButton,
         out_edit: QLineEdit,
         run_btn: QPushButton,
@@ -45,13 +45,15 @@ class RunController(QObject):
         video_radio: QRadioButton,
         csv_radio: QRadioButton,
         env_panel: TrackingEnvPanel,
+        get_config: Callable[[], dict | None],
         get_options: Callable[[], dict],
         on_video_radio_refresh: Callable[[], None],
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._dialog_parent = dialog_parent
-        self._arena_combo = arena_combo
+        self._pipeline_combo = pipeline_combo
+        self._get_config = get_config
         self._options_btn = options_btn
         self._out_edit = out_edit
         self._run_btn = run_btn
@@ -86,22 +88,22 @@ class RunController(QObject):
 
     # ── Run button gating ───────────────────────────────────────────────────
     def refresh_run_button(self) -> None:
-        arena_mod = self._arena_combo.currentData()
-        arena_options = getattr(arena_mod, "OPTIONS", []) if arena_mod else []
-        self._options_btn.setEnabled(bool(arena_options))
-        if not arena_mod:
-            self._options_btn.setToolTip("No arena selected.")
-        elif not arena_options:
-            self._options_btn.setToolTip("This arena has no advanced options.")
+        config = self._get_config()
+        options = config["script"]["options"] if (config and config["script"]) else {}
+        self._options_btn.setEnabled(bool(options))
+        if config is None:
+            self._options_btn.setToolTip("No pipeline selected.")
+        elif not options:
+            self._options_btn.setToolTip("This pipeline has no advanced options.")
         else:
-            n = len(arena_options)
+            n = len(options)
             self._options_btn.setToolTip(f"{n} advanced option{'s' if n != 1 else ''} available.")
 
         reasons: list[str] = []
         groups = self._group_panel.groups()
 
-        if self._arena_combo.currentData() is None:
-            reasons.append("No arena selected.")
+        if config is None:
+            reasons.append("No pipeline selected.")
         if not groups:
             reasons.append("No groups added.")
         if not self._out_edit.text().strip():
@@ -173,9 +175,24 @@ class RunController(QObject):
             self.start_run()
 
     def start_run(self) -> None:
-        arena_mod = self._arena_combo.currentData()
-        if arena_mod is None:
+        config = self._get_config()
+        if config is None:
             return
+
+        # Run-start coherence gate: catch the one degenerate input×pipeline
+        # corner (already-tracked CSVs fed to a tracking-only pipeline — nothing
+        # to do) here rather than reactively greying controls.
+        if self._csv_radio.isChecked() and config["script"] is None:
+            QMessageBox.information(
+                self._dialog_parent,
+                "Nothing to do",
+                "This pipeline only produces tracking output, but you've supplied "
+                "already-tracked CSV files — so there's nothing left to do.\n\n"
+                "Pick a pipeline with an analysis step, or switch the source to "
+                "video files.",
+            )
+            return
+
         # Nest everything inside a timestamped run folder of our own — if the
         # user points this at somewhere like their Desktop, we don't want to
         # scatter our tracking/figures/etc. folders directly into it.
@@ -220,14 +237,14 @@ class RunController(QObject):
         self._log.clear()
         self._open_btn.setVisible(False)
         self._run_btn.setText("■  Cancel")
-        self._arena_combo.setEnabled(False)
+        self._pipeline_combo.setEnabled(False)
         self._out_edit.setEnabled(False)
         self._comp_panel.set_list_enabled(False)
         self._video_radio.setEnabled(False)
         self._csv_radio.setEnabled(False)
 
         self._runner = PipelineRunner(
-            arena_mod,
+            config,
             groups,
             output_dir,
             comparisons,
@@ -266,7 +283,7 @@ class RunController(QObject):
 
     def reset_controls(self) -> None:
         self._run_btn.setText("▶  Analyse")
-        self._arena_combo.setEnabled(True)
+        self._pipeline_combo.setEnabled(True)
         self._out_edit.setEnabled(True)
         self._comp_panel.set_list_enabled(True)
         self._on_video_radio_refresh()

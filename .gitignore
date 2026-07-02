@@ -18,6 +18,9 @@ build/
 # Downloaded by build.bat — not committed
 vendor/
 
+# User-supplied pipelines
+/user/
+
 # OS
 .DS_Store
 Thumbs.db

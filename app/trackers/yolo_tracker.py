@@ -86,25 +86,22 @@ def _find_models_dir() -> Path:
     )
 
 
-def track(video: Path, output_csv: Path, **kwargs) -> subprocess.Popen:
+def track(
+    video: Path, output_csv: Path, *, models: list[dict], device: str = "auto"
+) -> subprocess.Popen:
     """Launch track.py for a single video, writing to *output_csv*. Returns the
     Popen handle. The caller owns the output filename (the GUI assigns a
     globally-unique handle per recording — see app/naming.py — so two videos
     that share a stem can't overwrite each other here).
 
-    kwargs (from arena TRACKER_ARGS):
-        models:  list of model config dicts, each with keys:
-                   model      — path relative to BohacekLabPoseModels/pose_estimation/
-                   instances  — list of {"type": str, "max": int}
-                   stride     — optional (interval, fill_mode)
-                   batch      — optional int
-        device:  str — "auto", "cpu", "cuda", "cuda:0" (default: "auto")
+    models:  list of model config dicts (resolved by pipeline_config), each with:
+               model      — absolute path to the model folder
+               instances  — list of {"type": str, "max": int}
+               stride     — optional [interval, fill_mode]
+               batch      — optional int
+    device:  "auto", "cpu", "cuda", "cuda:0", ... (default: "auto")
     """
     python = _find_python()
-    models_dir = _find_models_dir()
-
-    model_configs: list[dict] = kwargs["models"]
-    device: str = kwargs.get("device", "auto")
 
     cmd = [
         str(python),
@@ -116,11 +113,10 @@ def track(video: Path, output_csv: Path, **kwargs) -> subprocess.Popen:
         device,
     ]
 
-    for mc in model_configs:
-        folder = models_dir / mc["model"]
+    for mc in models:
+        folder = Path(mc["model"])
         if not folder.is_dir():
             raise RuntimeError(f"Model folder not found: {folder}")
-        resolved = {**mc, "model": str(folder)}
-        cmd += ["--model", json.dumps(resolved)]
+        cmd += ["--model", json.dumps(mc)]
 
     return popen_grouped(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

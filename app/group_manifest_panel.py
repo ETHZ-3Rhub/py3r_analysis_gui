@@ -191,6 +191,29 @@ def _looks_like_yolo3r_csv(path: Path) -> bool:
     return header is not None and _YOLO3R_HEADER_MARKERS.issubset(header)
 
 
+# DLC CSVs have three header rows whose first cell is the row-type label.
+_DLC_HEADER_LABELS = ("scorer", "bodyparts", "coords")
+
+
+def _looks_like_dlc_csv(path: Path) -> bool:
+    """Cheap structural check: first cell of each of the first 3 rows must be
+    the expected DLC header label (scorer / bodyparts / coords)."""
+    try:
+        with path.open(newline="", encoding="utf-8", errors="ignore") as f:
+            reader = csv.reader(f)
+            rows = [next(reader, None) for _ in range(3)]
+    except OSError:
+        return False
+    return all(
+        row is not None and row and row[0] == label
+        for row, label in zip(rows, _DLC_HEADER_LABELS, strict=False)
+    )
+
+
+def _is_known_tracking_csv(path: Path) -> bool:
+    return _looks_like_yolo3r_csv(path) or _looks_like_dlc_csv(path)
+
+
 def _ext_label(file_exts: set[str]) -> str:
     return "CSV" if file_exts == CSV_EXTS else "video"
 
@@ -358,10 +381,11 @@ class GroupManifestPanel(QWidget):
 
     def _filter_valid_csvs(self, paths: list[Path]) -> tuple[list[Path], int]:
         """In CSV ("skip tracking") mode, drop files that don't look like
-        YOLO3R tracking output. Returns (valid_paths, n_skipped)."""
+        tracking output from a known tracker (YOLO3R or DLC). Returns
+        (valid_paths, n_skipped)."""
         if self._file_exts != CSV_EXTS:
             return paths, 0
-        valid = [p for p in paths if _looks_like_yolo3r_csv(p)]
+        valid = [p for p in paths if _is_known_tracking_csv(p)]
         return valid, len(paths) - len(valid)
 
     def _warn_skipped_csvs(self, n_skipped: int) -> None:

@@ -1,19 +1,36 @@
 import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
-from app import arenas as arena_pkg  # noqa: E402
+from app import pipeline_config  # noqa: E402
 from app.window import MainWindow  # noqa: E402
 
 
-def test_main_window_constructs_and_discovers_arenas(qapp):
-    arenas = arena_pkg.discover()
-    assert arenas, "expected at least one arena to be discovered"
+def test_discovers_bundled_pipelines():
+    # Patch user_dir to an empty temp dir so any local /user folder (e.g. a dev
+    # ignore.txt suppressing a bundled pipeline) doesn't affect the result.
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch.object(pipeline_config, "user_dir", return_value=Path(tmp)):
+            pipelines = pipeline_config.discover()
 
-    # LDB's tracker model isn't ready yet (READY = False) — must stay hidden
-    assert "Light-Dark Box" not in [mod.NAME for mod in arenas]
+    ids = {e["id"] for e in pipelines}
+    assert {"oft", "epm"} <= ids, "expected the bundled OFT and EPM configs"
 
-    window = MainWindow()
-    # combo includes a leading "— select pipeline —" placeholder entry
-    assert window._arena_combo.count() == len(arenas) + 1
+    # LDB's tracker model isn't ready yet — no ldb.toml ships, so it must be absent.
+    assert "ldb" not in ids
+
+
+def test_main_window_constructs(qapp):
+    # Patch user_dir to an empty temp dir so a dev /user folder (configs that
+    # would add a divider + below-the-line rows) doesn't skew the count.
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch.object(pipeline_config, "user_dir", return_value=Path(tmp)):
+            pipelines = pipeline_config.discover()
+            window = MainWindow()
+    # Only bundled pipelines → all above the divider, plus the leading
+    # "— select pipeline —" placeholder (no divider row).
+    assert window._pipeline_combo.count() == len(pipelines) + 1
