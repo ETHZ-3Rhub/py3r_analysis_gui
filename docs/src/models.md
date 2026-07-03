@@ -7,10 +7,8 @@ Custom model weights go in `/user/models/`. Each model is a named folder.
 ```
 /user/models/
   mouse_finetuned/
-    weights/
-      best.pt
-    meta/
-      output_mapping.csv
+    best.pt
+    output_mapping.csv
 ```
 
 `output_mapping.csv` maps the model's output indices to keypoint names. No header row — columns are `instance_type, keypoint, index`. The `instance_type` value is what you use in `instances` in the config.

@@ -7,7 +7,7 @@ dependencies:
 
   bohacek_lab_pose_models:
     repo: https://github.com/ETHZ-INS/BohacekLabPoseModels.git
-    commit: 92942ee5c71f4b2661cd38a94fcab8437525e431
+    commit: ac241117611f28fa842aff46dcb63defd2b459e4
     # Contains large model weights stored in git-lfs.
     # The build script must run `git lfs pull` after cloning.
     lfs: true

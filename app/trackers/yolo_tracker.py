@@ -11,9 +11,13 @@ Resolution order for the tracking Python:
 
 Resolution order for model weights:
   1. PY3R_POSE_MODELS env var
-  2. <exe_dir>/models/                          (packaged app)
-  3. ../BohacekLabPoseModels/pose_estimation/   (sibling repo, standard layout)
-  4. <repo_root>/BohacekLabPoseModels/pose_estimation/
+  2. <exe_dir>/models/   (packaged app)
+  3. <repo_root>/models/ (development — run scripts/materialize_models.py once
+                          against your BohacekLabPoseModels sibling clone to
+                          produce this; see DEVELOPMENT.md)
+
+Every model folder has the same flat layout: <folder>/best.pt and
+<folder>/output_mapping.csv.
 """
 
 from __future__ import annotations
@@ -71,18 +75,14 @@ def _find_models_dir() -> Path:
         raise RuntimeError(f"Bundled model weights not found at {candidate}")
 
     repo_root = Path(__file__).parent.parent.parent
-    sibling = repo_root.parent / "BohacekLabPoseModels" / "pose_estimation"
-    if sibling.is_dir():
-        return sibling
-
-    nested = repo_root / "BohacekLabPoseModels" / "pose_estimation"
-    if nested.is_dir():
-        return nested
+    candidate = repo_root / "models"
+    if candidate.is_dir():
+        return candidate
 
     raise RuntimeError(
         "Model weights not found.\n"
-        "Expected BohacekLabPoseModels/pose_estimation as a sibling repo, "
-        "or set PY3R_POSE_MODELS."
+        "Run scripts/materialize_models.py against your BohacekLabPoseModels "
+        "sibling clone to produce <repo_root>/models/, or set PY3R_POSE_MODELS."
     )
 
 

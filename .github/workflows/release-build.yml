@@ -72,8 +72,7 @@ jobs:
         run: pyinstaller py3r_analysis_gui.spec --clean --noconfirm
 
       - name: Copy model weights
-        shell: cmd
-        run: xcopy "_pose_models\pose_estimation" "dist\py3r_analysis\models" /E /I /Y
+        run: python scripts/materialize_models.py _pose_models/pose_estimation dist/py3r_analysis/models
 
       - name: Zip artifact
         shell: powershell
