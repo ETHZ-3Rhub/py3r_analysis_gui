@@ -19,4 +19,7 @@ def on_config(config, **kwargs):
 
 
 def on_page_content(html, page, config, files, **kwargs):
-    return html.replace("{py3r_version}", _py3r_version())
+    version = _py3r_version()
+    url = f"https://ethz-ins.github.io/py3r_behaviour/{version}/"
+    link = f'<a href="{url}">{version}</a>'
+    return html.replace("{py3r_version}", link)
