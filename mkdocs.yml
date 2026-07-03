@@ -3,6 +3,11 @@ site_description: Help documentation for py3r Analysis
 docs_dir: docs/src
 site_dir: docs/site
 
+# Docs are opened locally via file:// (app/window.py's Help button), not
+# served over HTTP — directory-style links ("scripts/") show a raw file
+# listing instead of resolving to index.html, so link straight to the file.
+use_directory_urls: false
+
 theme:
   name: material
   logo: img/icon.png
