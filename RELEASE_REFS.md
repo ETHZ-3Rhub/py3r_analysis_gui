@@ -6,4 +6,4 @@ out-of-repo dependencies — it never guesses "latest". Values can be tags
 or full commit hashes.
 
 py3r_behaviour: v3.4.0
-pose_models: 92942ee5c71f4b2661cd38a94fcab8437525e431
+pose_models: ac241117611f28fa842aff46dcb63defd2b459e4

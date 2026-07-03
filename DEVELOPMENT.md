@@ -17,10 +17,21 @@ git clone https://github.com/ETHZ-INS/BohacekLabPoseModels.git
 cd BohacekLabPoseModels && git lfs pull && cd ..
 ```
 
+That clone has a lot of training-time files we don't need at runtime. Flatten
+it into this repo's `models/` folder (gitignored) with:
+
+```bash
+# From this repo's root:
+python scripts/materialize_models.py ../BohacekLabPoseModels/pose_estimation models
+```
+
+This produces `models/<model_name>/{best.pt, output_mapping.csv}` — the same
+flat layout the packaged app ships with. Re-run it whenever you pull a new
+commit of BohacekLabPoseModels.
+
 The pinned commit used for each release is recorded in
-[`versions.yaml`](versions.yaml).  During development you work
-against your local clone directly; the build workflow clones the pinned
-commit into a clean CI workspace.
+[`versions.yaml`](versions.yaml). The build workflow clones the pinned commit
+into a clean CI workspace and runs the same materialize step.
 
 ## Python environments
 

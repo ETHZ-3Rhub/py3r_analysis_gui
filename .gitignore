@@ -27,6 +27,9 @@ vendor/
 # User-supplied pipelines
 /user/
 
+# Materialized model weights (see scripts/materialize_models.py)
+/models/
+
 # OS
 .DS_Store
 Thumbs.db
