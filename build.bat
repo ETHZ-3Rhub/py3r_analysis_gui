@@ -30,7 +30,7 @@ if %ERRORLEVEL% neq 0 (
 
 echo.
 echo Copying model weights...
-xcopy "..\BohacekLabPoseModels\pose_estimation" "dist\py3r_analysis\models" /E /I /Y
+python scripts\materialize_models.py "..\BohacekLabPoseModels\pose_estimation" "dist\py3r_analysis\models"
 if %ERRORLEVEL% neq 0 (
     echo.
     echo Failed to copy model weights.

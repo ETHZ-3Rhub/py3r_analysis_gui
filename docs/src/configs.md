@@ -88,7 +88,7 @@ The **role name** (e.g. `mouse`, `environment`) is a label of your choosing. It 
 
 **`instances`** is a list of `{ type = "...", max = N }` entries:
 
-- `type` — must match an instance name defined in the model's `meta/output_mapping.csv` (e.g. `"mouse_top"`); output columns are named `{type}.{type}_{slot}.{keypoint}.x/y/conf`
+- `type` — must match an instance name defined in the model's `output_mapping.csv` (e.g. `"mouse_top"`); output columns are named `{type}.{type}_{slot}.{keypoint}.x/y/conf`
 - `max` — maximum number of this type to track simultaneously
 
 ---
