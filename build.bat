@@ -21,6 +21,17 @@ if not exist "vendor\uv.exe" (
     )
 )
 
+if not exist "vendor\vc_redist.x64.exe" (
+    echo Downloading vc_redist.x64.exe...
+    mkdir vendor 2>nul
+    powershell -Command "Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile vendor\vc_redist.x64.exe"
+    if not exist "vendor\vc_redist.x64.exe" (
+        echo.
+        echo Failed to download vc_redist.x64.exe.
+        exit /b 1
+    )
+)
+
 pyinstaller py3r_analysis_gui.spec --clean --noconfirm
 if %ERRORLEVEL% neq 0 (
     echo.

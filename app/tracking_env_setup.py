@@ -61,6 +61,49 @@ def _uv_exe() -> str:
     )
 
 
+def _vc_redist_exe() -> Path | None:
+    """Path to the bundled VC++ Redistributable installer, if present.
+
+    Only meaningful in a frozen build — not bundled/needed for dev runs.
+    """
+    if getattr(sys, "frozen", False):
+        candidate = Path(sys._MEIPASS) / "vendor" / "vc_redist.x64.exe"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _install_vc_redist(log_lines: list[str]) -> None:
+    """Silently (re)install the VC++ Redistributable. Idempotent/near-instant
+    if already present - standard practice for Windows installers. Best
+    effort: if this fails, we just proceed - the existing GPU_FALLBACK
+    diagnosis remains the safety net if it turns out to matter."""
+    vc_redist = _vc_redist_exe()
+    if vc_redist is None:
+        return
+    header = "\nInstalling VC++ Redistributable (silent, idempotent)..."
+    print(header)
+    log_lines.append(header + "\n")
+    try:
+        r = subprocess.run(
+            [str(vc_redist), "/install", "/quiet", "/norestart"],
+            capture_output=True,
+            text=True,
+            creationflags=NO_WINDOW,
+        )
+        combined = r.stdout + r.stderr
+        print(combined, end="")
+        log_lines.append(combined)
+        if r.returncode not in (0, 3010):  # 3010 = success, reboot required
+            msg = f"VC++ Redistributable install exited {r.returncode} - continuing.\n"
+            print(msg, end="")
+            log_lines.append(msg)
+    except Exception as exc:
+        msg = f"VC++ Redistributable install failed to run: {exc} - continuing.\n"
+        print(msg, end="")
+        log_lines.append(msg)
+
+
 def _uv_version(uv: str) -> str:
     try:
         r = subprocess.run(
@@ -223,6 +266,8 @@ def setup(tracking_env: Path) -> int:
         out(f"Tracking env:  {tracking_env}")
         out(f"Python base:   {python_install_dir} (uv-managed)")
         out(f"uv:            {_uv_version(uv)}")
+
+        _install_vc_redist(log_lines)
 
         if not _check_internet():
             out("\nNo internet connection detected.")
