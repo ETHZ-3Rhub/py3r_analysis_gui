@@ -9,10 +9,11 @@ from __future__ import annotations
 import datetime
 
 from PySide6.QtCore import QTimer, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from app.confirm_dialog import ask, info
-from app.settings_dialog import EnvCheckWorker, parse_env_result
+from app.install_log_window import InstallLogWindow
+from app.settings_dialog import EnvCheckWorker, _read_install_log, parse_env_result
 from app.theme import get_theme as _get_theme
 from app.tracking_env_setup import _check_internet, _ReinstallWorker
 
@@ -37,6 +38,8 @@ class TrackingEnvPanel(QWidget):
         self._tracking_install_worker: _ReinstallWorker | None = None
         self._install_timer: QTimer | None = None
         self._install_start_time: datetime.datetime | None = None
+        self._log_window = InstallLogWindow(self)
+        self._log_window.set_text(_read_install_log())
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -47,8 +50,12 @@ class TrackingEnvPanel(QWidget):
         self._env_dot.setStyleSheet(f"color: {_T.muted}; font-size: 13px;")
         self._env_lbl = QLabel("Tracking: Checking…")
         self._env_lbl.setStyleSheet(f"color: {_T.muted}; font-size: 11px;")
+        self._log_btn = QPushButton("Show log")
+        self._log_btn.setObjectName("settingsButton")
+        self._log_btn.clicked.connect(self._log_window.show_and_raise)
         layout.addWidget(self._env_dot)
         layout.addWidget(self._env_lbl)
+        layout.addWidget(self._log_btn)
         layout.addStretch()
 
     # ── Public API ───────────────────────────────────────────────────────────
@@ -60,11 +67,6 @@ class TrackingEnvPanel(QWidget):
 
     def is_installing(self) -> bool:
         return self._tracking_install_worker is not None
-
-    def install_worker(self) -> _ReinstallWorker | None:
-        """The in-flight reinstall worker, if any — for SettingsDialog to
-        observe (e.g. connect to `output`) without owning it."""
-        return self._tracking_install_worker
 
     def start_install(self) -> bool:
         """Start a reinstall if one isn't already running (no-op otherwise).
@@ -184,7 +186,10 @@ class TrackingEnvPanel(QWidget):
         self._install_timer.start(1000)
         self._update_install_elapsed()
 
+        self._log_window.set_text("")
+
         self._tracking_install_worker = _ReinstallWorker()
+        self._tracking_install_worker.output.connect(self._log_window.append)
         self._tracking_install_worker.done.connect(self._on_tracking_install_done)
         self._tracking_install_worker.start()
 
@@ -211,11 +216,3 @@ class TrackingEnvPanel(QWidget):
             self.kick_env_check()
         else:
             self._apply_env_status(f"error:{diagnosis}" if diagnosis else "error")
-            reason = diagnosis or "see the log for details."
-            info(
-                self.window(),
-                "Tracking setup failed",
-                f"Setting up the tracking environment failed:\n\n{reason}\n\n"
-                "You can try again from Settings, or use 'Copy diagnostics' "
-                "there to share details.",
-            )

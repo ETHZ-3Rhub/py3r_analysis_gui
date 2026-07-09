@@ -41,6 +41,10 @@ a = Analysis(
         # uv — used by app.tracking_env_setup to build tracking_env/ on the
         # target machine, which won't have uv installed.
         ("vendor/uv.exe", "vendor"),
+        # VC++ Redistributable — silently (re)installed as the first step of
+        # tracking env setup, since torch's CUDA build needs it and many
+        # target machines won't have it. Idempotent if already present.
+        ("vendor/vc_redist.x64.exe", "vendor"),
         *py3r_binaries,
         *umap_binaries,
         *pycirclize_binaries,

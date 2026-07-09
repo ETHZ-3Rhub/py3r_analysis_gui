@@ -61,6 +61,49 @@ def _uv_exe() -> str:
     )
 
 
+def _vc_redist_exe() -> Path | None:
+    """Path to the bundled VC++ Redistributable installer, if present.
+
+    Only meaningful in a frozen build — not bundled/needed for dev runs.
+    """
+    if getattr(sys, "frozen", False):
+        candidate = Path(sys._MEIPASS) / "vendor" / "vc_redist.x64.exe"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _install_vc_redist(log_lines: list[str]) -> None:
+    """Silently (re)install the VC++ Redistributable. Idempotent/near-instant
+    if already present - standard practice for Windows installers. Best
+    effort: if this fails, we just proceed - the existing GPU_FALLBACK
+    diagnosis remains the safety net if it turns out to matter."""
+    vc_redist = _vc_redist_exe()
+    if vc_redist is None:
+        return
+    header = "\nInstalling VC++ Redistributable (silent, idempotent)..."
+    print(header)
+    log_lines.append(header + "\n")
+    try:
+        r = subprocess.run(
+            [str(vc_redist), "/install", "/quiet", "/norestart"],
+            capture_output=True,
+            text=True,
+            creationflags=NO_WINDOW,
+        )
+        combined = r.stdout + r.stderr
+        print(combined, end="")
+        log_lines.append(combined)
+        if r.returncode not in (0, 3010):  # 3010 = success, reboot required
+            msg = f"VC++ Redistributable install exited {r.returncode} - continuing.\n"
+            print(msg, end="")
+            log_lines.append(msg)
+    except Exception as exc:
+        msg = f"VC++ Redistributable install failed to run: {exc} - continuing.\n"
+        print(msg, end="")
+        log_lines.append(msg)
+
+
 def _uv_version(uv: str) -> str:
     try:
         r = subprocess.run(
@@ -160,19 +203,30 @@ def _install_torch(
     )
 
 
-def _verify_cuda(python: str) -> tuple[bool, str]:
-    """Smoke-test the installed torch. Returns (gpu_ok, message)."""
+def _verify_cuda(python: str) -> tuple[bool, str, str]:
+    """Smoke-test the installed torch. Returns (gpu_ok, message, raw_output).
+
+    On failure, *message* is built from stdout only. Our smoke-test script
+    (and torch's own DLL-loading diagnostics, e.g. the "Visual C++
+    Redistributable is not installed" hint) print human-readable context via
+    plain `print()` before anything fails - that goes to stdout. An uncaught
+    exception's traceback goes to stderr by default. So stdout alone gives a
+    clean, traceback-free diagnosis without parsing for any particular marker
+    text. *raw_output* is the full combined stdout+stderr (including any
+    traceback), for the install log.
+    """
     r = subprocess.run(
         [python, "-c", _CUDA_SMOKE_TEST], capture_output=True, text=True, creationflags=NO_WINDOW
     )
-    for line in (r.stdout + r.stderr).splitlines():
+    raw = r.stdout + r.stderr
+    for line in r.stdout.splitlines():
         if line.startswith("CUDA_OK:"):
-            return True, line[len("CUDA_OK:") :]
+            return True, line[len("CUDA_OK:") :], raw
         if line.startswith("CUDA_NOT_AVAILABLE"):
-            return False, "CUDA not available"
+            return False, "CUDA not available", raw
         if line.startswith("CUDA_ERROR:"):
-            return False, line[len("CUDA_ERROR:") :]
-    return False, (r.stdout + r.stderr).strip() or "unknown error"
+            return False, line[len("CUDA_ERROR:") :], raw
+    return False, r.stdout.strip() or r.stderr.strip() or "unknown error", raw
 
 
 _INSTALL_LOG_NAME = "install.log"
@@ -213,6 +267,8 @@ def setup(tracking_env: Path) -> int:
         out(f"Python base:   {python_install_dir} (uv-managed)")
         out(f"uv:            {_uv_version(uv)}")
 
+        _install_vc_redist(log_lines)
+
         if not _check_internet():
             out("\nNo internet connection detected.")
             out("DIAGNOSIS: No internet connection - connect and try again.")
@@ -249,11 +305,12 @@ def setup(tracking_env: Path) -> int:
             return 1
 
         out("\nVerifying GPU...")
-        ok, msg = _verify_cuda(python)
+        ok, msg, raw = _verify_cuda(python)
         if ok:
             out(f"\nReady. GPU: {msg}")
         elif _has_nvidia_gpu():
             out(f"GPU verification failed: {msg}")
+            out(raw)
             out("Falling back to CPU - reinstalling PyTorch...")
             try:
                 _install_torch(log_lines, uv, python, versions, "cpu")
@@ -265,6 +322,7 @@ def setup(tracking_env: Path) -> int:
                 out(f"DIAGNOSIS: {diag}")
                 return 1
             out("\nReady. Running on CPU (GPU unavailable).")
+            out(f"GPU_FALLBACK: {msg.replace(chr(10), ' ').strip()}")
         else:
             out("\nReady. Running on CPU (no GPU detected).")
 

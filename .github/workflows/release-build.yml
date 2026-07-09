@@ -68,6 +68,13 @@ jobs:
           Remove-Item vendor\uv.zip, vendor\uvw.exe, vendor\uvx.exe -ErrorAction SilentlyContinue
           if (-not (Test-Path vendor\uv.exe)) { throw "uv.exe not found after extraction" }
 
+      - name: Fetch vc_redist.x64.exe
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path vendor | Out-Null
+          Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile vendor\vc_redist.x64.exe
+          if (-not (Test-Path vendor\vc_redist.x64.exe)) { throw "vc_redist.x64.exe not found after download" }
+
       - name: Build with PyInstaller
         run: pyinstaller py3r_analysis_gui.spec --clean --noconfirm
 
