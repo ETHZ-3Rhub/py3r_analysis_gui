@@ -79,15 +79,15 @@ jobs:
         run: pyinstaller py3r_analysis_gui.spec --clean --noconfirm
 
       - name: Copy model weights
-        run: python scripts/materialize_models.py _pose_models/pose_estimation dist/py3r_analysis/models
+        run: python scripts/materialize_models.py _pose_models/pose_estimation dist/Analys3R/models
 
       - name: Zip artifact
         shell: powershell
         run: |
           $tag = "${{ inputs.tag }}"
-          Compress-Archive -Path dist\py3r_analysis -DestinationPath "py3r_analysis-$tag.zip"
+          Compress-Archive -Path dist\Analys3R -DestinationPath "Analys3R-$tag.zip"
 
       - name: Upload to draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ inputs.tag }}" "py3r_analysis-${{ inputs.tag }}.zip" --clobber
+        run: gh release upload "${{ inputs.tag }}" "Analys3R-${{ inputs.tag }}.zip" --clobber

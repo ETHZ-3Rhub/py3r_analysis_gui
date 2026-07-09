@@ -1,12 +1,12 @@
 @echo off
-:: Build py3r Analysis GUI as a standalone Windows executable.
+:: Build Analys3R as a standalone Windows executable.
 :: Run from the repo root with the project venv active.
 ::
 :: Requirements:
 ::   pip install pyinstaller
 ::   pip install -e .   (and py3r-behaviour[viz] installed)
 ::
-:: Output: dist\py3r_analysis\py3r_analysis.exe
+:: Output: dist\Analys3R\Analys3R.exe
 
 if not exist "vendor\uv.exe" (
     echo Downloading uv.exe...
@@ -41,7 +41,7 @@ if %ERRORLEVEL% neq 0 (
 
 echo.
 echo Copying model weights...
-python scripts\materialize_models.py "..\BohacekLabPoseModels\pose_estimation" "dist\py3r_analysis\models"
+python scripts\materialize_models.py "..\BohacekLabPoseModels\pose_estimation" "dist\Analys3R\models"
 if %ERRORLEVEL% neq 0 (
     echo.
     echo Failed to copy model weights.
@@ -49,4 +49,4 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo Build complete: dist\py3r_analysis\py3r_analysis.exe
+echo Build complete: dist\Analys3R\Analys3R.exe

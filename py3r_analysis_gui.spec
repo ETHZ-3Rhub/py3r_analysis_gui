@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# PyInstaller spec for py3r Analysis GUI.
+# PyInstaller spec for Analys3R.
 # Commit this file — do not rely on auto-generation.
 #
 # Build with:  pyinstaller py3r_analysis_gui.spec --clean
@@ -89,7 +89,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="py3r_analysis",
+    name="Analys3R",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -107,5 +107,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="py3r_analysis",
+    name="Analys3R",
 )
