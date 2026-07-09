@@ -1,4 +1,4 @@
-"""Entry point for py3r Analysis GUI."""
+"""Entry point for Analys3R."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def main() -> None:
     from app.window import MainWindow
 
     app = QApplication(sys.argv)
-    app.setApplicationName("py3r Analysis")
+    app.setApplicationName("Analys3R")
     app.setWindowIcon(QIcon(str(_icon_path())))
     window = MainWindow()
     window.show()

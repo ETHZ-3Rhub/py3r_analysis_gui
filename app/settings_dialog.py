@@ -67,7 +67,7 @@ def _gpu_install_failed() -> bool:
 def _gather_diagnostics() -> str:
     """Bundle the install log + basic system info for support."""
     lines = [
-        f"py3r Analysis  v{get_version()}",
+        f"Analys3R  v{get_version()}",
         f"OS: {platform.platform()}",
     ]
     try:
@@ -200,7 +200,7 @@ class SettingsDialog(QDialog):
         layout.setSpacing(16)
 
         # ── Version ───────────────────────────────────────────────────────────
-        version_lbl = QLabel(f"py3r Analysis  v{get_version()}")
+        version_lbl = QLabel(f"Analys3R  v{get_version()}")
         version_lbl.setObjectName("versionLabel")
         layout.addWidget(version_lbl)
 

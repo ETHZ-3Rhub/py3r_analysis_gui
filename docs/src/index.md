@@ -1,4 +1,4 @@
-# py3r Analysis
+# Analys3R
 
 Select a pipeline, load your files, pick an output folder, run. Most things are labelled.
 

@@ -292,7 +292,7 @@ class PipelineRunner(QThread):
         csv_files = self._csv_files
         config = self._config
         lines: list[str] = []
-        lines.append("py3r Analysis — run report")
+        lines.append("Analys3R — run report")
         lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
         lines.append(f"App version: {app_version}")
         lines.append(f"Pipeline: {config['name']}  (config: {config['config_path'].name})")
@@ -351,7 +351,7 @@ class PipelineRunner(QThread):
                 for f in files:
                     lines.append(f"    {f}")
 
-        (self._output_dir / "py3r_analysis_report.txt").write_text("\n".join(lines) + "\n")
+        (self._output_dir / "Analys3R_report.txt").write_text("\n".join(lines) + "\n")
 
     def _resolved_config_lines(self) -> list[str]:
         """Render the resolved (flattened base + delta) config so 'what actually
@@ -381,7 +381,7 @@ class PipelineRunner(QThread):
         return out
 
     def _write_warning_file(self) -> None:
-        path = self._output_dir / "py3r_analysis_ERRORS.txt"
+        path = self._output_dir / "Analys3R_ERRORS.txt"
         with path.open("w") as f:
             f.write(
                 f"{len(self._warnings)} issue(s) occurred during processing.\n"

@@ -14,7 +14,7 @@ def _py3r_version() -> str:
 
 
 def on_config(config, **kwargs):
-    config["site_name"] = f"py3r Analysis v{_app_version()}"
+    config["site_name"] = f"Analys3R v{_app_version()}"
     return config
 
 
