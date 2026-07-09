@@ -20,7 +20,7 @@ from pathlib import Path
 
 REPO = "ETHZ-3Rhub/py3r_analysis_gui"
 API_URL = f"https://api.github.com/repos/{REPO}/releases"
-ASSET_RE = re.compile(r"^py3r_analysis-v.*\.zip$")
+ASSET_RE = re.compile(r"^Analys3R-v.*\.zip$")
 
 SITE_DIR = Path(__file__).parent
 TEMPLATE = SITE_DIR / "template.html"
@@ -78,7 +78,7 @@ def _rows(releases: list[dict], empty_message: str) -> str:
 def render(releases: list[dict]) -> str:
     with_assets = [r for r in releases if asset_url(r)]
     if not with_assets:
-        sys.exit("No published release has a matching build asset (py3r_analysis-v*.zip).")
+        sys.exit("No published release has a matching build asset (Analys3R-v*.zip).")
 
     stable = [r for r in with_assets if not r["prerelease"]]
     prereleases = [r for r in with_assets if r["prerelease"]]

@@ -72,7 +72,7 @@ def _options_spec(options: dict) -> list[dict]:
 class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"py3r Analysis  v{get_version()}")
+        self.setWindowTitle(f"Analys3R  v{get_version()}")
         self.setMinimumSize(1020, 700)
         self._separators: list[QFrame] = []
         self._apply_stylesheet()

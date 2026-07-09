@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# PyInstaller spec for py3r Analysis GUI.
+# PyInstaller spec for Analys3R.
 # Commit this file — do not rely on auto-generation.
 #
 # Build with:  pyinstaller py3r_analysis_gui.spec --clean
@@ -41,6 +41,10 @@ a = Analysis(
         # uv — used by app.tracking_env_setup to build tracking_env/ on the
         # target machine, which won't have uv installed.
         ("vendor/uv.exe", "vendor"),
+        # VC++ Redistributable — silently (re)installed as the first step of
+        # tracking env setup, since torch's CUDA build needs it and many
+        # target machines won't have it. Idempotent if already present.
+        ("vendor/vc_redist.x64.exe", "vendor"),
         *py3r_binaries,
         *umap_binaries,
         *pycirclize_binaries,
@@ -85,7 +89,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="py3r_analysis",
+    name="Analys3R",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -103,5 +107,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="py3r_analysis",
+    name="Analys3R",
 )

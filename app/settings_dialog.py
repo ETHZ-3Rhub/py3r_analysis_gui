@@ -9,7 +9,6 @@ import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import QThread, QTimer, Signal
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -18,16 +17,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QTextEdit,
     QVBoxLayout,
 )
 
 from app.proc_utils import NO_WINDOW
 from app.theme import all_themes, update_theme
 from app.theme import get_theme as _get_theme
-from app.tracking_env_setup import _INSTALL_LOG_NAME, _ReinstallWorker, _uv_exe, _uv_version
-
-_T = _get_theme()  # cached at import for inline widget-creation calls
+from app.tracking_env_setup import _INSTALL_LOG_NAME, _uv_exe, _uv_version
 
 
 def get_version() -> str:
@@ -50,12 +46,28 @@ def _find_tracking_python() -> Path | None:
     return candidate if candidate.exists() else None
 
 
-def _gather_diagnostics() -> str:
-    """Bundle the install log + basic system info for support."""
+def _read_install_log() -> str:
+    """Raw contents of the tracking-env install log, if one exists."""
     from app.trackers.yolo_tracker import tracking_env_dir
 
+    log_path = tracking_env_dir() / _INSTALL_LOG_NAME
+    if log_path.exists():
+        return log_path.read_text(encoding="utf-8", errors="replace")
+    return "(no install log found)"
+
+
+def _gpu_install_failed() -> bool:
+    """Whether the current tracking_env's install log recorded a GPU install
+    that fell back to CPU (see the `GPU_FALLBACK:` marker in tracking_env_setup.py).
+    install.log is overwritten on every (re)install, so this always reflects
+    the currently active environment, not a stale one."""
+    return "GPU_FALLBACK:" in _read_install_log()
+
+
+def _gather_diagnostics() -> str:
+    """Bundle the install log + basic system info for support."""
     lines = [
-        f"py3r Analysis  v{get_version()}",
+        f"Analys3R  v{get_version()}",
         f"OS: {platform.platform()}",
     ]
     try:
@@ -68,13 +80,9 @@ def _gather_diagnostics() -> str:
     except SystemExit:
         lines.append("uv: not found")
 
-    log_path = tracking_env_dir() / _INSTALL_LOG_NAME
     lines.append("")
-    if log_path.exists():
-        lines.append(f"--- {log_path} ---")
-        lines.append(log_path.read_text(encoding="utf-8", errors="replace"))
-    else:
-        lines.append("(no install log found)")
+    lines.append("--- install log ---")
+    lines.append(_read_install_log())
     return "\n".join(lines)
 
 
@@ -89,6 +97,15 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
             f"Tracking is running on your GPU using CUDA {cuda_ver} — optimal performance.",
         )
     if result == "cpu":
+        if _gpu_install_failed():
+            return (
+                t.warn,
+                "CPU only (GPU install failed)",
+                "An NVIDIA GPU was detected, but the GPU-accelerated setup didn't "
+                "work, so tracking is running on CPU (slower) instead.\n"
+                "Click 'Show log' for details, or try (Re)install tracking "
+                "environment again.",
+            )
         return (
             t.warn,
             "CPU only",
@@ -144,9 +161,13 @@ class EnvCheckWorker(QThread):
                 timeout=30,
                 creationflags=NO_WINDOW,
             )
-            self.done.emit(r.stdout.strip() if r.returncode == 0 else "error")
-        except Exception:
-            self.done.emit("error")
+            if r.returncode == 0:
+                self.done.emit(r.stdout.strip())
+            else:
+                reason = r.stderr.strip() or f"exited with code {r.returncode}"
+                self.done.emit(f"error:{reason}")
+        except Exception as exc:
+            self.done.emit(f"error:{exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +182,6 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(480)
         self._env_panel = env_panel
         self._check_worker: EnvCheckWorker | None = None
-        self._connected_worker: _ReinstallWorker | None = None
         self._reinstalling = False
         self._separators: list[QFrame] = []
         self._status_state = "checking"  # "checking" | "installing" | EnvCheckWorker result
@@ -180,7 +200,7 @@ class SettingsDialog(QDialog):
         layout.setSpacing(16)
 
         # ── Version ───────────────────────────────────────────────────────────
-        version_lbl = QLabel(f"py3r Analysis  v{get_version()}")
+        version_lbl = QLabel(f"Analys3R  v{get_version()}")
         version_lbl.setObjectName("versionLabel")
         layout.addWidget(version_lbl)
 
@@ -209,13 +229,6 @@ class SettingsDialog(QDialog):
         self._diag_btn.setObjectName("secondaryButton")
         self._diag_btn.clicked.connect(self._copy_diagnostics)
         layout.addWidget(self._diag_btn)
-
-        self._log = QTextEdit()
-        self._log.setReadOnly(True)
-        self._log.setObjectName("logBox")
-        self._log.setFixedHeight(180)
-        self._log.setVisible(False)
-        layout.addWidget(self._log)
 
         layout.addWidget(self._sep())
 
@@ -269,7 +282,6 @@ class SettingsDialog(QDialog):
     def _start_reinstall(self) -> None:
         if not self._env_panel.start_install():
             return  # declined, e.g. by the pre-flight connectivity check
-        self._log.clear()
         self._enter_installing_ui()
 
     def _copy_diagnostics(self) -> None:
@@ -279,22 +291,9 @@ class SettingsDialog(QDialog):
 
     def _enter_installing_ui(self) -> None:
         self._reinstalling = True
-        self._log.setVisible(True)
         self._reinstall_btn.setEnabled(False)
         self._reinstall_btn.setText("Installing…")
         self._apply_status("installing", "Installing…", "")
-        self._connect_to_install_worker()
-
-    def _connect_to_install_worker(self) -> None:
-        worker = self._env_panel.install_worker()
-        if worker is not None and worker is not self._connected_worker:
-            worker.output.connect(self._on_reinstall_output)
-            self._connected_worker = worker
-
-    def _on_reinstall_output(self, text: str) -> None:
-        self._log.setTextColor(QColor(_T.muted))
-        self._log.insertPlainText(text)
-        self._log.ensureCursorVisible()
 
     def _on_env_panel_status_changed(self) -> None:
         status = self._env_panel.status()
@@ -307,24 +306,12 @@ class SettingsDialog(QDialog):
             self._reinstalling = False
             self._reinstall_btn.setEnabled(True)
             self._reinstall_btn.setText("(Re)install tracking environment")
-            if status == "cpu" or status.startswith("cuda:"):
-                self._log.setTextColor(QColor(_T.success))
-                self._log.insertPlainText("\nDone.\n")
-            else:
-                self._log.setTextColor(QColor(_T.error))
-                self._log.insertPlainText("\nInstallation failed — see output above.\n")
 
-        self._connected_worker = None
         _, label, tooltip = parse_env_result(status)
         self._apply_status(status, label, tooltip)
 
     def _on_finished(self) -> None:
         self._env_panel.status_changed.disconnect(self._on_env_panel_status_changed)
-        if self._connected_worker is not None:
-            try:
-                self._connected_worker.output.disconnect(self._on_reinstall_output)
-            except TypeError:
-                pass  # already disconnected
 
     # ── Theme ─────────────────────────────────────────────────────────────────
 
@@ -400,15 +387,6 @@ class SettingsDialog(QDialog):
             QPushButton#secondaryButton:disabled {{
                 color: {_T.muted};
                 border-color: {_T.muted};
-            }}
-            QTextEdit#logBox {{
-                background-color: {_T.display};
-                border: 1px solid {_T.muted};
-                border-radius: 5px;
-                font-family: "Consolas", monospace;
-                font-size: 11px;
-                padding: 4px;
-                color: {_T.muted};
             }}
             QScrollBar:vertical {{
                 background: {_T.display};

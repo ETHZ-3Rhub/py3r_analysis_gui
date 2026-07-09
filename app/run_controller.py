@@ -196,7 +196,7 @@ class RunController(QObject):
         # Nest everything inside a timestamped run folder of our own — if the
         # user points this at somewhere like their Desktop, we don't want to
         # scatter our tracking/figures/etc. folders directly into it.
-        run_name = f"py3r_analysis_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+        run_name = f"Analys3R_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
         out_root = Path(self._out_edit.text().strip())
         output_dir = out_root / run_name
         if output_dir.exists():

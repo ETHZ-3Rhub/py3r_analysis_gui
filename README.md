@@ -1,4 +1,4 @@
-# py3r analysis GUI
+# Analys3R
 
 > **This project is still in development and has no stable release yet.** Pre-release builds are available for testing but are not recommended for general use.
 
