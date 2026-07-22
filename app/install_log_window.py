@@ -9,10 +9,12 @@ an install is currently running or you're looking at the last one.
 
 from __future__ import annotations
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -20,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.theme import get_theme as _get_theme
+from app.tracking_env_setup import _diagnostics_header
 
 
 class InstallLogWindow(QDialog):
@@ -32,16 +35,22 @@ class InstallLogWindow(QDialog):
         layout.setContentsMargins(16, 16, 16, 12)
         layout.setSpacing(10)
 
+        # Always visible, not just baked into what "Copy log" sends - so the
+        # button copies exactly what's on screen, nothing extra.
+        self._header_lbl = QLabel(_diagnostics_header())
+        self._header_lbl.setObjectName("diagHeader")
+        layout.addWidget(self._header_lbl)
+
         self._text = QTextEdit()
         self._text.setReadOnly(True)
         self._text.setObjectName("logBox")
         layout.addWidget(self._text)
 
         btn_row = QHBoxLayout()
-        copy_btn = QPushButton("Copy log")
-        copy_btn.setObjectName("dlgBtn")
-        copy_btn.clicked.connect(self._copy)
-        btn_row.addWidget(copy_btn)
+        self._copy_btn = QPushButton("Copy log")
+        self._copy_btn.setObjectName("dlgBtn")
+        self._copy_btn.clicked.connect(self._copy)
+        btn_row.addWidget(self._copy_btn)
         btn_row.addStretch()
         hide_btn = QPushButton("Hide log")
         hide_btn.setObjectName("dlgBtnPrimary")
@@ -60,6 +69,7 @@ class InstallLogWindow(QDialog):
         self._scroll_to_end()
 
     def show_and_raise(self) -> None:
+        self._header_lbl.setText(_diagnostics_header())
         self.show()
         self.raise_()
         self.activateWindow()
@@ -69,7 +79,11 @@ class InstallLogWindow(QDialog):
         scrollbar.setValue(scrollbar.maximum())
 
     def _copy(self) -> None:
-        QApplication.clipboard().setText(self._text.toPlainText())
+        # Copies exactly what's on screen: the header above, then the log.
+        text = f"{self._header_lbl.text()}\n\n--- install log ---\n{self._text.toPlainText()}"
+        QApplication.clipboard().setText(text)
+        self._copy_btn.setText("Copied!")
+        QTimer.singleShot(1500, lambda: self._copy_btn.setText("Copy log"))
 
     def closeEvent(self, event) -> None:
         # The window is never destroyed - the [x] button just hides it, same
