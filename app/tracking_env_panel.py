@@ -1,21 +1,121 @@
 """Tracking-environment status display and install-gating.
 
 Shows the "Tracking: ..." status dot/label and handles checking, offering,
-and running the background `tracking_env` install.
+and running the background `tracking_env` install. Single source of truth
+for tracking-env status — nothing else (e.g. Settings) duplicates it.
 """
 
 from __future__ import annotations
 
 import datetime
+import os
+import platform
+import subprocess
+from pathlib import Path
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from app.confirm_dialog import ask, info
 from app.install_log_window import InstallLogWindow
-from app.settings_dialog import EnvCheckWorker, _read_install_log, parse_env_result
+from app.proc_utils import NO_WINDOW
 from app.theme import get_theme as _get_theme
-from app.tracking_env_setup import _check_internet, _ReinstallWorker
+from app.tracking_env_setup import (
+    _check_internet,
+    _gpu_install_failed,
+    _read_install_log,
+    _ReinstallWorker,
+)
+
+
+def _find_tracking_python() -> Path | None:
+    if override := os.environ.get("PY3R_TRACKER_PYTHON"):
+        return Path(override)
+    from app.trackers.yolo_tracker import tracking_env_dir
+
+    subdir = "Scripts" if platform.system() == "Windows" else "bin"
+    exe = "python.exe" if platform.system() == "Windows" else "python"
+    candidate = tracking_env_dir() / subdir / exe
+    return candidate if candidate.exists() else None
+
+
+def parse_env_result(result: str) -> tuple[str, str, str]:
+    """Return (colour, short_label, tooltip) for a raw EnvCheckWorker result."""
+    t = _get_theme()
+    if result.startswith("cuda:"):
+        cuda_ver = result[5:]
+        return (
+            t.success,
+            f"GPU (CUDA {cuda_ver})",
+            f"Tracking is running on your GPU using CUDA {cuda_ver} — optimal performance.",
+        )
+    if result == "cpu":
+        if _gpu_install_failed():
+            return (
+                t.warn,
+                "CPU only (GPU install failed)",
+                "An NVIDIA GPU was detected, but the GPU-accelerated setup didn't "
+                "work, so tracking is running on CPU (slower) instead.\n"
+                "Click 'Show log' for details, or try (Re)install tracking "
+                "environment again.",
+            )
+        return (
+            t.warn,
+            "CPU only",
+            "Tracking is running on CPU, which is slower.\n"
+            "If you have an NVIDIA GPU, go to Settings → (Re)install tracking environment\n"
+            "to enable CUDA acceleration.",
+        )
+    if result == "not_installed":
+        return (
+            t.error,
+            "Not installed",
+            "The tracking environment has not been set up yet.\n"
+            "Open Settings and click (Re)install tracking environment.",
+        )
+    if result.startswith("error:"):
+        reason = result[len("error:") :] or "see the install log for details."
+        return (
+            t.error,
+            "Setup failed",
+            f"Tracking setup failed: {reason}\n"
+            "Use 'Show log' > 'Copy log' to share details, or "
+            "try (Re)install tracking environment again.",
+        )
+    return (t.error, "Status unknown", "Could not determine tracking environment status.")
+
+
+class EnvCheckWorker(QThread):
+    """Emits one of: "cuda:<version>", "cpu", "not_installed", "error"."""
+
+    done = Signal(str)
+
+    def run(self) -> None:
+        python = _find_tracking_python()
+        if python is None:
+            self.done.emit("not_installed")
+            return
+        try:
+            r = subprocess.run(
+                [
+                    str(python),
+                    "-c",
+                    "import torch; "
+                    "print(('cuda:' + (torch.version.cuda or 'unknown')) "
+                    "if torch.cuda.is_available() else 'cpu')",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                creationflags=NO_WINDOW,
+            )
+            if r.returncode == 0:
+                self.done.emit(r.stdout.strip())
+            else:
+                reason = r.stderr.strip() or f"exited with code {r.returncode}"
+                self.done.emit(f"error:{reason}")
+        except Exception as exc:
+            self.done.emit(f"error:{exc}")
 
 
 class TrackingEnvPanel(QWidget):

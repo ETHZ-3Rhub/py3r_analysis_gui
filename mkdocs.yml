@@ -1,7 +1,7 @@
 site_name: Analys3R  # overwritten at build time by mkdocs_hooks.py
 site_description: Help documentation for Analys3R
-docs_dir: docs/src
-site_dir: docs/site
+docs_dir: docs_src
+site_dir: docs
 
 # Docs are opened locally via file:// (app/window.py's Help button), not
 # served over HTTP — directory-style links ("scripts/") show a raw file

@@ -16,7 +16,7 @@ build/
 *.spec.bak
 
 # MkDocs build output
-docs/site/
+/docs/
 
 # Generated download page (docs-site/generate.py output)
 docs-site/_build/
