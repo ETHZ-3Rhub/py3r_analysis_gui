@@ -8,6 +8,8 @@ Two-panel layout:
 from __future__ import annotations
 
 import os
+import webbrowser
+from pathlib import Path
 
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
@@ -70,7 +72,7 @@ def _options_spec(options: dict) -> list[dict]:
 class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"py3r Analysis  v{get_version()}")
+        self.setWindowTitle(f"Analys3R  v{get_version()}")
         self.setMinimumSize(1020, 700)
         self._separators: list[QFrame] = []
         self._apply_stylesheet()
@@ -262,6 +264,13 @@ class MainWindow(QWidget):
         self._env_panel = TrackingEnvPanel()
         bottom_row.addWidget(self._env_panel)
 
+        help_btn = QPushButton("?  Help")
+        help_btn.setObjectName("settingsButton")
+        help_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        help_btn.clicked.connect(self._open_help)
+        bottom_row.addWidget(help_btn)
+        bottom_row.addSpacing(12)
+
         settings_btn = QPushButton("⚙  Settings")
         settings_btn.setObjectName("settingsButton")
         settings_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
@@ -426,6 +435,10 @@ class MainWindow(QWidget):
     def _on_env_status_changed(self) -> None:
         self._update_video_radio_availability()
         self._run_controller.refresh_run_button()
+
+    def _open_help(self) -> None:
+        docs = Path(__file__).parent.parent / "docs" / "index.html"
+        webbrowser.open(docs.as_uri())
 
     def _open_settings(self) -> None:
         SettingsDialog(self._env_panel, self).exec()

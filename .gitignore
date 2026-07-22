@@ -15,11 +15,20 @@ build/
 # PyInstaller
 *.spec.bak
 
+# MkDocs build output
+/docs/
+
+# Generated download page (docs-site/generate.py output)
+docs-site/_build/
+
 # Downloaded by build.bat — not committed
 vendor/
 
 # User-supplied pipelines
 /user/
+
+# Materialized model weights (see scripts/materialize_models.py)
+/models/
 
 # OS
 .DS_Store

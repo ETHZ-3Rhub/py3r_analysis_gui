@@ -2,13 +2,13 @@ name = "Open Field Test"
 arena_image = "oft_arena.png"
 
 [models.environment]
-weights = "environment/environment_main"
+weights = "environment_main"
 instances = [{ type = "oft", max = 1 }]
 stride = [30, "ffill"]
 batch = 32
 
 [models.mouse]
-weights = "mouse/mouse_top_main"
+weights = "mouse_top_main"
 instances = [{ type = "mouse_top", max = 1 }]
 batch = 32
 

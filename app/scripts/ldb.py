@@ -141,27 +141,23 @@ def _anim_style(pts: dict) -> dict:
 # ── Entry point ───────────────────────────────────────────────────────────────
 def run(
     *,
-    manifest: list[tuple[str, str, Path]],
+    tc: p3b.TrackingCollection,
     output_dir: Path,
     comparisons: list[tuple[str, str]] | None = None,
-    video_paths: dict[str, Path] | None = None,
-    loader: dict,
+    group_tag: str = "group",
     arena_diagonal_m: float,
     likelihood_min: float,
     point_map: dict[str, str] | None = None,
     numbins: int | None = None,
     n_clusters: int = _N_CLUSTERS,
 ) -> None:
-    """Full LDB pipeline across all groups. See ``oft_pipeline.run`` for the
-    shared parameter conventions."""
+    """Full LDB pipeline across all groups."""
     import matplotlib
 
     matplotlib.use("Agg")  # non-interactive backend — safe in subprocess
 
     comparisons = comparisons or []
-    video_paths = video_paths or {}
     pts = _shared.resolve_points(POINTS, point_map)
-    group_tag = loader.get("group_tag", "group")
     bc = pts["bodycentre"]
 
     dirs = _shared.make_output_dirs(output_dir)
@@ -171,19 +167,16 @@ def run(
     figures_dir = dirs["figures"]
     bfa_dir = dirs["bfa"]
 
-    group_names = list(dict.fromkeys(group for _, group, _ in manifest))
-
-    print("Loading tracking data...")
-    tc_all = _shared.load(manifest, video_paths, loader)
+    group_names = list(dict.fromkeys(tc[h].tags[group_tag] for h in tc))
 
     print("Preprocessing...")
-    _shared.preprocess(tc_all, likelihood_min)
-    tc_all.each.rescale_by_known_distance(
+    _shared.preprocess(tc, likelihood_min)
+    tc.each.rescale_by_known_distance(
         point1=pts["tl"], point2=pts["br"], distance_in_metres=arena_diagonal_m
     )
 
     print("Saving trajectory QC plots...")
-    tc_grouped = tc_all.groupby(tags=[group_tag])
+    tc_grouped = tc.groupby(tags=[group_tag])
     _shared.plot_trajectory_qc(
         tc_grouped,
         group_names,
@@ -194,7 +187,7 @@ def run(
     )
 
     print("Computing features...")
-    fc = tc_all.to_features()
+    fc = tc.to_features()
     _compute_features(fc, pts)
 
     print(f"Clustering (k={n_clusters})...")

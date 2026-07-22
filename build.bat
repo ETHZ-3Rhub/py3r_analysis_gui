@@ -1,12 +1,12 @@
 @echo off
-:: Build py3r Analysis GUI as a standalone Windows executable.
+:: Build Analys3R as a standalone Windows executable.
 :: Run from the repo root with the project venv active.
 ::
 :: Requirements:
 ::   pip install pyinstaller
 ::   pip install -e .   (and py3r-behaviour[viz] installed)
 ::
-:: Output: dist\py3r_analysis\py3r_analysis.exe
+:: Output: dist\Analys3R\Analys3R.exe
 
 if not exist "vendor\uv.exe" (
     echo Downloading uv.exe...
@@ -21,6 +21,17 @@ if not exist "vendor\uv.exe" (
     )
 )
 
+if not exist "vendor\vc_redist.x64.exe" (
+    echo Downloading vc_redist.x64.exe...
+    mkdir vendor 2>nul
+    powershell -Command "Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile vendor\vc_redist.x64.exe"
+    if not exist "vendor\vc_redist.x64.exe" (
+        echo.
+        echo Failed to download vc_redist.x64.exe.
+        exit /b 1
+    )
+)
+
 pyinstaller py3r_analysis_gui.spec --clean --noconfirm
 if %ERRORLEVEL% neq 0 (
     echo.
@@ -30,7 +41,7 @@ if %ERRORLEVEL% neq 0 (
 
 echo.
 echo Copying model weights...
-xcopy "..\BohacekLabPoseModels\pose_estimation" "dist\py3r_analysis\models" /E /I /Y
+python scripts\materialize_models.py "..\BohacekLabPoseModels\pose_estimation" "dist\Analys3R\models"
 if %ERRORLEVEL% neq 0 (
     echo.
     echo Failed to copy model weights.
@@ -38,4 +49,4 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo Build complete: dist\py3r_analysis\py3r_analysis.exe
+echo Build complete: dist\Analys3R\Analys3R.exe

@@ -187,25 +187,23 @@ class PipelineRunner(QThread):
         config = self._config
         script = config["script"]
 
-        # The dumped loader dict + the [script] deployment params + the resolved
-        # option values all flow to the entry fn as kwargs; fixed run-context is
-        # passed by the names the contract guarantees.
-        kwargs = {
+        # The worker loads the TrackingCollection then passes it to the script.
+        # "load" args are consumed by the worker; "kwargs" are passed to the script.
+        load = {
             "manifest": manifest,
-            "output_dir": self._output_dir,
-            "comparisons": self._comparisons,
             "video_paths": video_paths,
             "loader": config["loader"],
+        }
+        kwargs = {
+            "output_dir": self._output_dir,
+            "comparisons": self._comparisons,
+            "group_tag": config["loader"]["group_tag"],
             **script["params"],
         }
         for name, spec in script["options"].items():
             kwargs[name] = self._options.get(name, spec.get("default"))
 
-        # Run the pipeline in its own subprocess: a long-running in-process call
-        # can only be stopped via QThread.terminate(), which is unsafe (it can
-        # leave native locks held and hang the GUI). A subprocess can be killed
-        # outright via the same kill_tree() used for the tracker.
-        payload = {"resolved": config, "kwargs": kwargs}
+        payload = {"resolved": config, "load": load, "kwargs": kwargs}
         with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
             pickle.dump(payload, f)
             payload_path = Path(f.name)
@@ -294,7 +292,7 @@ class PipelineRunner(QThread):
         csv_files = self._csv_files
         config = self._config
         lines: list[str] = []
-        lines.append("py3r Analysis — run report")
+        lines.append("Analys3R — run report")
         lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
         lines.append(f"App version: {app_version}")
         lines.append(f"Pipeline: {config['name']}  (config: {config['config_path'].name})")
@@ -353,7 +351,7 @@ class PipelineRunner(QThread):
                 for f in files:
                     lines.append(f"    {f}")
 
-        (self._output_dir / "py3r_analysis_report.txt").write_text("\n".join(lines) + "\n")
+        (self._output_dir / "Analys3R_report.txt").write_text("\n".join(lines) + "\n")
 
     def _resolved_config_lines(self) -> list[str]:
         """Render the resolved (flattened base + delta) config so 'what actually
@@ -383,7 +381,7 @@ class PipelineRunner(QThread):
         return out
 
     def _write_warning_file(self) -> None:
-        path = self._output_dir / "py3r_analysis_ERRORS.txt"
+        path = self._output_dir / "Analys3R_ERRORS.txt"
         with path.open("w") as f:
             f.write(
                 f"{len(self._warnings)} issue(s) occurred during processing.\n"

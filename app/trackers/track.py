@@ -14,7 +14,7 @@ The CSV format matches what py3r_behaviour's TrackingCollection.from_yolo3r() ex
     {instance_type}.{instance_type}_{slot}.x1/y1/x2/y2/conf
 
 Model config fields:
-    model      — path to BohacekLabPoseModels model folder
+    model      — path to a model folder (<folder>/best.pt, <folder>/output_mapping.csv)
     instances  — list of {"type": str, "max": int}
                    max: number of output slots (_0.._N-1); up to 4x max track
                    IDs are buffered internally, best max selected post-hoc.
@@ -67,7 +67,7 @@ class ModelSpec:
 
 
 # ---------------------------------------------------------------------------
-# BohacekLabPoseModels-specific loading
+# Model loading
 # ---------------------------------------------------------------------------
 
 
@@ -78,16 +78,16 @@ def load_model_spec(
     stride_tuple=None,
     batch: int = 1,
 ) -> ModelSpec:
-    """Load a ModelSpec from a BohacekLabPoseModels folder.
+    """Load a ModelSpec from a model folder.
 
     instance_configs: list of {"type": str, "max": int}
     stride_tuple:     (interval, fill_mode) or None
     """
-    weights = model_folder / "weights" / "best.pt"
+    weights = model_folder / "best.pt"
     if not weights.exists():
         raise RuntimeError(f"Weights not found: {weights}")
 
-    mapping_csv = model_folder / "meta" / "output_mapping.csv"
+    mapping_csv = model_folder / "output_mapping.csv"
     if not mapping_csv.exists():
         raise RuntimeError(f"output_mapping.csv not found: {mapping_csv}")
 

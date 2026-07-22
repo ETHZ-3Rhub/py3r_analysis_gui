@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Analys3R — Download</title>
+<link rel="icon" type="image/png" href="assets/icon.png">
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2e38;
+    --text: #e6e8eb;
+    --muted: #9aa1ac;
+    --accent: #4f8cff;
+    --accent-hover: #6fa2ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .wrap {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 64px 24px 96px;
+  }
+  header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+  header img {
+    width: 64px;
+    height: 64px;
+    margin-bottom: 16px;
+  }
+  h1 {
+    font-size: 1.9rem;
+    margin: 0 0 8px;
+  }
+  .tagline {
+    color: var(--muted);
+    margin: 0;
+  }
+  .latest {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    text-align: center;
+    margin: 40px 0;
+  }
+  .latest .version {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin: 0 0 4px;
+  }
+  .btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    text-decoration: none;
+    font-weight: 600;
+    padding: 12px 28px;
+    border-radius: 8px;
+    margin-top: 8px;
+    transition: background 0.15s ease;
+  }
+  .btn:hover { background: var(--accent-hover); }
+  .note {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-top: 14px;
+  }
+  h2 {
+    font-size: 1.1rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 48px 0 12px;
+  }
+  .no-stable {
+    color: var(--muted);
+    font-size: 1.05rem;
+    margin: 0;
+  }
+  .prerelease-section {
+    margin-top: 56px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    opacity: 0.75;
+  }
+  .prerelease-section h2 {
+    color: #b08a3e;
+  }
+  .prerelease-warning {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin: 0 0 16px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  th {
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+  td a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  td a:hover { text-decoration: underline; }
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-top: 56px;
+  }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <img src="assets/icon.png" alt="">
+      <h1>Analys3R</h1>
+      <p class="tagline">Download the desktop app for Windows.</p>
+    </header>
+
+    <div class="latest">
+{{LATEST_BLOCK}}
+    </div>
+
+    <h2>Older stable releases</h2>
+    <table>
+      <thead>
+        <tr><th>Version</th><th>Date</th><th>Download</th></tr>
+      </thead>
+      <tbody>
+{{STABLE_OLDER_ROWS}}
+      </tbody>
+    </table>
+
+    <div class="prerelease-section">
+      <h2>Pre-release / testing builds</h2>
+      <p class="prerelease-warning">Unstable builds used for internal testing. Not recommended unless you know you need one.</p>
+      <table>
+        <thead>
+          <tr><th>Version</th><th>Date</th><th>Download</th></tr>
+        </thead>
+        <tbody>
+{{PRERELEASE_ROWS}}
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      <p><a href="https://github.com/ETHZ-3Rhub/py3r_analysis_gui/releases">All releases on GitHub</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,4 +1,8 @@
-# py3r analysis GUI
+# Analys3R
+
+> **This project is still in development and has no stable release yet.** Pre-release builds are available for testing but are not recommended for general use.
+
+[Download the app](https://ethz-3rhub.github.io/py3r_analysis_gui/)
 
 ## Licence
 
