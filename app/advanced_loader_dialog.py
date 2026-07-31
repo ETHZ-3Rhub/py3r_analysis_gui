@@ -8,13 +8,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -33,9 +36,26 @@ class AdvancedLoaderDialog(QDialog):
         super().__init__(parent)
         self._file_exts = file_exts
         self.setWindowTitle("Advanced loader")
-        self.setFixedSize(700, 860)
         self._build_ui()
         self._apply_stylesheet()
+        self._size_to_screen()
+
+    def _size_to_screen(self) -> None:
+        # Native size is 700x860, but that doesn't fit small/scaled screens and
+        # this dialog has no OS window chrome we can rely on to reveal the OK
+        # button, so clamp to what's actually available and let the content
+        # scroll internally (see _build_ui) rather than clip off-screen.
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        margin = 60
+        min_w, min_h = 420, 320
+        if screen is not None:
+            avail = screen.availableGeometry()
+            width = max(min_w, min(700, avail.width() - margin))
+            height = max(min_h, min(860, avail.height() - margin))
+        else:
+            width, height = 700, 860
+        self.setMinimumSize(min_w, min_h)
+        self.resize(width, height)
 
     def result_groups(self) -> dict[str, list[Path]]:
         if self._stack.currentIndex() == 1:
@@ -46,7 +66,22 @@ class AdvancedLoaderDialog(QDialog):
 
     def _build_ui(self) -> None:
         t = _get_theme()
-        outer = QVBoxLayout(self)
+
+        # Everything (header, mode selector, stack, OK/Cancel bar) lives inside
+        # a scroll area. At the native 700x860 size it all fits and no scrollbar
+        # shows; on small/scaled screens where the dialog gets shrunk below
+        # that, the same top-to-bottom flow becomes scrollable instead of
+        # clipping the OK button off-screen.
+        dialog_layout = QVBoxLayout(self)
+        dialog_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        dialog_layout.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        outer = QVBoxLayout(content)
         outer.setContentsMargins(16, 16, 16, 14)
         outer.setSpacing(12)
 
