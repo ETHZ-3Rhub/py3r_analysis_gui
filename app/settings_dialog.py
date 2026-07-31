@@ -148,7 +148,7 @@ class SettingsDialog(QDialog):
             }}
             QPushButton#secondaryButton:hover {{
                 background-color: {_T.accent};
-                color: white;
+                color: {_T.accent_text};
             }}
             QPushButton#secondaryButton:disabled {{
                 color: {_T.muted};
