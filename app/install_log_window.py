@@ -117,10 +117,10 @@ class InstallLogWindow(QDialog):
                 padding: 6px 20px;
                 min-width: 72px;
             }}
-            QPushButton#dlgBtn:hover {{ background-color: {t.accent}; color: white; }}
+            QPushButton#dlgBtn:hover {{ background-color: {t.accent}; color: {t.accent_text}; }}
             QPushButton#dlgBtnPrimary {{
                 background-color: {t.accent};
-                color: white;
+                color: {t.accent_text};
                 border: none;
                 border-radius: 5px;
                 padding: 6px 20px;

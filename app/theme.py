@@ -15,6 +15,7 @@ class Theme:
     display: str  # background for list / input / log "screen" widgets
     accent: str
     accent_hover: str
+    accent_text: str  # text colour on top of a filled accent background
     text: str  # text inside dark display areas
     panel_text: str  # text / labels that sit on the panel background
     muted: str  # secondary text inside display areas
@@ -39,6 +40,7 @@ def _flat(
     success: str,
     title: str,
     selection_bg: str,
+    accent_text: str = "white",
 ) -> dict:
     """Helper: single-tone theme where display == bg and panel_text == text."""
     return dict(
@@ -47,6 +49,7 @@ def _flat(
         display=bg,
         accent=accent,
         accent_hover=accent_hover,
+        accent_text=accent_text,
         text=text,
         panel_text=text,
         muted=muted,
@@ -66,8 +69,28 @@ _SEMANTIC = dict(error="#f38ba8", warn="#fab387", success="#a6e3a1")
 # Hifi), where the pastel _SEMANTIC tones are too low-contrast on the panel.
 _SEMANTIC_DUAL = dict(error="#c0392b", warn="#cc7a00", success="#5a8f4f")
 
+# Midway between Mocha's saturated purple and the pale High Contrast lavender
+# — softer than Mocha, still more colour than a neutral grey. Dark text on the
+# filled/hover state instead of white. Default theme.
+MOCHA_LIGHT = Theme(
+    name="Mocha Light",
+    **_flat(
+        bg="#1e1e2e",
+        panel="#2a2a3e",
+        accent="#9f92f7",
+        accent_hover="#b6a9fc",
+        accent_text="#211c38",
+        text="#e6e0f7",
+        muted="#84869c",
+        sep="#3a3a4e",
+        title="#9f92f7",
+        selection_bg="rgba(159, 146, 247, 90)",
+        **_SEMANTIC,
+    ),
+)
+
 MOCHA = Theme(
-    name="Catppuccin Mocha",
+    name="Mocha",
     **_flat(
         bg="#1e1e2e",
         panel="#2a2a3e",
@@ -78,6 +101,26 @@ MOCHA = Theme(
         sep="#3a3a4e",
         title="#cdd6f4",
         selection_bg="rgba(124, 106, 247, 70)",
+        **_SEMANTIC,
+    ),
+)
+
+# High-visibility: keeps the purple identity but lightened to a pale lavender,
+# with dark text on the filled/hover state instead of white — legible for
+# users who find the saturated accent colours hard to read.
+HIGH_CONTRAST = Theme(
+    name="High Contrast",
+    **_flat(
+        bg="#1e1e2e",
+        panel="#2a2a3e",
+        accent="#c3bbf7",
+        accent_hover="#d8d2fa",
+        accent_text="#241f38",
+        text="#e2ddfa",
+        muted="#84869c",
+        sep="#3a3a4e",
+        title="#c3bbf7",
+        selection_bg="rgba(195, 187, 247, 90)",
         **_SEMANTIC,
     ),
 )
@@ -175,6 +218,7 @@ THREE_R_SPECIAL = Theme(
     display="#1e2030",  # Blueprint dark — the LCD display windows
     accent="#e040ab",  # hot magenta — gloriously wrong on gold
     accent_hover="#f060c8",
+    accent_text="white",
     text="#cdd6f4",  # light text inside the dark LCD areas
     panel_text="#181408",  # near-black warm — active labels engraved on gold
     muted="#8c8040",  # darker gold — inactive/engraved tone on faceplate,
@@ -193,6 +237,7 @@ HIFI = Theme(
     display="#1e2030",  # Blueprint dark — the LCD display windows
     accent="#e040ab",  # hot magenta
     accent_hover="#f060c8",
+    accent_text="white",
     text="#cdd6f4",  # light text inside dark LCD areas
     panel_text="#18181e",  # near-black with cool tint — active labels on silver
     muted="#878898",  # darker silver — inactive engraved tone on faceplate
@@ -204,7 +249,18 @@ HIFI = Theme(
 
 _ALL: dict[str, Theme] = {
     t.name: t
-    for t in (MOCHA, FLAMINGO, BUBBLEGUM, DARKROOM, BLUEPRINT, OVERCAST, THREE_R_SPECIAL, HIFI)
+    for t in (
+        MOCHA_LIGHT,
+        MOCHA,
+        HIGH_CONTRAST,
+        FLAMINGO,
+        BUBBLEGUM,
+        DARKROOM,
+        BLUEPRINT,
+        OVERCAST,
+        THREE_R_SPECIAL,
+        HIFI,
+    )
 }
 
 # Mutable current theme — updated by update_theme(), read by get_theme()
@@ -230,8 +286,8 @@ def all_themes() -> list[Theme]:
 
 def load_theme() -> Theme:
     s = QSettings("py3r", "analysis_gui")
-    name = s.value("theme/name", MOCHA.name)
-    return _ALL.get(name, MOCHA)
+    name = s.value("theme/name", MOCHA_LIGHT.name)
+    return _ALL.get(name, MOCHA_LIGHT)
 
 
 def save_theme(theme: Theme) -> None:

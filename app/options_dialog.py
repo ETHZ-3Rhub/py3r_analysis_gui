@@ -275,5 +275,5 @@ class AdvancedOptionsDialog(QDialog):
                 padding: 6px 20px;
                 min-width: 72px;
             }}
-            QPushButton#dlgBtn:hover {{ background-color: {_T.accent}; color: white; }}
+            QPushButton#dlgBtn:hover {{ background-color: {_T.accent}; color: {_T.accent_text}; }}
         """)

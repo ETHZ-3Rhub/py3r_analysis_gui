@@ -51,7 +51,7 @@ def base_stylesheet(t) -> str:
         }}
         QPushButton#primaryButton {{
             background-color: {t.accent};
-            color: white;
+            color: {t.accent_text};
             border: none;
             border-radius: 6px;
             padding: 10px 0;
@@ -67,7 +67,10 @@ def base_stylesheet(t) -> str:
             border-radius: 5px;
             padding: 6px 10px;
         }}
-        QPushButton#secondaryButton:hover {{ background-color: {t.accent}; color: white; }}
+        QPushButton#secondaryButton:hover {{
+            background-color: {t.accent};
+            color: {t.accent_text};
+        }}
         QPushButton#secondaryButton:disabled {{
             color: {t.muted};
             border-color: {t.muted};
@@ -346,7 +349,7 @@ def import_button_stylesheet(t) -> str:
     return f"""
         QPushButton#importBtn {{
             background-color: {t.accent};
-            color: white;
+            color: {t.accent_text};
             border: none;
             border-radius: 5px;
             padding: 6px 20px;
