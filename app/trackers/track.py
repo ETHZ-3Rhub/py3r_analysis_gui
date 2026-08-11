@@ -25,8 +25,12 @@ Model config fields:
     tracker    — optional dict of BoT-SORT param overrides (e.g.
                    {"track_buffer": 90}), layered on ultralytics' defaults
 
-Post-hoc track selection: after a full model pass, detected track IDs are
-ranked by total frames present; the top `max` become stable output slots.
+Post-hoc track selection: after a full model pass, detected track IDs for an
+instance type are packed into `max` output slots by a greedy interval-packing
+allocator (largest segment first, into any slot it doesn't temporally overlap)
+— this stitches a target that got a new track ID after a brief tracker
+dropout back into one continuous slot. A segment that overlaps every slot is
+dropped (genuine excess above `max`). See _pack_tracks_into_slots().
 
 --- Extension points ---
 
@@ -172,6 +176,46 @@ def load_model_spec(
 # ---------------------------------------------------------------------------
 
 
+def _pack_tracks_into_slots(
+    tracks: dict[int, dict], max_instances: int
+) -> list[list[tuple[int, dict]]]:
+    """Greedily pack track-ID segments into `max_instances` output slots.
+
+    The underlying tracker can lose and re-acquire a target under a new
+    track ID (e.g. after a brief occlusion), fragmenting one physical
+    target into several IDs. Segments are placed largest-first, since a
+    long segment is most likely a genuine, mostly-continuous target; each
+    is slotted into any output slot whose existing segments don't overlap
+    it in time, stitching fragments of the same target into one
+    continuous output slot. A segment that overlaps every slot is dropped
+    — genuine excess above max_instances (e.g. a spurious detection).
+
+    Returns one list of (track_id, track_dict) per slot, each sorted by
+    start frame.
+    """
+
+    def bounds(td: dict) -> tuple[int, int]:
+        return min(td["frames"]), max(td["frames"])
+
+    ranked = sorted(tracks.items(), key=lambda kv: len(kv[1]["frames"]), reverse=True)
+
+    slots: list[list[tuple[int, dict]]] = [[] for _ in range(max_instances)]
+    slot_intervals: list[list[tuple[int, int]]] = [[] for _ in range(max_instances)]
+
+    for tid, td in ranked:
+        start, end = bounds(td)
+        for slot, intervals in zip(slots, slot_intervals, strict=True):
+            if all(end < s or start > e for s, e in intervals):
+                slot.append((tid, td))
+                intervals.append((start, end))
+                break
+        # else: overlaps every slot -> drop, genuine excess above max_instances
+
+    for slot in slots:
+        slot.sort(key=lambda item: bounds(item[1])[0])
+    return slots
+
+
 def track(
     video: Path,
     specs: list[ModelSpec],
@@ -285,16 +329,14 @@ def track(
             tracks = track_data.get(itype, {})
             n_kp = len(inst_spec.keypoint_names)
 
-            ranked = sorted(tracks.items(), key=lambda kv: len(kv[1]["frames"]), reverse=True)
-            selected = ranked[: inst_spec.max_instances]
+            packed = _pack_tracks_into_slots(tracks, inst_spec.max_instances)
 
             for slot_idx in range(inst_spec.max_instances):
                 bboxes = np.full((n_alloc, 4), np.nan, dtype=np.float32)
                 bbox_conf = np.full(n_alloc, np.nan, dtype=np.float32)
                 kps = np.full((n_alloc, n_kp, 3), np.nan, dtype=np.float32)
 
-                if slot_idx < len(selected):
-                    _tid, td = selected[slot_idx]
+                for _tid, td in packed[slot_idx]:
                     for frame_idx, bbox, conf, kp in zip(
                         td["frames"], td["bboxes"], td["confs"], td["kps"], strict=False
                     ):
@@ -304,8 +346,8 @@ def track(
                             if kp is not None and kp.shape[0] >= n_kp:
                                 kps[frame_idx] = kp[:n_kp]
 
-                    if spec.stride > 1 and spec.stride_fill == "ffill":
-                        _ffill_arrays(bboxes, bbox_conf, kps)
+                if spec.stride > 1 and spec.stride_fill == "ffill":
+                    _ffill_arrays(bboxes, bbox_conf, kps)
 
                 output_slots.append(
                     (itype, slot_idx, inst_spec.keypoint_names, bboxes, bbox_conf, kps)
