@@ -22,6 +22,8 @@ Model config fields:
     stride     — optional [interval, fill]: run every N frames, fill skipped
                    frames with "ffill" (forward-fill) or "blank" (leave NaN)
     batch      — inference batch size (default 1 if omitted)
+    tracker    — optional dict of BoT-SORT param overrides (e.g.
+                   {"track_buffer": 90}), layered on ultralytics' defaults
 
 Post-hoc track selection: after a full model pass, detected track IDs are
 ranked by total frames present; the top `max` become stable output slots.
@@ -38,6 +40,7 @@ import argparse
 import csv
 import json
 import sys
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,11 +67,36 @@ class ModelSpec:
     stride: int = 1
     stride_fill: str | None = None  # "ffill" or None
     batch: int = 1
+    tracker: str = "botsort.yaml"  # built-in name, or a temp yaml path with overrides
 
 
 # ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------
+
+
+def _build_tracker_config(overrides: dict | None) -> str:
+    """Return the tracker config to pass to model.track(): the built-in
+    BoT-SORT name if there are no overrides, else a temp yaml with the
+    overrides layered on top of the BoT-SORT defaults (e.g. track_buffer,
+    match_thresh — see ultralytics/cfg/trackers/botsort.yaml for the full
+    set). The temp file is intentionally left on disk; it's a few bytes in
+    the OS temp dir and track.py is a short-lived subprocess."""
+    if not overrides:
+        return "botsort.yaml"
+
+    from ultralytics.utils import YAML
+    from ultralytics.utils.checks import check_yaml
+
+    config = YAML.load(check_yaml("botsort.yaml"))
+    config.update(overrides)
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", prefix="py3r_tracker_", delete=False
+    )
+    tmp.close()
+    YAML.save(tmp.name, config)
+    return tmp.name
 
 
 def load_model_spec(
@@ -77,11 +105,14 @@ def load_model_spec(
     *,
     stride_tuple=None,
     batch: int = 1,
+    tracker_overrides: dict | None = None,
 ) -> ModelSpec:
     """Load a ModelSpec from a model folder.
 
     instance_configs: list of {"type": str, "max": int}
     stride_tuple:     (interval, fill_mode) or None
+    tracker_overrides: dict of BoT-SORT param overrides (e.g. {"track_buffer": 90}),
+                        or None to use ultralytics' defaults unchanged
     """
     weights = model_folder / "best.pt"
     if not weights.exists():
@@ -132,6 +163,7 @@ def load_model_spec(
         stride=stride,
         stride_fill=fill,
         batch=batch,
+        tracker=_build_tracker_config(tracker_overrides),
     )
 
 
@@ -200,6 +232,7 @@ def track(
             half=half,
             batch=spec.batch,
             vid_stride=spec.stride,
+            tracker=spec.tracker,
         ):
             video_frame_idx = stream_idx * spec.stride
             last_frame_seen = max(last_frame_seen, video_frame_idx)
@@ -381,6 +414,7 @@ def main() -> None:
                 config.get("instances", []),
                 stride_tuple=config.get("stride"),
                 batch=config.get("batch", 1),
+                tracker_overrides=config.get("tracker"),
             )
         )
 
