@@ -202,6 +202,7 @@ def _build(merged: dict, config_path: Path, source: str) -> dict:
             "instances": m.get("instances", []),
             "stride": m.get("stride"),
             "batch": m.get("batch", 1),
+            "tracker": m.get("tracker"),
         }
     if not models:
         raise ConfigError("config declares no [models.*] — nothing to track.")

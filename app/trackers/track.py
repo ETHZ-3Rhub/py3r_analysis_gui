@@ -22,9 +22,15 @@ Model config fields:
     stride     — optional [interval, fill]: run every N frames, fill skipped
                    frames with "ffill" (forward-fill) or "blank" (leave NaN)
     batch      — inference batch size (default 1 if omitted)
+    tracker    — optional dict of BoT-SORT param overrides (e.g.
+                   {"track_buffer": 90}), layered on ultralytics' defaults
 
-Post-hoc track selection: after a full model pass, detected track IDs are
-ranked by total frames present; the top `max` become stable output slots.
+Post-hoc track selection: after a full model pass, detected track IDs for an
+instance type are packed into `max` output slots by a greedy interval-packing
+allocator (largest segment first, into any slot it doesn't temporally overlap)
+— this stitches a target that got a new track ID after a brief tracker
+dropout back into one continuous slot. A segment that overlaps every slot is
+dropped (genuine excess above `max`). See _pack_tracks_into_slots().
 
 --- Extension points ---
 
@@ -38,6 +44,7 @@ import argparse
 import csv
 import json
 import sys
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,11 +71,36 @@ class ModelSpec:
     stride: int = 1
     stride_fill: str | None = None  # "ffill" or None
     batch: int = 1
+    tracker: str = "botsort.yaml"  # built-in name, or a temp yaml path with overrides
 
 
 # ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------
+
+
+def _build_tracker_config(overrides: dict | None) -> str:
+    """Return the tracker config to pass to model.track(): the built-in
+    BoT-SORT name if there are no overrides, else a temp yaml with the
+    overrides layered on top of the BoT-SORT defaults (e.g. track_buffer,
+    match_thresh — see ultralytics/cfg/trackers/botsort.yaml for the full
+    set). The temp file is intentionally left on disk; it's a few bytes in
+    the OS temp dir and track.py is a short-lived subprocess."""
+    if not overrides:
+        return "botsort.yaml"
+
+    from ultralytics.utils import YAML
+    from ultralytics.utils.checks import check_yaml
+
+    config = YAML.load(check_yaml("botsort.yaml"))
+    config.update(overrides)
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", prefix="py3r_tracker_", delete=False
+    )
+    tmp.close()
+    YAML.save(tmp.name, config)
+    return tmp.name
 
 
 def load_model_spec(
@@ -77,11 +109,14 @@ def load_model_spec(
     *,
     stride_tuple=None,
     batch: int = 1,
+    tracker_overrides: dict | None = None,
 ) -> ModelSpec:
     """Load a ModelSpec from a model folder.
 
     instance_configs: list of {"type": str, "max": int}
     stride_tuple:     (interval, fill_mode) or None
+    tracker_overrides: dict of BoT-SORT param overrides (e.g. {"track_buffer": 90}),
+                        or None to use ultralytics' defaults unchanged
     """
     weights = model_folder / "best.pt"
     if not weights.exists():
@@ -100,6 +135,9 @@ def load_model_spec(
             itype, kp_name, kp_idx = parts[0], parts[1], int(parts[2])
             all_entries[itype][kp_idx] = kp_name
 
+    model = YOLO(str(weights))
+    model_classes = set(model.names.values())
+
     instances = []
     for ic in instance_configs:
         itype = ic["type"]
@@ -116,6 +154,13 @@ def load_model_spec(
                 f"No keypoints found for instance_type='{itype}' in {mapping_csv}\n"
                 f"Available types: {available}"
             )
+        if itype not in model_classes:
+            raise RuntimeError(
+                f"instance_type='{itype}' is not a class the model {weights} was trained on.\n"
+                f"Classes in this model: {sorted(model_classes)}\n"
+                f"This model will never detect '{itype}' — check the weights are the "
+                f"intended model, or fix the instance_type in the config."
+            )
         max_idx = max(entries.keys())
         kp_names = [entries.get(i, f"kp_{i}") for i in range(max_idx + 1)]
         instances.append(InstanceSpec(itype, kp_names, max_inst))
@@ -126,18 +171,59 @@ def load_model_spec(
         stride, fill = stride_tuple[0], stride_tuple[1]
 
     return ModelSpec(
-        model=YOLO(str(weights)),
+        model=model,
         name=model_folder.name,
         instances=instances,
         stride=stride,
         stride_fill=fill,
         batch=batch,
+        tracker=_build_tracker_config(tracker_overrides),
     )
 
 
 # ---------------------------------------------------------------------------
 # Core tracking logic
 # ---------------------------------------------------------------------------
+
+
+def _pack_tracks_into_slots(
+    tracks: dict[int, dict], max_instances: int
+) -> list[list[tuple[int, dict]]]:
+    """Greedily pack track-ID segments into `max_instances` output slots.
+
+    The underlying tracker can lose and re-acquire a target under a new
+    track ID (e.g. after a brief occlusion), fragmenting one physical
+    target into several IDs. Segments are placed largest-first, since a
+    long segment is most likely a genuine, mostly-continuous target; each
+    is slotted into any output slot whose existing segments don't overlap
+    it in time, stitching fragments of the same target into one
+    continuous output slot. A segment that overlaps every slot is dropped
+    — genuine excess above max_instances (e.g. a spurious detection).
+
+    Returns one list of (track_id, track_dict) per slot, each sorted by
+    start frame.
+    """
+
+    def bounds(td: dict) -> tuple[int, int]:
+        return min(td["frames"]), max(td["frames"])
+
+    ranked = sorted(tracks.items(), key=lambda kv: len(kv[1]["frames"]), reverse=True)
+
+    slots: list[list[tuple[int, dict]]] = [[] for _ in range(max_instances)]
+    slot_intervals: list[list[tuple[int, int]]] = [[] for _ in range(max_instances)]
+
+    for tid, td in ranked:
+        start, end = bounds(td)
+        for slot, intervals in zip(slots, slot_intervals, strict=True):
+            if all(end < s or start > e for s, e in intervals):
+                slot.append((tid, td))
+                intervals.append((start, end))
+                break
+        # else: overlaps every slot -> drop, genuine excess above max_instances
+
+    for slot in slots:
+        slot.sort(key=lambda item: bounds(item[1])[0])
+    return slots
 
 
 def track(
@@ -200,6 +286,7 @@ def track(
             half=half,
             batch=spec.batch,
             vid_stride=spec.stride,
+            tracker=spec.tracker,
         ):
             video_frame_idx = stream_idx * spec.stride
             last_frame_seen = max(last_frame_seen, video_frame_idx)
@@ -252,16 +339,14 @@ def track(
             tracks = track_data.get(itype, {})
             n_kp = len(inst_spec.keypoint_names)
 
-            ranked = sorted(tracks.items(), key=lambda kv: len(kv[1]["frames"]), reverse=True)
-            selected = ranked[: inst_spec.max_instances]
+            packed = _pack_tracks_into_slots(tracks, inst_spec.max_instances)
 
             for slot_idx in range(inst_spec.max_instances):
                 bboxes = np.full((n_alloc, 4), np.nan, dtype=np.float32)
                 bbox_conf = np.full(n_alloc, np.nan, dtype=np.float32)
                 kps = np.full((n_alloc, n_kp, 3), np.nan, dtype=np.float32)
 
-                if slot_idx < len(selected):
-                    _tid, td = selected[slot_idx]
+                for _tid, td in packed[slot_idx]:
                     for frame_idx, bbox, conf, kp in zip(
                         td["frames"], td["bboxes"], td["confs"], td["kps"], strict=False
                     ):
@@ -271,8 +356,8 @@ def track(
                             if kp is not None and kp.shape[0] >= n_kp:
                                 kps[frame_idx] = kp[:n_kp]
 
-                    if spec.stride > 1 and spec.stride_fill == "ffill":
-                        _ffill_arrays(bboxes, bbox_conf, kps)
+                if spec.stride > 1 and spec.stride_fill == "ffill":
+                    _ffill_arrays(bboxes, bbox_conf, kps)
 
                 output_slots.append(
                     (itype, slot_idx, inst_spec.keypoint_names, bboxes, bbox_conf, kps)
@@ -381,6 +466,7 @@ def main() -> None:
                 config.get("instances", []),
                 stride_tuple=config.get("stride"),
                 batch=config.get("batch", 1),
+                tracker_overrides=config.get("tracker"),
             )
         )
 
