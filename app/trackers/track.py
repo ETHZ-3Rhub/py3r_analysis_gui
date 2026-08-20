@@ -135,6 +135,9 @@ def load_model_spec(
             itype, kp_name, kp_idx = parts[0], parts[1], int(parts[2])
             all_entries[itype][kp_idx] = kp_name
 
+    model = YOLO(str(weights))
+    model_classes = set(model.names.values())
+
     instances = []
     for ic in instance_configs:
         itype = ic["type"]
@@ -151,6 +154,13 @@ def load_model_spec(
                 f"No keypoints found for instance_type='{itype}' in {mapping_csv}\n"
                 f"Available types: {available}"
             )
+        if itype not in model_classes:
+            raise RuntimeError(
+                f"instance_type='{itype}' is not a class the model {weights} was trained on.\n"
+                f"Classes in this model: {sorted(model_classes)}\n"
+                f"This model will never detect '{itype}' — check the weights are the "
+                f"intended model, or fix the instance_type in the config."
+            )
         max_idx = max(entries.keys())
         kp_names = [entries.get(i, f"kp_{i}") for i in range(max_idx + 1)]
         instances.append(InstanceSpec(itype, kp_names, max_inst))
@@ -161,7 +171,7 @@ def load_model_spec(
         stride, fill = stride_tuple[0], stride_tuple[1]
 
     return ModelSpec(
-        model=YOLO(str(weights)),
+        model=model,
         name=model_folder.name,
         instances=instances,
         stride=stride,
