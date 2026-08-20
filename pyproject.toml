@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "py3r-analysis-gui"
-version = "0.4.4"
+version = "0.4.5"
 description = "Simple GUI for yolo3r tracking and py3r behaviour analysis pipelines"
 authors = [{ name = "Tom Lorimer" }]
 requires-python = ">=3.11"
