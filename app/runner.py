@@ -170,7 +170,7 @@ class PipelineRunner(QThread):
 
     def _tracking_model_args(self) -> list[dict]:
         """Flatten the resolved config's models (keyed by role) into the list
-        track.py wants: ``[{"model": <folder>, "instances", "stride", "batch"}]``."""
+        track.py wants: ``[{"model": <folder>, "instances", "stride", "batch", "tracker"}]``."""
         args: list[dict] = []
         for m in self._config["models"].values():
             arg = {"model": str(m["weights_dir"]), "instances": m["instances"]}
@@ -178,6 +178,8 @@ class PipelineRunner(QThread):
                 arg["stride"] = m["stride"]
             if m.get("batch") is not None:
                 arg["batch"] = m["batch"]
+            if m.get("tracker") is not None:
+                arg["tracker"] = m["tracker"]
             args.append(arg)
         return args
 

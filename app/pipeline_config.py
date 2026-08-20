@@ -126,7 +126,10 @@ def resolve(config_path: Path) -> dict:
     Raises ConfigError on any structural / reference problem (no script import).
     """
     raw = _parse(config_path)
-    source = "user" if _is_under(config_path, user_configs_dir()) else "bundled"
+    # Fail closed: trusted only if the resolved path is provably under the
+    # bundled dir we ship — anything else (including a /user/ symlink whose
+    # target resolves outside user_configs_dir()) is untrusted by default.
+    source = "bundled" if _is_under(config_path, _BUNDLED_CONFIGS) else "user"
 
     if "extends" in raw:
         base_id = raw["extends"]
@@ -199,6 +202,7 @@ def _build(merged: dict, config_path: Path, source: str) -> dict:
             "instances": m.get("instances", []),
             "stride": m.get("stride"),
             "batch": m.get("batch", 1),
+            "tracker": m.get("tracker"),
         }
     if not models:
         raise ConfigError("config declares no [models.*] — nothing to track.")

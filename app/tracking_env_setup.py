@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import platform
 import shutil
 import socket
 import subprocess
@@ -232,6 +233,51 @@ def _verify_cuda(python: str) -> tuple[bool, str, str]:
 _INSTALL_LOG_NAME = "install.log"
 
 
+def get_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("py3r-analysis-gui")
+    except Exception:
+        return "unknown"
+
+
+def _read_install_log() -> str:
+    """Raw contents of the tracking-env install log, if one exists."""
+    from app.trackers.yolo_tracker import tracking_env_dir
+
+    log_path = tracking_env_dir() / _INSTALL_LOG_NAME
+    if log_path.exists():
+        return log_path.read_text(encoding="utf-8", errors="replace")
+    return "(no install log found)"
+
+
+def _gpu_install_failed() -> bool:
+    """Whether the current tracking_env's install log recorded a GPU install
+    that fell back to CPU (see the `GPU_FALLBACK:` marker below). install.log
+    is overwritten on every (re)install, so this always reflects the
+    currently active environment, not a stale one."""
+    return "GPU_FALLBACK:" in _read_install_log()
+
+
+def _diagnostics_header() -> str:
+    """Basic system info shown atop the install log, for support."""
+    lines = [
+        f"Analys3R  v{get_version()}",
+        f"OS: {platform.platform()}",
+    ]
+    try:
+        usage = shutil.disk_usage(Path.home())
+        lines.append(f"Free disk: {usage.free / (1024**3):.1f} GB")
+    except OSError:
+        pass
+    try:
+        lines.append(f"uv: {_uv_version(_uv_exe())}")
+    except SystemExit:
+        lines.append("uv: not found")
+    return "\n".join(lines)
+
+
 def setup(tracking_env: Path) -> int:
     """Create/refresh *tracking_env* in place. Returns a process exit code.
 
@@ -348,11 +394,18 @@ class _ReinstallWorker(QThread):
             cmd = [sys.executable, "-m", "app.main", "--setup-tracking-env", str(target)]
         diagnosis = ""
         try:
+            # The child's stdout is a pipe, not a tty, so CPython would
+            # otherwise fully block-buffer it - print()s wouldn't reach us
+            # until the buffer filled or the process exited, making the log
+            # window look frozen during an install. Force unbuffered so each
+            # line streams through as it's printed.
+            env = {**os.environ, "PYTHONUNBUFFERED": "1"}
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 creationflags=NO_WINDOW,
+                env=env,
             )
             for raw in proc.stdout:
                 text = raw.decode("utf-8", errors="replace")

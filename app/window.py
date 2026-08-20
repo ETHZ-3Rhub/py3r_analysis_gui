@@ -11,7 +11,7 @@ import os
 import webbrowser
 from pathlib import Path
 
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -73,7 +73,10 @@ class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"Analys3R  v{get_version()}")
-        self.setMinimumSize(1020, 700)
+        # 25% below the natural 1020x700 default — a best-effort floor for
+        # small/scaled screens; the layout isn't designed for this size but
+        # should stay usable at it.
+        self.setMinimumSize(765, 525)
         self._separators: list[QFrame] = []
         self._apply_stylesheet()
 
@@ -119,6 +122,23 @@ class MainWindow(QWidget):
 
         # Kick off tracking env status check
         self._env_panel.kick_env_check()
+
+        self._size_to_screen()
+
+    def _size_to_screen(self) -> None:
+        # Previous default was 1020x700 (the old minimumSize, which acted as
+        # a floor since the layout's own sizeHint is smaller). Keep that as
+        # the target default; only shrink toward the new, smaller minimum if
+        # the screen can't fit it — same approach as
+        # AdvancedLoaderDialog._size_to_screen.
+        default_w, default_h = 1020, 700
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        margin = 60
+        if screen is not None:
+            avail = screen.availableGeometry()
+            width = max(self.minimumWidth(), min(default_w, avail.width() - margin))
+            height = max(self.minimumHeight(), min(default_h, avail.height() - margin))
+            self.resize(width, height)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Qt aborts (SIGABRT) if a QThread is destroyed while still running —
@@ -185,7 +205,7 @@ class MainWindow(QWidget):
 
         # ── Comparisons — locked until there are at least two groups to pair ──
         self._comp_panel = ComparisonsPanel(self._group_panel, self._btn_tooltip_filter)
-        layout.addWidget(self._comp_panel)
+        layout.addWidget(self._comp_panel, stretch=1)
 
         return panel
 
