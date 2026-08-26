@@ -25,12 +25,15 @@ Model config fields:
     tracker    — optional dict of BoT-SORT param overrides (e.g.
                    {"track_buffer": 90}), layered on ultralytics' defaults
 
-Post-hoc track selection: after a full model pass, detected track IDs for an
-instance type are packed into `max` output slots by a greedy interval-packing
-allocator (largest segment first, into any slot it doesn't temporally overlap)
-— this stitches a target that got a new track ID after a brief tracker
-dropout back into one continuous slot. A segment that overlaps every slot is
-dropped (genuine excess above `max`). See _pack_tracks_into_slots().
+Post-hoc track selection: for instance types with max=1, tracker IDs are
+ignored entirely — each frame's highest-confidence detection of that class is
+used directly, so there's no identity bookkeeping to get wrong. For max>1,
+detected track IDs are packed into `max` output
+slots by a greedy interval-packing allocator (largest segment first, into any
+slot it doesn't temporally overlap) — this stitches a target that got a new
+track ID after a brief tracker dropout back into one continuous slot. A
+segment that overlaps every slot is dropped (genuine excess above `max`). See
+_pack_tracks_into_slots().
 
 --- Extension points ---
 
@@ -54,6 +57,7 @@ import numpy as np
 from ultralytics import YOLO
 
 _MAX_INSTANCES_LIMIT = 16  # hard cap on max per instance type; raise if genuinely needed
+_TRACK_ID_BUFFER = 10_000  # pathological-input safety valve, not a tuning knob
 
 
 @dataclass
@@ -269,11 +273,14 @@ def track(
     last_frame_seen = 0
 
     for spec in specs:
-        # {instance_type: {track_id: {"frames", "bboxes", "confs", "kps"}}}
+        direct_types = {inst.instance_type for inst in spec.instances if inst.max_instances == 1}
+
+        # {instance_type: {track_id: {"frames", "bboxes", "confs", "kps"}}} — max>1 only
         track_data: dict[str, dict[int, dict]] = defaultdict(
             lambda: defaultdict(lambda: {"frames": [], "bboxes": [], "confs": [], "kps": []})
         )
-        buffer_caps = {inst.instance_type: 4 * inst.max_instances for inst in spec.instances}
+        # {instance_type: {frame_idx: {"bbox", "conf", "kp"}}} — max=1 only, no track IDs at all
+        direct_data: dict[str, dict[int, dict]] = defaultdict(dict)
 
         stream_idx = 0
 
@@ -305,28 +312,39 @@ def track(
                     if inst_spec is None:
                         continue
 
-                    type_tracks = track_data[class_name]
-                    tid = int(boxes.id[i])
-                    buf_cap = buffer_caps[class_name]
-
-                    if tid not in type_tracks:
-                        if len(type_tracks) >= buf_cap:
-                            print(
-                                f"Warning: {spec.name}/{class_name} exceeded internal buffer "
-                                f"({buf_cap} track IDs); new track {tid} ignored. "
-                                f"Consider increasing max for this instance type.",
-                                file=sys.stderr,
-                            )
-                            continue
-
-                    td = type_tracks[tid]
-                    td["frames"].append(video_frame_idx)
-                    td["bboxes"].append(boxes.xyxy[i].cpu().numpy())
-                    td["confs"].append(float(boxes.conf[i].cpu()))
-
+                    conf = float(boxes.conf[i].cpu())
+                    bbox = boxes.xyxy[i].cpu().numpy()
                     kp = None
                     if result.keypoints is not None and i < len(result.keypoints.data):
                         kp = result.keypoints.data[i].cpu().numpy()
+
+                    if class_name in direct_types:
+                        # max=1: no track IDs, no identity bookkeeping — just the
+                        # highest-confidence detection of this class per frame.
+                        best = direct_data[class_name].get(video_frame_idx)
+                        if best is None or conf > best["conf"]:
+                            direct_data[class_name][video_frame_idx] = {
+                                "bbox": bbox,
+                                "conf": conf,
+                                "kp": kp,
+                            }
+                        continue
+
+                    type_tracks = track_data[class_name]
+                    tid = int(boxes.id[i])
+
+                    if tid not in type_tracks and len(type_tracks) >= _TRACK_ID_BUFFER:
+                        print(
+                            f"Warning: {spec.name}/{class_name} exceeded internal buffer "
+                            f"({_TRACK_ID_BUFFER} track IDs); new track {tid} ignored.",
+                            file=sys.stderr,
+                        )
+                        continue
+
+                    td = type_tracks[tid]
+                    td["frames"].append(video_frame_idx)
+                    td["bboxes"].append(bbox)
+                    td["confs"].append(conf)
                     td["kps"].append(kp)
 
             stream_idx += 1
@@ -336,9 +354,29 @@ def track(
 
         for inst_spec in spec.instances:
             itype = inst_spec.instance_type
-            tracks = track_data.get(itype, {})
             n_kp = len(inst_spec.keypoint_names)
 
+            if itype in direct_types:
+                # max=1: single slot, filled straight from direct_data — no packing.
+                bboxes = np.full((n_alloc, 4), np.nan, dtype=np.float32)
+                bbox_conf = np.full(n_alloc, np.nan, dtype=np.float32)
+                kps = np.full((n_alloc, n_kp, 3), np.nan, dtype=np.float32)
+
+                for frame_idx, det in direct_data.get(itype, {}).items():
+                    if frame_idx < n_alloc:
+                        bboxes[frame_idx] = det["bbox"]
+                        bbox_conf[frame_idx] = det["conf"]
+                        kp = det["kp"]
+                        if kp is not None and kp.shape[0] >= n_kp:
+                            kps[frame_idx] = kp[:n_kp]
+
+                if spec.stride > 1 and spec.stride_fill == "ffill":
+                    _ffill_arrays(bboxes, bbox_conf, kps)
+
+                output_slots.append((itype, 0, inst_spec.keypoint_names, bboxes, bbox_conf, kps))
+                continue
+
+            tracks = track_data.get(itype, {})
             packed = _pack_tracks_into_slots(tracks, inst_spec.max_instances)
 
             for slot_idx in range(inst_spec.max_instances):
