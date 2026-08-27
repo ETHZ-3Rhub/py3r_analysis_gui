@@ -34,3 +34,9 @@ def test_main_window_constructs(qapp):
     # Only bundled pipelines → all above the divider, plus the leading
     # "— select pipeline —" placeholder (no divider row).
     assert window._pipeline_combo.count() == len(pipelines) + 1
+
+    # __init__ kicks off background QThreads (tracking-env check, update
+    # check) — Qt aborts (SIGABRT) if one is still running when the window
+    # is garbage-collected. close() joins them via closeEvent, same as a
+    # real shutdown.
+    window.close()

@@ -39,6 +39,7 @@ from app.settings_dialog import SettingsDialog, get_version
 from app.styles import base_stylesheet
 from app.theme import get_theme as _get_theme
 from app.tracking_env_panel import TrackingEnvPanel
+from app.update_indicator import UpdateIndicator
 
 _T = _get_theme()  # cached at import for inline widget-creation calls
 
@@ -120,8 +121,9 @@ class MainWindow(QWidget):
         # Populate initial tooltip (button starts disabled)
         self._run_controller.refresh_run_button()
 
-        # Kick off tracking env status check
+        # Kick off tracking env status check and update check
         self._env_panel.kick_env_check()
+        self._update_indicator.kick_check()
 
         self._size_to_screen()
 
@@ -148,6 +150,7 @@ class MainWindow(QWidget):
         # Join any env-check/install worker threads still running (more than
         # one can be in flight if checks were kicked in quick succession).
         self._env_panel.shutdown()
+        self._update_indicator.shutdown()
         super().closeEvent(event)
 
     # ── Left panel ────────────────────────────────────────────────────────────
@@ -283,6 +286,15 @@ class MainWindow(QWidget):
 
         self._env_panel = TrackingEnvPanel()
         bottom_row.addWidget(self._env_panel)
+
+        # PY3R_FAKE_VERSION lets the update check be exercised locally without
+        # a real release (e.g. "0.0.1" to force "an update is available") —
+        # the window title/Settings dialog still show the real version.
+        self._update_indicator = UpdateIndicator(
+            os.environ.get("PY3R_FAKE_VERSION") or get_version()
+        )
+        bottom_row.addWidget(self._update_indicator)
+        bottom_row.addSpacing(12)
 
         help_btn = QPushButton("?  Help")
         help_btn.setObjectName("settingsButton")
@@ -490,4 +502,6 @@ class MainWindow(QWidget):
             self._comp_panel.refresh_theme()
         if hasattr(self, "_env_panel"):
             self._env_panel.refresh_theme()
+        if hasattr(self, "_update_indicator"):
+            self._update_indicator.refresh_theme()
         self.setStyleSheet(base_stylesheet(_T))

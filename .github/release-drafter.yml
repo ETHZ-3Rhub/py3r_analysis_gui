@@ -1,6 +1,12 @@
 name-template: 'v$NEXT_PATCH_VERSION'
 tag-template: 'v$NEXT_PATCH_VERSION'
 
+# Every release in this repo is a GitHub prerelease (none has been marked a
+# full release yet) — without this, the version resolver can't find a
+# "latest release" to bump from, falls back to a 0.0.0 baseline, and drafts
+# a bogus v0.0.1 release on every push to dev.
+include-pre-releases: true
+
 exclude-labels:
   - 'skip-changelog'
 
