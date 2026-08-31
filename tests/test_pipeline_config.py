@@ -135,8 +135,7 @@ def test_model_missing_weights_rejected(user_root):
 
 def test_script_missing_entry_rejected(user_root):
     text = (
-        'name = "x"\n[models.m]\nweights = "mouse/mouse_top_main"\n'
-        "[script]\narena_size_m = 0.5\n"
+        'name = "x"\n[models.m]\nweights = "mouse/mouse_top_main"\n[script]\narena_size_m = 0.5\n'
     )
     with pytest.raises(pc.ConfigError, match="\\[script\\] is missing 'entry'"):
         pc.resolve(write_cfg(user_root, text))
@@ -201,11 +200,17 @@ def test_discover_includes_user_config_marked_user(user_root):
     assert by_id["custom"]["source"] == "user"
 
 
-def test_discover_ignore_txt_suppresses_bundled(user_root):
-    (user_root / "configs" / "ignore.txt").write_text("oft\n")
+def test_discover_hidden_toml_suppresses_by_source_and_id(user_root):
+    pc.write_hidden({("bundled", "oft")})
     ids = {e["id"] for e in pc.discover()}
     assert "oft" not in ids
-    assert "epm" in ids  # only the listed id is suppressed
+    assert "epm" in ids  # only the listed (source, id) pair is suppressed
+
+
+def test_discover_include_hidden_lists_everything(user_root):
+    pc.write_hidden({("bundled", "oft")})
+    ids = {e["id"] for e in pc.discover(include_hidden=True)}
+    assert "oft" in ids  # not suppressed when listing for the Manage dialog
 
 
 def test_discover_lists_unparseable_user_config_by_filename(user_root):
@@ -213,3 +218,65 @@ def test_discover_lists_unparseable_user_config_by_filename(user_root):
     by_id = {e["id"]: e for e in pc.discover()}
     assert by_id["bad"]["source"] == "user"
     assert by_id["bad"]["label"] == "bad.toml"  # falls back to filename, never dropped
+
+
+# ── git sources: self-contained folder, base-dir-aware resolution ────────────
+def write_source_cfg(user_root, source_id, text, name="mine.toml"):
+    cfg_dir = user_root / "sources" / source_id / "configs"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    path = cfg_dir / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_discover_lists_git_source_config(user_root):
+    write_source_cfg(user_root, "ethz-ins-oft", 'extends = "oft"\n')
+    by_id = {e["id"]: e for e in pc.discover()}
+    assert by_id["mine"]["source"] == "ethz-ins-oft"
+
+
+def test_git_source_config_is_untrusted(user_root):
+    path = write_source_cfg(user_root, "ethz-ins-oft", 'extends = "oft"\n')
+    r = pc.resolve(path)
+    assert r["source"] == "ethz-ins-oft"
+    assert r["trust"] == "untrusted"
+
+
+def test_git_source_script_entry_resolves_within_own_source_folder(user_root):
+    source_dir = user_root / "sources" / "ethz-ins-oft"
+    (source_dir / "scripts").mkdir(parents=True)
+    (source_dir / "scripts" / "mine.py").write_text("def run(**k):\n    pass\n")
+    path = write_source_cfg(
+        user_root, "ethz-ins-oft", 'extends = "oft"\n[script]\nentry = "scripts/mine.py:run"\n'
+    )
+    r = pc.resolve(path)
+    assert r["script"]["entry_source"] == "user"
+    assert r["script"]["_entry"]["path"] == source_dir / "scripts" / "mine.py"
+
+
+def test_git_source_weights_resolve_within_own_source_models_folder(user_root):
+    source_dir = user_root / "sources" / "ethz-ins-oft"
+    weights_dir = source_dir / "models" / "mouse_ft"
+    weights_dir.mkdir(parents=True)
+    path = write_source_cfg(
+        user_root,
+        "ethz-ins-oft",
+        'name = "x"\n[models.m]\nweights = "mouse_ft"\n[script]\nentry = "oft:run"\n'
+        "[loader]\nfps = 30\n",
+    )
+    r = pc.resolve(path)
+    assert r["models"]["m"]["weights_dir"] == weights_dir
+    assert r["models"]["m"]["weights_source"] == "user"
+
+
+def test_two_sources_same_config_name_do_not_collide(user_root):
+    write_source_cfg(user_root, "lab-a", 'extends = "oft"\n', name="oft.toml")
+    write_source_cfg(user_root, "lab-b", 'extends = "oft"\n', name="oft.toml")
+    entries = pc.discover()
+    sources = {e["source"] for e in entries if e["id"] == "oft" and e["source"] != "bundled"}
+    assert sources == {"lab-a", "lab-b"}
+    pc.write_hidden({("lab-a", "oft")})
+    remaining = {
+        e["source"] for e in pc.discover() if e["id"] == "oft" and e["source"] != "bundled"
+    }
+    assert remaining == {"lab-b"}

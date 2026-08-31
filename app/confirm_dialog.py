@@ -26,16 +26,12 @@ _IMG_SIZE = 180
 def pipeline_reference_image(resolved: dict) -> QPixmap | None:
     """Reference photo of the arena a pipeline expects. Returns None if the
     config has no ``arena_image`` or the file doesn't exist. Bundled images live
-    in app/resources/; a user config's image sits beside it in /user/configs/."""
+    in app/resources/; any other config's image sits beside its own .toml file
+    (manual /user/configs/, or a git source's own configs/ folder)."""
     filename = resolved.get("arena_image")
     if not filename:
         return None
-    if resolved["source"] == "user":
-        from app import pipeline_config
-
-        base = pipeline_config.user_configs_dir()
-    else:
-        base = _IMG_DIR
+    base = _IMG_DIR if resolved["source"] == "bundled" else resolved["config_path"].parent
     path = base / filename
     if not path.exists():
         return None

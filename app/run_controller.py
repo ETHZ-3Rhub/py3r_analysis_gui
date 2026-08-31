@@ -90,12 +90,11 @@ class RunController(QObject):
     def refresh_run_button(self) -> None:
         config = self._get_config()
         options = config["script"]["options"] if (config and config["script"]) else {}
-        self._options_btn.setEnabled(bool(options))
-        if config is None:
-            self._options_btn.setToolTip("No pipeline selected.")
-        elif not options:
-            self._options_btn.setToolTip("This pipeline has no advanced options.")
-        else:
+        # Hidden rather than disabled-with-tooltip when there's nothing to configure —
+        # it sits next to the pipeline manage button now and shouldn't clutter that row
+        # when there's no per-pipeline option to reach.
+        self._options_btn.setVisible(bool(options))
+        if options:
             n = len(options)
             self._options_btn.setToolTip(f"{n} advanced option{'s' if n != 1 else ''} available.")
 
