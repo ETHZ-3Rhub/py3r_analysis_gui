@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import pickle
 import queue
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -58,6 +59,7 @@ class PipelineRunner(QThread):
             "yes",
         )
         self._warnings: list[str] = []
+        self._snapshotted = False
         self._current_proc: subprocess.Popen | None = None
         self._cancelled = False
 
@@ -80,6 +82,7 @@ class PipelineRunner(QThread):
                 self.error.emit(error)
         finally:
             if not self._cancelled:
+                self._snapshotted = self._write_pipeline_snapshot()
                 self._write_report(error)
 
     # ── Orchestration ──────────────────────────────────────────────────────────
@@ -301,6 +304,13 @@ class PipelineRunner(QThread):
         lines.append("")
         lines.extend(self._resolved_config_lines())
         lines.append("")
+        if self._snapshotted:
+            lines.append(
+                "Pipeline snapshot: pipeline_snapshot/ — the untrusted (/user) config, "
+                "script, and/or model files this run actually used, since they aren't "
+                "shipped with the app and could change or disappear later."
+            )
+            lines.append("")
 
         if error:
             lines.append("Status: FAILED")
@@ -381,6 +391,71 @@ class PipelineRunner(QThread):
             params = config["script"]["params"]
             out.append(f"    params: {params if params else '(none)'}")
         return out
+
+    def _write_pipeline_snapshot(self) -> bool:
+        """Copy the untrusted (/user) config/script/model-metadata this run
+        actually used into output_dir/pipeline_snapshot/, so what ran stays
+        inspectable even if the /user file is later edited or deleted.
+
+        Bundled content is deliberately NOT copied — it ships with the app,
+        so "App version: X" in the report already pins its exact bytes; only
+        /user-authored content (unversioned, editable in place) needs this.
+        Model weights are recorded as path/size/mtime, never copied — a
+        weights folder can be many GB, so hashing/copying its bytes on every
+        run would be prohibitively expensive for no real benefit (nobody
+        manually verifies a hash; size+mtime already catches a swap/retrain).
+
+        Returns True if anything was actually written (skipped/absent
+        entirely for a fully bundled, built-in pipeline — nothing to add
+        beyond what the app version already pins)."""
+        config = self._config
+        snap_dir = self._output_dir / "pipeline_snapshot"
+        wrote_anything = False
+
+        def ensure_dir() -> None:
+            nonlocal wrote_anything
+            if not wrote_anything:
+                snap_dir.mkdir(exist_ok=True)
+            wrote_anything = True
+
+        if config["source"] == "user":
+            ensure_dir()
+            shutil.copy2(config["config_path"], snap_dir / "config.toml")
+
+        script = config["script"]
+        if script is not None and script["entry_source"] == "user":
+            ensure_dir()
+            shutil.copy2(script["_entry"]["path"], snap_dir / "script.py")
+
+        weights_lines: list[str] = []
+        for role, m in config["models"].items():
+            if m["weights_source"] != "user":
+                continue
+            weights_dir: Path = m["weights_dir"]
+            best_pt = weights_dir / "weights" / "best.pt"
+            try:
+                st = best_pt.stat()
+                size_mb = st.st_size / (1024 * 1024)
+                mtime = datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")
+                weights_lines.append(f"{role}: {weights_dir}")
+                weights_lines.append(f"  weights/best.pt: {size_mb:.1f} MB, modified {mtime}")
+            except OSError:
+                weights_lines.append(f"{role}: {weights_dir}  (weights/best.pt not found)")
+
+            mapping_csv = weights_dir / "meta" / "output_mapping.csv"
+            if mapping_csv.is_file():
+                ensure_dir()
+                shutil.copy2(mapping_csv, snap_dir / f"{role}_output_mapping.csv")
+                weights_lines.append(
+                    f"  meta/output_mapping.csv copied to {role}_output_mapping.csv"
+                )
+            weights_lines.append("")
+
+        if weights_lines:
+            ensure_dir()
+            (snap_dir / "weights.txt").write_text("\n".join(weights_lines).rstrip() + "\n")
+
+        return wrote_anything
 
     def _write_warning_file(self) -> None:
         path = self._output_dir / "Analys3R_ERRORS.txt"
