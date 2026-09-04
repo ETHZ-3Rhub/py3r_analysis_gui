@@ -1,6 +1,6 @@
 # Configs
 
-A config is a `.toml` file that defines a complete pipeline — which models to run for tracking, how to load the resulting data, and which analysis script to run. Configs live in `/user/configs/`. The filename stem is the pipeline's ID (e.g. `my_oft.toml` → id `my_oft`).
+A config is a `.toml` file that defines a complete pipeline — which models to run for tracking, how to load the resulting data, and which analysis script to run. Configs live in a [pipeline source's](sources.md) `configs/` folder, or `/user/configs/` for the manual fallback. The filename stem is the pipeline's ID (e.g. `my_oft.toml` → id `my_oft`).
 
 A config does not need to define all sections. `[models]` is only needed if the pipeline runs tracking. `[loader]` and `[script]` are only needed if it runs analysis — `[loader]` defines how tracking files are loaded for the script to consume. A tracking-only config has `[models]` and no `[script]`; an analysis-only config has `[loader]` + `[script]` and no `[models]`.
 
@@ -81,7 +81,7 @@ The **role name** (e.g. `mouse`, `environment`) is a label of your choosing. It 
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `weights` | string | yes | Model folder name — looked up in bundled models first, then `/user/models/` |
+| `weights` | string | yes | Model folder name — looked up in bundled models first, then the pipeline's own `models/` folder |
 | `instances` | list | yes | What to detect with this model — see below |
 | `batch` | int | no | Inference batch size (default: 1) |
 | `stride` | `[int, string]` | no | Run every N frames, fill skipped. E.g. `[30, "ffill"]` — useful for slow-moving models like arena detectors |
@@ -111,7 +111,7 @@ Points at the analysis code that runs after loading. All fields here (except `en
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `entry` | string | yes (if no `extends`) | `"module:run"` for bundled scripts; `"scripts/my_script.py:run"` for user scripts |
+| `entry` | string | yes (if no `extends`) | `"module:run"` for bundled scripts; `"scripts/my_script.py:run"` for a script in the same source's `scripts/` folder |
 | `arena_size_m` | float | no | Arena size in metres |
 | `likelihood_min` | float | no | Confidence filter threshold (default: 0.9) |
 | `point_map` | table | no | Remap canonical point names to your CSV columns: `{ bodycentre = "center" }` |
@@ -133,6 +133,6 @@ User-facing controls that appear in the **Advanced Options** dialog. The user se
 
 ---
 
-## Hiding a built-in pipeline
+## Hiding a pipeline
 
-Add its ID to `/user/configs/ignore.txt`, one per line.
+Open **Manage pipelines** (the button next to the pipeline dropdown) and use the **Hide**/**Show** toggle on its row — this works the same for built-in, manual, and git-sourced pipelines, and only affects the picker; nothing is deleted.
