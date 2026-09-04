@@ -404,8 +404,10 @@ class MainWindow(QWidget):
         self._populate_pipeline_combo()
 
     def _populate_pipeline_combo(self) -> None:
-        """One combo: bundled (py3r) pipelines first, a non-selectable divider,
-        then user-supplied ones (⚠ + warn colour, prompted before they run)."""
+        """One combo: bundled (py3r) pipelines first, then a divider per
+        untrusted group (⚠ + warn colour, prompted before they run) — the
+        manual ``/user`` fallback under a generic header, each git source
+        under its own header naming the repo."""
         from PySide6.QtGui import QColor
 
         combo = self._pipeline_combo
@@ -416,18 +418,37 @@ class MainWindow(QWidget):
             (e for e in self._pipelines if e["source"] == "bundled"),
             key=lambda e: e["label"].lower(),
         )
-        below = sorted(
-            (e for e in self._pipelines if e["source"] != "bundled"),
-            key=lambda e: e["label"].lower(),
-        )
         for e in above:
             combo.addItem(e["label"], userData=e)
-        if below:
-            combo.addItem("— user supplied pipelines —", userData=None)
+
+        sources_by_id = {s.id: s for s in pipeline_sources.load_sources()}
+        manual = sorted(
+            (e for e in self._pipelines if e["source"] == "user"),
+            key=lambda e: e["label"].lower(),
+        )
+        by_source_id: dict[str, list[dict]] = {}
+        for e in self._pipelines:
+            if e["source"] not in ("bundled", "user"):
+                by_source_id.setdefault(e["source"], []).append(e)
+        git_groups = sorted(
+            (
+                (sources_by_id[sid].repo if sid in sources_by_id else sid, entries)
+                for sid, entries in by_source_id.items()
+            ),
+            key=lambda pair: pair[0].lower(),
+        )
+
+        def add_group(header: str, entries: list[dict]) -> None:
+            combo.addItem(header, userData=None)
             combo.model().item(combo.count() - 1).setEnabled(False)
-            for e in below:
+            for e in sorted(entries, key=lambda e: e["label"].lower()):
                 combo.addItem(f"⚠  {e['label']}", userData=e)
                 combo.model().item(combo.count() - 1).setForeground(QColor(_get_theme().warn))
+
+        if manual:
+            add_group("— user supplied pipelines —", manual)
+        for repo, entries in git_groups:
+            add_group(f"— {repo} —", entries)
 
     def _on_pipeline_changed(self) -> None:
         self._current_options = {}
