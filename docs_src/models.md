@@ -1,15 +1,17 @@
 # Models
 
-Custom model weights go in `/user/models/`. Each model is a named folder.
+Custom model weights go in a [pipeline source's](sources.md) `models/` folder, or `/user/models/` for the manual fallback. Each model is a named folder.
 
 ## Folder layout
 
 ```
-/user/models/
+models/
   mouse_finetuned/
     best.pt
     output_mapping.csv
 ```
+
+(A source repo publishes weights this way directly, or via a `source.toml` pointer to a GitHub Release asset for large files — see [Pipeline sources](sources.md#large-model-weights).)
 
 `output_mapping.csv` maps the model's output indices to keypoint names. No header row — columns are `instance_type, keypoint, index`. The `instance_type` value is what you use in `instances` in the config.
 
@@ -42,4 +44,4 @@ instances = [{ type = "mouse_top", max = 1 }]
 batch = 32
 ```
 
-Bundled models are checked first; `/user/models/` is the fallback. A missing folder won't error at pipeline-select time — it will fail when tracking starts.
+Bundled models are checked first, then the pipeline's own `models/` folder. A missing folder won't error at pipeline-select time — it will fail when tracking starts.

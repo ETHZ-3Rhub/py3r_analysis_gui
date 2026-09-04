@@ -1,6 +1,6 @@
 # Scripts
 
-A custom analysis script lives in `/user/scripts/` and is referenced from a config via `entry`.
+A custom analysis script lives in a [pipeline source's](sources.md) `scripts/` folder, or `/user/scripts/` for the manual fallback, and is referenced from a config via `entry`.
 This must specify the name of your callable function, e.g. `run`.
 
 ```toml
