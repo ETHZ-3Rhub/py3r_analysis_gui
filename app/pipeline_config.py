@@ -288,6 +288,13 @@ def _build(merged: dict, config_path: Path, source: str, base_dir: Path) -> dict
             raise ConfigError(
                 f"[loader] format = {fmt!r} is not supported (use 'yolo3r' or 'dlc')."
             )
+        aspect_ratio = loader.get("aspect_ratio", 1.0)
+        if (
+            not isinstance(aspect_ratio, int | float)
+            or isinstance(aspect_ratio, bool)
+            or aspect_ratio <= 0
+        ):
+            raise ConfigError("[loader] needs a positive numeric 'aspect_ratio'.")
 
     # Trust is authorship, nothing else: a /user config we didn't write is
     # untrusted even if it only references bundled code (it could still extend a

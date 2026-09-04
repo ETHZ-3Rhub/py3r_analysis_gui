@@ -16,6 +16,7 @@ batch = 32
 format = "yolo3r"
 fps = 30
 group_tag = "group"
+aspect_ratio = 1.0
 
 [script]
 entry = "oft:run"
