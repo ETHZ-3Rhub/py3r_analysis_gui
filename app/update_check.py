@@ -13,7 +13,6 @@ import urllib.request
 from dataclasses import dataclass
 
 REPO = "ETHZ-3Rhub/py3r_analysis_gui"
-API_URL = f"https://api.github.com/repos/{REPO}/releases"
 
 
 @dataclass(frozen=True)
@@ -24,7 +23,7 @@ class ReleaseInfo:
     prerelease: bool
 
 
-def _parse_version(v: str) -> tuple[int, ...]:
+def parse_version(v: str) -> tuple[int, ...]:
     """ "v0.5.1" / "0.5.1" -> (0, 5, 1). Stops at the first non-numeric dotted
     component, so a dev/local build version (e.g. "0.5.2.dev3") still
     compares sanely against release tags rather than parsing garbage."""
@@ -39,8 +38,9 @@ def _parse_version(v: str) -> tuple[int, ...]:
     return tuple(parts) or (0,)
 
 
-def fetch_releases(timeout: float = 5.0) -> list[dict]:
-    req = urllib.request.Request(API_URL, headers={"Accept": "application/vnd.github+json"})
+def fetch_releases(owner_repo: str = REPO, timeout: float = 5.0) -> list[dict]:
+    url = f"https://api.github.com/repos/{owner_repo}/releases"
+    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         releases = json.load(resp)
     return [r for r in releases if not r.get("draft")]
@@ -57,7 +57,7 @@ def _strip_html_comments(body: str) -> str:
     return _HTML_COMMENT_RE.sub("", body).strip()
 
 
-def _to_info(r: dict) -> ReleaseInfo:
+def to_release_info(r: dict) -> ReleaseInfo:
     return ReleaseInfo(
         tag=r["tag_name"],
         name=r.get("name") or r["tag_name"],
@@ -66,8 +66,10 @@ def _to_info(r: dict) -> ReleaseInfo:
     )
 
 
-def check_for_updates(current_version: str) -> list[ReleaseInfo]:
-    """Newer releases the user should be told about.
+def check_for_updates(current_version: str, owner_repo: str = REPO) -> list[ReleaseInfo]:
+    """Newer releases the user should be told about, for *owner_repo* (defaults
+    to this app's own repo — reused as-is by pipeline_sources.py for a tracked
+    pipeline source, where *current_version* is the source's installed tag).
 
     The installed version string carries no prerelease marker of its own
     (tags/versions are plain "0.5.1"), so whether the *current* install is a
@@ -80,15 +82,15 @@ def check_for_updates(current_version: str) -> list[ReleaseInfo]:
     failed check should never surface as an error, just retry next launch.
     """
     try:
-        releases = fetch_releases()
+        releases = fetch_releases(owner_repo)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
         return []
     if not releases:
         return []
 
-    current_tuple = _parse_version(current_version)
+    current_tuple = parse_version(current_version)
     current_entry = next(
-        (r for r in releases if _parse_version(r["tag_name"]) == current_tuple), None
+        (r for r in releases if parse_version(r["tag_name"]) == current_tuple), None
     )
     current_is_prerelease = bool(current_entry["prerelease"]) if current_entry else False
 
@@ -98,13 +100,13 @@ def check_for_updates(current_version: str) -> list[ReleaseInfo]:
     results: list[ReleaseInfo] = []
 
     if stable:
-        latest_stable = max(stable, key=lambda r: _parse_version(r["tag_name"]))
-        if _parse_version(latest_stable["tag_name"]) > current_tuple:
-            results.append(_to_info(latest_stable))
+        latest_stable = max(stable, key=lambda r: parse_version(r["tag_name"]))
+        if parse_version(latest_stable["tag_name"]) > current_tuple:
+            results.append(to_release_info(latest_stable))
 
     if current_is_prerelease and prereleases:
-        latest_pre = max(prereleases, key=lambda r: _parse_version(r["tag_name"]))
-        if _parse_version(latest_pre["tag_name"]) > current_tuple:
-            results.append(_to_info(latest_pre))
+        latest_pre = max(prereleases, key=lambda r: parse_version(r["tag_name"]))
+        if parse_version(latest_pre["tag_name"]) > current_tuple:
+            results.append(to_release_info(latest_pre))
 
     return results

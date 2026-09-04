@@ -51,11 +51,16 @@ def load(
 
     fmt = loader.get("format", "yolo3r")
     fps = loader["fps"]
+    aspect_ratio = loader.get("aspect_ratio", 1.0)
     files = {handle: str(path) for handle, _group, path in manifest}
     if fmt == "yolo3r":
-        tc_all = p3b.TrackingCollection.from_yolo3r(files, fps=fps)
+        tc_all = p3b.TrackingCollection.from_yolo3r(
+            files, fps=fps, aspectratio_correction=aspect_ratio
+        )
     elif fmt == "dlc":
-        tc_all = p3b.TrackingCollection.from_dlc(files, fps=fps)
+        tc_all = p3b.TrackingCollection.from_dlc(
+            files, fps=fps, aspectratio_correction=aspect_ratio
+        )
     else:
         raise ValueError(f"unknown loader format: {fmt!r} (expected 'yolo3r' or 'dlc')")
 

@@ -28,12 +28,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app import pipeline_config
+from app import pipeline_config, pipeline_sources
 from app.comparisons_panel import ComparisonsPanel
 from app.confirm_dialog import ask, error_with_copy, pipeline_reference_image
 from app.gating import TooltipOnDisabled, build_gated_section, set_gated_enabled
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
 from app.options_dialog import AdvancedOptionsDialog
+from app.pipeline_manager_dialog import PipelineManagerButton
 from app.run_controller import RunController
 from app.settings_dialog import SettingsDialog, get_version
 from app.styles import base_stylesheet
@@ -124,6 +125,7 @@ class MainWindow(QWidget):
         # Kick off tracking env status check and update check
         self._env_panel.kick_env_check()
         self._update_indicator.kick_check()
+        self._pipeline_manager_btn.kick_check()
 
         self._size_to_screen()
 
@@ -151,6 +153,7 @@ class MainWindow(QWidget):
         # one can be in flight if checks were kicked in quick succession).
         self._env_panel.shutdown()
         self._update_indicator.shutdown()
+        self._pipeline_manager_btn.shutdown()
         super().closeEvent(event)
 
     # ── Left panel ────────────────────────────────────────────────────────────
@@ -227,17 +230,21 @@ class MainWindow(QWidget):
         pipeline_label.setObjectName("sectionTitle")
         layout.addWidget(pipeline_label)
 
+        pipeline_row = QHBoxLayout()
         self._pipeline_combo = QComboBox()
         self._populate_pipeline_combo()
         self._pipeline_combo.currentIndexChanged.connect(self._on_pipeline_changed)
-        layout.addWidget(self._pipeline_combo)
+        pipeline_row.addWidget(self._pipeline_combo, stretch=1)
+        self._pipeline_manager_btn = PipelineManagerButton()
+        self._pipeline_manager_btn.dialog_closed.connect(self._refresh_pipelines_after_manage)
+        pipeline_row.addWidget(self._pipeline_manager_btn)
+        layout.addLayout(pipeline_row)
 
         opts_row = QHBoxLayout()
         opts_row.addStretch()
         self._options_btn = QPushButton("Advanced options")
         self._options_btn.setObjectName("settingsButton")
-        self._options_btn.setEnabled(False)
-        self._options_btn.setToolTip("No pipeline selected.")
+        self._options_btn.setVisible(False)  # only shown once a pipeline with options is picked
         self._options_btn.clicked.connect(self._open_options)
         opts_row.addWidget(self._options_btn)
         layout.addLayout(opts_row)
@@ -383,9 +390,24 @@ class MainWindow(QWidget):
         if folder:
             self._out_edit.setText(folder)
 
+    def _pipeline_origin_note(self, resolved: dict) -> str:
+        """' is from ethz-ins/oft-pipeline' for a git-sourced pipeline, else ''
+        — names the source in the trust dialog now that there's one to name."""
+        source = resolved.get("source")
+        if source in ("bundled", "user", None):
+            return ""
+        match = next((s for s in pipeline_sources.load_sources() if s.id == source), None)
+        return f" is from {match.repo}" if match else ""
+
+    def _refresh_pipelines_after_manage(self) -> None:
+        self._pipelines = pipeline_config.discover()
+        self._populate_pipeline_combo()
+
     def _populate_pipeline_combo(self) -> None:
-        """One combo: bundled (py3r) pipelines first, a non-selectable divider,
-        then user-supplied ones (⚠ + warn colour, prompted before they run)."""
+        """One combo: bundled (py3r) pipelines first, then a divider per
+        untrusted group (⚠ + warn colour, prompted before they run) — the
+        manual ``/user`` fallback under a generic header, each git source
+        under its own header naming the repo."""
         from PySide6.QtGui import QColor
 
         combo = self._pipeline_combo
@@ -396,18 +418,37 @@ class MainWindow(QWidget):
             (e for e in self._pipelines if e["source"] == "bundled"),
             key=lambda e: e["label"].lower(),
         )
-        below = sorted(
-            (e for e in self._pipelines if e["source"] != "bundled"),
-            key=lambda e: e["label"].lower(),
-        )
         for e in above:
             combo.addItem(e["label"], userData=e)
-        if below:
-            combo.addItem("— user supplied pipelines —", userData=None)
+
+        sources_by_id = {s.id: s for s in pipeline_sources.load_sources()}
+        manual = sorted(
+            (e for e in self._pipelines if e["source"] == "user"),
+            key=lambda e: e["label"].lower(),
+        )
+        by_source_id: dict[str, list[dict]] = {}
+        for e in self._pipelines:
+            if e["source"] not in ("bundled", "user"):
+                by_source_id.setdefault(e["source"], []).append(e)
+        git_groups = sorted(
+            (
+                (sources_by_id[sid].repo if sid in sources_by_id else sid, entries)
+                for sid, entries in by_source_id.items()
+            ),
+            key=lambda pair: pair[0].lower(),
+        )
+
+        def add_group(header: str, entries: list[dict]) -> None:
+            combo.addItem(header, userData=None)
             combo.model().item(combo.count() - 1).setEnabled(False)
-            for e in below:
+            for e in sorted(entries, key=lambda e: e["label"].lower()):
                 combo.addItem(f"⚠  {e['label']}", userData=e)
                 combo.model().item(combo.count() - 1).setForeground(QColor(_get_theme().warn))
+
+        if manual:
+            add_group("— user supplied pipelines —", manual)
+        for repo, entries in git_groups:
+            add_group(f"— {repo} —", entries)
 
     def _on_pipeline_changed(self) -> None:
         self._current_options = {}
@@ -428,9 +469,9 @@ class MainWindow(QWidget):
         if resolved["trust"] != "trusted" and not ask(
             self,
             "Trust this pipeline?",
-            f'"{resolved["name"]}" can run code and/or models that were not created by '
-            "the ETH 3R Hub. Only run it if you trust the author(s).\n\n"
-            "Do you trust the author(s)?",
+            f'"{resolved["name"]}"{self._pipeline_origin_note(resolved)} can run code '
+            "and/or models that were not created by the ETH 3R Hub. Only run it if you "
+            "trust the author(s).\n\nDo you trust the author(s)?",
             yes_label="Yes",
             no_label="No",
         ):
@@ -504,4 +545,6 @@ class MainWindow(QWidget):
             self._env_panel.refresh_theme()
         if hasattr(self, "_update_indicator"):
             self._update_indicator.refresh_theme()
+        if hasattr(self, "_pipeline_manager_btn"):
+            self._pipeline_manager_btn.refresh_theme()
         self.setStyleSheet(base_stylesheet(_T))

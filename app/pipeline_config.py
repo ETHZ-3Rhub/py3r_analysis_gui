@@ -61,6 +61,11 @@ def user_models_dir() -> Path:
     return user_dir() / "models"
 
 
+def user_sources_dir() -> Path:
+    """Where installed git pipeline sources live, one self-contained folder each."""
+    return user_dir() / "sources"
+
+
 def bundled_configs_dir() -> Path:
     return _BUNDLED_CONFIGS
 
@@ -76,24 +81,41 @@ def _bundled_models_root() -> Path | None:
 
 
 # ── Startup discovery (cheap: lists files, reads names — never resolves) ──────
-def discover() -> list[dict]:
-    """Enumerate bundled + user configs into list entries for the pipeline combo.
+def discover(*, include_hidden: bool = False) -> list[dict]:
+    """Enumerate bundled + manual-user + git-source configs into list entries for
+    the pipeline combo.
 
-    Each entry: ``{config_path, source, id, label}``. ``source`` ("bundled" /
-    "user") is the only thing the combo needs — it drives both above/below-divider
-    placement and the trust prompt, so discovery never has to resolve anything.
-    ``ignore.txt`` suppresses bundled ids. Never raises.
+    Each entry: ``{config_path, source, id, label}``. ``source`` is "bundled",
+    "user" (the manual ``/user/configs`` fallback), or a git source id — it
+    drives both above/below-divider placement and the trust prompt, so discovery
+    never has to resolve anything. ``hidden.toml`` suppresses entries by
+    ``(source, id)``, uniformly across all three roots — pass
+    ``include_hidden=True`` (the Manage Pipelines dialog does, to list
+    everything with its checked/unchecked state) to skip that filtering. Never
+    raises.
     """
     entries: list[dict] = []
     for path in sorted(_BUNDLED_CONFIGS.glob("*.toml")):
         entries.append(_enumerate(path, "bundled"))
+
     ucfg = user_configs_dir()
     if ucfg.is_dir():
         for path in sorted(ucfg.glob("*.toml")):
             entries.append(_enumerate(path, "user"))
 
-    ignored = _read_ignore()
-    return [e for e in entries if not (e["source"] == "bundled" and e["id"] in ignored)]
+    sdir = user_sources_dir()
+    if sdir.is_dir():
+        for src_dir in sorted(p for p in sdir.iterdir() if p.is_dir()):
+            cfg_dir = src_dir / "configs"
+            if not cfg_dir.is_dir():
+                continue
+            for path in sorted(cfg_dir.glob("*.toml")):
+                entries.append(_enumerate(path, src_dir.name))
+
+    if include_hidden:
+        return entries
+    hidden = read_hidden()
+    return [e for e in entries if (e["source"], e["id"]) not in hidden]
 
 
 def _enumerate(path: Path, source: str) -> dict:
@@ -107,16 +129,30 @@ def _enumerate(path: Path, source: str) -> dict:
     return {"config_path": path, "source": source, "id": path.stem, "label": label}
 
 
-def _read_ignore() -> set[str]:
-    path = user_configs_dir() / "ignore.txt"
+# ── Hidden pipelines (replaces the old bundled-only ignore.txt) ───────────────
+def read_hidden() -> set[tuple[str, str]]:
+    """``(source, id)`` pairs to suppress from ``discover()``, across every root.
+    Written by the Manage Pipelines dialog; never raises on a bad file."""
+    path = user_dir() / "hidden.toml"
     if not path.is_file():
         return set()
-    out: set[str] = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            out.add(line)
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    out: set[tuple[str, str]] = set()
+    for entry in data.get("hidden", []):
+        src, pid = entry.get("source"), entry.get("id")
+        if isinstance(src, str) and isinstance(pid, str):
+            out.add((src, pid))
     return out
+
+
+def write_hidden(hidden: set[tuple[str, str]]) -> None:
+    path = user_dir() / "hidden.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f'[[hidden]]\nsource = "{src}"\nid = "{pid}"\n' for src, pid in sorted(hidden)]
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 # ── Resolution (parse + extends + resource resolution + trust) ───────────────
@@ -127,9 +163,11 @@ def resolve(config_path: Path) -> dict:
     """
     raw = _parse(config_path)
     # Fail closed: trusted only if the resolved path is provably under the
-    # bundled dir we ship — anything else (including a /user/ symlink whose
-    # target resolves outside user_configs_dir()) is untrusted by default.
-    source = "bundled" if _is_under(config_path, _BUNDLED_CONFIGS) else "user"
+    # bundled dir we ship — anything else (manual /user/ files, or a git source's
+    # own folder) is untrusted by default. base_dir is where that config's own
+    # entry/weights relative paths resolve against — the manual /user/ tree for
+    # the hand-copied fallback, or that source's own self-contained folder.
+    source, base_dir = _identify_root(config_path)
 
     if "extends" in raw:
         base_id = raw["extends"]
@@ -140,7 +178,23 @@ def resolve(config_path: Path) -> dict:
     else:
         merged = raw
 
-    return _build(merged, config_path, source)
+    return _build(merged, config_path, source, base_dir)
+
+
+def _identify_root(config_path: Path) -> tuple[str, Path]:
+    """Which root a config file was found under, and the base directory its own
+    relative ``entry``/``weights`` paths resolve against."""
+    if _is_under(config_path, _BUNDLED_CONFIGS):
+        return "bundled", _BUNDLED_CONFIGS
+    sdir = user_sources_dir()
+    try:
+        rel = config_path.resolve().relative_to(sdir.resolve())
+    except (ValueError, OSError):
+        rel = None
+    if rel is not None and rel.parts:
+        source_id = rel.parts[0]
+        return source_id, sdir / source_id
+    return "user", user_dir()
 
 
 def _parse(path: Path) -> dict:
@@ -184,7 +238,7 @@ def _merge_table(base: dict, delta: dict, path: str) -> dict:
     return out
 
 
-def _build(merged: dict, config_path: Path, source: str) -> dict:
+def _build(merged: dict, config_path: Path, source: str, base_dir: Path) -> dict:
     name = merged.get("name") or config_path.stem
 
     mav = merged.get("min_app_version")
@@ -195,7 +249,7 @@ def _build(merged: dict, config_path: Path, source: str) -> dict:
     for role, m in merged.get("models", {}).items():
         if "weights" not in m:
             raise ConfigError(f"[models.{role}] is missing 'weights'.")
-        weights_dir, weights_source = _resolve_weights(m["weights"])
+        weights_dir, weights_source = _resolve_weights(m["weights"], base_dir)
         models[role] = {
             "weights_dir": weights_dir,
             "weights_source": weights_source,
@@ -214,7 +268,7 @@ def _build(merged: dict, config_path: Path, source: str) -> dict:
     if script_raw is not None:
         if "entry" not in script_raw:
             raise ConfigError("[script] is missing 'entry'.")
-        entry = _resolve_entry(script_raw["entry"])
+        entry = _resolve_entry(script_raw["entry"], base_dir)
         params = {k: v for k, v in script_raw.items() if k not in ("entry", "options")}
         script = {
             "entry": script_raw["entry"],
@@ -234,6 +288,13 @@ def _build(merged: dict, config_path: Path, source: str) -> dict:
             raise ConfigError(
                 f"[loader] format = {fmt!r} is not supported (use 'yolo3r' or 'dlc')."
             )
+        aspect_ratio = loader.get("aspect_ratio", 1.0)
+        if (
+            not isinstance(aspect_ratio, int | float)
+            or isinstance(aspect_ratio, bool)
+            or aspect_ratio <= 0
+        ):
+            raise ConfigError("[loader] needs a positive numeric 'aspect_ratio'.")
 
     # Trust is authorship, nothing else: a /user config we didn't write is
     # untrusted even if it only references bundled code (it could still extend a
@@ -254,34 +315,38 @@ def _build(merged: dict, config_path: Path, source: str) -> dict:
     }
 
 
-def _resolve_weights(weights: str) -> tuple[Path, str]:
+def _resolve_weights(weights: str, base_dir: Path) -> tuple[Path, str]:
     """Resolve a ``weights`` reference to (folder, source).
 
     source is "bundled", "user", or "missing". Bundled name wins over a
-    same-named /user folder (a user can't shadow ours). A missing folder is *not*
-    an error here — weights only load during tracking (track.py raises a clear
-    per-video error then), so a missing model never blocks a CSV-only run, and
-    only a /user model that actually loads is a trust risk."""
+    same-named user-side folder (a user can't shadow ours). *base_dir* is the
+    manual ``/user`` tree for the hand-copied fallback, or a git source's own
+    folder — either way its ``models/`` subfolder is where a bare weights name
+    is looked up. A missing folder is *not* an error here — weights only load
+    during tracking (track.py raises a clear per-video error then), so a missing
+    model never blocks a CSV-only run, and only a model that actually loads is a
+    trust risk."""
     bundled_root = _bundled_models_root()
     if bundled_root is not None and (bundled_root / weights).is_dir():
         return bundled_root / weights, "bundled"
-    user_folder = user_models_dir() / weights
+    user_folder = base_dir / "models" / weights
     if user_folder.is_dir():
         return user_folder, "user"
     fallback = (bundled_root / weights) if bundled_root is not None else user_folder
     return fallback, "missing"
 
 
-def _resolve_entry(entry: str) -> dict:
+def _resolve_entry(entry: str, base_dir: Path) -> dict:
     """``module:fn`` → bundled ``app.scripts.<module>``; a path ending ``.py``
-    or containing ``/`` → ``/user/<path>`` (untrusted)."""
+    or containing ``/`` → resolved under *base_dir* (untrusted) — the manual
+    ``/user`` tree, or a git source's own folder."""
     module, sep, func = entry.partition(":")
     if not sep or not func:
         raise ConfigError(f"entry '{entry}' must be 'module:function' or 'path.py:function'.")
     if "/" in module or module.endswith(".py"):
-        path = (user_dir() / module).resolve()
+        path = (base_dir / module).resolve()
         if not path.is_file():
-            raise ConfigError(f"script not found: {module} (/user/{module}).")
+            raise ConfigError(f"script not found: {module} (in {base_dir}).")
         return {"kind": "user", "source": "user", "path": path, "func": func}
     return {
         "kind": "bundled",

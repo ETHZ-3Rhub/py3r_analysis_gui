@@ -24,6 +24,7 @@ hooks:
 
 nav:
   - Overview: index.md
+  - Pipeline sources: sources.md
   - Configs: configs.md
   - Models: models.md
   - Scripts: scripts.md

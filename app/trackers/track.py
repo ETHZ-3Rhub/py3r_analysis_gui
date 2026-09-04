@@ -65,6 +65,7 @@ class InstanceSpec:
     instance_type: str
     keypoint_names: list[str]
     max_instances: int
+    raw_indices: list[int]  # index into the model's raw keypoint output for each name above
 
 
 @dataclass
@@ -165,9 +166,9 @@ def load_model_spec(
                 f"This model will never detect '{itype}' — check the weights are the "
                 f"intended model, or fix the instance_type in the config."
             )
-        max_idx = max(entries.keys())
-        kp_names = [entries.get(i, f"kp_{i}") for i in range(max_idx + 1)]
-        instances.append(InstanceSpec(itype, kp_names, max_inst))
+        raw_indices = sorted(entries.keys())
+        kp_names = [entries[i] for i in raw_indices]
+        instances.append(InstanceSpec(itype, kp_names, max_inst, raw_indices))
 
     stride = 1
     fill = None
@@ -355,6 +356,8 @@ def track(
         for inst_spec in spec.instances:
             itype = inst_spec.instance_type
             n_kp = len(inst_spec.keypoint_names)
+            raw_indices = inst_spec.raw_indices
+            max_raw_idx = raw_indices[-1] if raw_indices else -1
 
             if itype in direct_types:
                 # max=1: single slot, filled straight from direct_data — no packing.
@@ -367,8 +370,8 @@ def track(
                         bboxes[frame_idx] = det["bbox"]
                         bbox_conf[frame_idx] = det["conf"]
                         kp = det["kp"]
-                        if kp is not None and kp.shape[0] >= n_kp:
-                            kps[frame_idx] = kp[:n_kp]
+                        if kp is not None and kp.shape[0] > max_raw_idx:
+                            kps[frame_idx] = kp[raw_indices]
 
                 if spec.stride > 1 and spec.stride_fill == "ffill":
                     _ffill_arrays(bboxes, bbox_conf, kps)
@@ -391,8 +394,8 @@ def track(
                         if frame_idx < n_alloc:
                             bboxes[frame_idx] = bbox
                             bbox_conf[frame_idx] = conf
-                            if kp is not None and kp.shape[0] >= n_kp:
-                                kps[frame_idx] = kp[:n_kp]
+                            if kp is not None and kp.shape[0] > max_raw_idx:
+                                kps[frame_idx] = kp[raw_indices]
 
                 if spec.stride > 1 and spec.stride_fill == "ffill":
                     _ffill_arrays(bboxes, bbox_conf, kps)

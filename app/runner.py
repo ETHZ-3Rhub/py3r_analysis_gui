@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import pickle
 import queue
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,7 +22,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from app import naming
+from app import naming, pipeline_sources
 from app.proc_utils import kill_tree, popen_grouped
 from app.trackers import yolo_tracker
 
@@ -58,6 +59,7 @@ class PipelineRunner(QThread):
             "yes",
         )
         self._warnings: list[str] = []
+        self._snapshotted = False
         self._current_proc: subprocess.Popen | None = None
         self._cancelled = False
 
@@ -80,6 +82,7 @@ class PipelineRunner(QThread):
                 self.error.emit(error)
         finally:
             if not self._cancelled:
+                self._snapshotted = self._write_pipeline_snapshot()
                 self._write_report(error)
 
     # ── Orchestration ──────────────────────────────────────────────────────────
@@ -298,9 +301,19 @@ class PipelineRunner(QThread):
         lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
         lines.append(f"App version: {app_version}")
         lines.append(f"Pipeline: {config['name']}  (config: {config['config_path'].name})")
+        source_note = self._pipeline_source_note()
+        if source_note:
+            lines.append(source_note)
         lines.append("")
         lines.extend(self._resolved_config_lines())
         lines.append("")
+        if self._snapshotted:
+            lines.append(
+                "Pipeline snapshot: pipeline_snapshot/ — the untrusted (not bundled with "
+                "the app) config, script, and/or model files this run actually used, "
+                "since they aren't shipped with the app and could change or disappear later."
+            )
+            lines.append("")
 
         if error:
             lines.append("Status: FAILED")
@@ -355,6 +368,19 @@ class PipelineRunner(QThread):
 
         (self._output_dir / "Analys3R_report.txt").write_text("\n".join(lines) + "\n")
 
+    def _pipeline_source_note(self) -> str | None:
+        """'Source: owner/repo @ ref' for a git-sourced pipeline, else None —
+        names where an installed source's pipeline actually came from, since
+        "config: <name>.toml" alone doesn't say that once it's not bundled or
+        a hand-copied /user file."""
+        source = self._config["source"]
+        if source in ("bundled", "user"):
+            return None
+        match = next((s for s in pipeline_sources.load_sources() if s.id == source), None)
+        if match is None:
+            return f"Source: {source}  (git source, no longer in sources.toml)"
+        return f"Source: {match.repo} @ {match.ref}"
+
     def _resolved_config_lines(self) -> list[str]:
         """Render the resolved (flattened base + delta) config so 'what actually
         ran' is fully inspectable even when the on-disk config was a small delta."""
@@ -381,6 +407,70 @@ class PipelineRunner(QThread):
             params = config["script"]["params"]
             out.append(f"    params: {params if params else '(none)'}")
         return out
+
+    def _write_pipeline_snapshot(self) -> bool:
+        """Copy the untrusted config/script/model-metadata this run actually
+        used into output_dir/pipeline_snapshot/, so what ran stays inspectable
+        even if the source file (manual /user, or an installed git source) is
+        later edited, updated, or removed.
+
+        Bundled content is deliberately NOT copied — it ships with the app,
+        so "App version: X" in the report already pins its exact bytes; only
+        untrusted content (unversioned, editable/updatable in place) needs this.
+        Model weights are recorded as path/size/mtime, never copied — a
+        weights folder can be many GB, so hashing/copying its bytes on every
+        run would be prohibitively expensive for no real benefit (nobody
+        manually verifies a hash; size+mtime already catches a swap/retrain).
+
+        Returns True if anything was actually written (skipped/absent
+        entirely for a fully bundled, built-in pipeline — nothing to add
+        beyond what the app version already pins)."""
+        config = self._config
+        snap_dir = self._output_dir / "pipeline_snapshot"
+        wrote_anything = False
+
+        def ensure_dir() -> None:
+            nonlocal wrote_anything
+            if not wrote_anything:
+                snap_dir.mkdir(exist_ok=True)
+            wrote_anything = True
+
+        if config["trust"] != "trusted":
+            ensure_dir()
+            shutil.copy2(config["config_path"], snap_dir / "config.toml")
+
+        script = config["script"]
+        if script is not None and script["entry_source"] == "user":
+            ensure_dir()
+            shutil.copy2(script["_entry"]["path"], snap_dir / "script.py")
+
+        weights_lines: list[str] = []
+        for role, m in config["models"].items():
+            if m["weights_source"] != "user":
+                continue
+            weights_dir: Path = m["weights_dir"]
+            best_pt = weights_dir / "best.pt"
+            try:
+                st = best_pt.stat()
+                size_mb = st.st_size / (1024 * 1024)
+                mtime = datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")
+                weights_lines.append(f"{role}: {weights_dir}")
+                weights_lines.append(f"  best.pt: {size_mb:.1f} MB, modified {mtime}")
+            except OSError:
+                weights_lines.append(f"{role}: {weights_dir}  (best.pt not found)")
+
+            mapping_csv = weights_dir / "output_mapping.csv"
+            if mapping_csv.is_file():
+                ensure_dir()
+                shutil.copy2(mapping_csv, snap_dir / f"{role}_output_mapping.csv")
+                weights_lines.append(f"  output_mapping.csv copied to {role}_output_mapping.csv")
+            weights_lines.append("")
+
+        if weights_lines:
+            ensure_dir()
+            (snap_dir / "weights.txt").write_text("\n".join(weights_lines).rstrip() + "\n")
+
+        return wrote_anything
 
     def _write_warning_file(self) -> None:
         path = self._output_dir / "Analys3R_ERRORS.txt"
