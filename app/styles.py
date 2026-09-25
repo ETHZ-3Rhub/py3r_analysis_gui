@@ -194,6 +194,14 @@ def base_stylesheet(t) -> str:
             text-align: right;
         }}
         QPushButton#settingsButton:hover {{ color: {t.panel_text}; }}
+        QPushButton#creditButton {{
+            background: transparent;
+            color: {t.muted};
+            border: none;
+            font-size: 10px;
+            padding: 0;
+        }}
+        QPushButton#creditButton:hover {{ color: {t.panel_text}; }}
         QToolTip {{
             background-color: {t.panel};
             color: {t.panel_text};

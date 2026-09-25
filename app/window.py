@@ -11,6 +11,7 @@ import os
 import webbrowser
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from app import pipeline_config, pipeline_sources
+from app.about_dialog import CREDIT, AboutDialog
 from app.comparisons_panel import ComparisonsPanel
 from app.confirm_dialog import ask, error_with_copy, pipeline_reference_image
 from app.gating import TooltipOnDisabled, build_gated_section, set_gated_enabled
@@ -317,6 +319,14 @@ class MainWindow(QWidget):
         bottom_row.addWidget(settings_btn)
 
         layout.addLayout(bottom_row)
+
+        credit_btn = QPushButton(f"Analys3R v{get_version()} {CREDIT}")
+        credit_btn.setObjectName("creditButton")
+        credit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        credit_btn.setToolTip("About Analys3R")
+        credit_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        credit_btn.clicked.connect(lambda: AboutDialog(self).exec())
+        layout.addWidget(credit_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         return panel
 
