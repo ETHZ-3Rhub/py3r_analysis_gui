@@ -93,11 +93,24 @@ class MainWindow(QWidget):
         # sections, the Analyse button) — Qt suppresses them by default.
         self._btn_tooltip_filter = TooltipOnDisabled(self)
 
-        root = QHBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
+        # Outer column: the two panels, then a thin credit strip on the bare
+        # window background beneath them — reads as a serial number, not UI.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 3)
+        outer.setSpacing(4)
+        root = QHBoxLayout()
         root.setSpacing(12)
         root.addWidget(self._build_left_panel(), stretch=2)
         root.addWidget(self._build_run_panel(), stretch=3)
+        outer.addLayout(root, stretch=1)
+
+        credit_btn = QPushButton(f"Analys3R v{get_version()} {CREDIT}")
+        credit_btn.setObjectName("creditButton")
+        credit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        credit_btn.setToolTip("About Analys3R")
+        credit_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        credit_btn.clicked.connect(lambda: AboutDialog(self).exec())
+        outer.addWidget(credit_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         self._run_btn.installEventFilter(self._btn_tooltip_filter)
         self._env_panel.status_changed.connect(self._on_env_status_changed)
@@ -319,14 +332,6 @@ class MainWindow(QWidget):
         bottom_row.addWidget(settings_btn)
 
         layout.addLayout(bottom_row)
-
-        credit_btn = QPushButton(f"Analys3R v{get_version()} {CREDIT}")
-        credit_btn.setObjectName("creditButton")
-        credit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        credit_btn.setToolTip("About Analys3R")
-        credit_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        credit_btn.clicked.connect(lambda: AboutDialog(self).exec())
-        layout.addWidget(credit_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         return panel
 

@@ -29,21 +29,26 @@ class AboutDialog(QDialog):
         title.setObjectName("aboutTitle")
         layout.addWidget(title)
 
-        layout.addWidget(QLabel("Created by Tom Lorimer in the 3R Hub, ETH Zurich.<br>© 2026"))
+        credit = "Designed and developed by Tom Lorimer in the 3R Hub, ETH Zurich.<br>© 2026"
+        layout.addWidget(QLabel(credit))
+
+        def link(url: str, text: str) -> str:
+            # Qt ignores colour on <a> itself; a span inside it is honoured.
+            return f'<a href="{url}"><span style="color:{t.accent}">{text}</span></a>'
 
         body = QLabel(
-            "Initial concept: [PERSON 1]<br>"
-            "Testing and feedback: [PERSON 2], [PERSON 1], [PERSON 3]<br><br>"
+            "Initial concept: Oliver Sturman<br>"
+            "Testing and feedback: Fabienne Rössler, Oliver Sturman, Maria Wilhelm<br><br>"
             "Built using the "
-            '<a href="https://github.com/ETHZ-3Rhub/py3r_behaviour">'
-            "py3r_behaviour</a> engine.<br><br>"
-            f'Source code: <a href="{REPO_URL}">github.com/{REPO}</a><br><br>'
+            f"{link('https://github.com/ETHZ-3Rhub/py3r_behaviour', 'py3r_behaviour')} "
+            "engine.<br><br>"
+            f"Source code: {link(REPO_URL, f'github.com/{REPO}')}<br><br>"
             "The source code is released under the "
-            f'<a href="{REPO_URL}/blob/main/LICENSE">MIT Licence</a>.<br><br>'
+            f"{link(f'{REPO_URL}/blob/main/LICENSE', 'MIT Licence')}.<br><br>"
             "Release builds bundle model weights licensed under "
-            '<a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a>. '
+            f"{link('https://www.gnu.org/licenses/agpl-3.0.html', 'AGPL-3.0')}. "
             "The tracking environment installs "
-            '<a href="https://github.com/ultralytics/ultralytics">Ultralytics YOLO</a>'
+            f"{link('https://github.com/ultralytics/ultralytics', 'Ultralytics YOLO')}"
             ", also AGPL-3.0."
         )
         body.setWordWrap(True)
