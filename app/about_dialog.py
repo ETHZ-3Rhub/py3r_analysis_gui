@@ -38,7 +38,8 @@ class AboutDialog(QDialog):
 
         body = QLabel(
             "Initial concept: Oliver Sturman<br>"
-            "Testing and feedback: Fabienne Rössler, Oliver Sturman, Maria Wilhelm<br><br>"
+            "Testing and feedback: Fabienne Rössler, Oliver Sturman, Kimberly Thibeault, "
+            "Maria Wilhelm<br><br>"
             "Built using the "
             f"{link('https://github.com/ETHZ-3Rhub/py3r_behaviour', 'py3r_behaviour')} "
             "engine.<br><br>"
