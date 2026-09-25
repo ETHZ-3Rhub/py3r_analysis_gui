@@ -11,8 +11,8 @@ import os
 import webbrowser
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QCloseEvent, QGuiApplication
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -535,17 +535,7 @@ class MainWindow(QWidget):
     def _open_results(self) -> None:
         if not self._run_controller.last_output:
             return
-        import platform
-        import subprocess
-
-        path = self._run_controller.last_output
-        system = platform.system()
-        if system == "Windows":
-            os.startfile(path)
-        elif system == "Darwin":
-            subprocess.Popen(["open", path])
-        else:
-            subprocess.Popen(["xdg-open", path])
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._run_controller.last_output)))
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _apply_stylesheet(self) -> None:
