@@ -26,6 +26,36 @@ def _range_label(lo: int | float, hi: int | float) -> QLabel:
     return lbl
 
 
+CPU_OPTION = "tracking_cpu"
+
+
+def batch_option_name(role: str) -> str:
+    return f"batch:{role}"
+
+
+def tracking_option_specs(config: dict | None) -> list[dict]:
+    """Tracking rows for the dialog, shown whenever the source is video.
+
+    One batch-size row per model in the pipeline (each starts at the config's own
+    value, since the right size depends on that model's input size), plus a
+    machine-level "CPU only" switch.
+    """
+    models = config["models"] if config else {}
+    rows = [
+        {
+            "name": batch_option_name(role),
+            "type": int,
+            "default": m.get("batch") or 1,
+            "label": "Batch size" if len(models) == 1 else f"Batch size ({role})",
+            "min": 1,
+            "max": 128,
+        }
+        for role, m in models.items()
+    ]
+    rows.append({"name": CPU_OPTION, "type": bool, "default": False, "label": "Track on CPU only"})
+    return rows
+
+
 class AdvancedOptionsDialog(QDialog):
     """Dialog that builds a form from a pipeline's option specs.
 

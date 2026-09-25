@@ -35,7 +35,7 @@ from app.comparisons_panel import ComparisonsPanel
 from app.confirm_dialog import ask, error_with_copy, pipeline_reference_image
 from app.gating import TooltipOnDisabled, build_gated_section, set_gated_enabled
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
-from app.options_dialog import AdvancedOptionsDialog
+from app.options_dialog import CPU_OPTION, AdvancedOptionsDialog, tracking_option_specs
 from app.pipeline_manager_dialog import PipelineManagerButton
 from app.run_controller import RunController
 from app.settings_dialog import SettingsDialog, get_version
@@ -88,6 +88,10 @@ class MainWindow(QWidget):
         self._resolved: dict | None = None  # resolved config for the current selection
         self._last_source_is_csv: bool | None = None  # None until a source is first chosen
         self._current_options: dict = {}
+        # The device choice depends on the machine, not the pipeline, so unlike
+        # _current_options (which holds the script options and per-model batch
+        # sizes) it survives switching pipeline.
+        self._tracking_options: dict = {}
 
         # Shared filter so tooltips still show on disabled widgets (gated
         # sections, the Analyse button) — Qt suppresses them by default.
@@ -129,7 +133,7 @@ class MainWindow(QWidget):
             csv_radio=self._csv_radio,
             env_panel=self._env_panel,
             get_config=lambda: self._resolved,
-            get_options=lambda: self._current_options,
+            get_options=lambda: {**self._current_options, **self._tracking_options},
             on_video_radio_refresh=self._update_video_radio_availability,
             parent=self,
         )
@@ -509,16 +513,23 @@ class MainWindow(QWidget):
         self._run_controller.refresh_run_button()
 
     def _open_options(self) -> None:
-        if self._resolved is None or self._resolved["script"] is None:
-            return
-        options = self._resolved["script"]["options"]
-        if not options:
+        script = self._resolved["script"] if self._resolved else None
+        spec = _options_spec(script["options"]) if script else []
+        show_tracking = not self._csv_radio.isChecked()
+        if show_tracking:
+            spec += tracking_option_specs(self._resolved)
+        if not spec:
             return
         from PySide6.QtWidgets import QDialog
 
-        dlg = AdvancedOptionsDialog(_options_spec(options), self._current_options, parent=self)
+        current = {**self._current_options, **self._tracking_options}
+        dlg = AdvancedOptionsDialog(spec, current, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._current_options = dlg.values()
+            values = dlg.values()
+            if CPU_OPTION in values:
+                self._tracking_options = {CPU_OPTION: values.pop(CPU_OPTION)}
+            # update, not replace: the tracking rows aren't shown for CSV sources
+            self._current_options.update(values)
 
     def _on_env_status_changed(self) -> None:
         self._update_video_radio_availability()

@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from app.comparisons_panel import ComparisonsPanel
 from app.confirm_dialog import ask
 from app.group_manifest_panel import GroupManifestPanel
+from app.options_dialog import tracking_option_specs
 from app.runner import PipelineRunner
 from app.theme import get_theme as _get_theme
 from app.tracking_env_panel import TrackingEnvPanel
@@ -90,12 +91,13 @@ class RunController(QObject):
     def refresh_run_button(self) -> None:
         config = self._get_config()
         options = config["script"]["options"] if (config and config["script"]) else {}
+        skip = self._csv_radio.isChecked()
         # Hidden rather than disabled-with-tooltip when there's nothing to configure —
         # it sits next to the pipeline manage button now and shouldn't clutter that row
-        # when there's no per-pipeline option to reach.
-        self._options_btn.setVisible(bool(options))
-        if options:
-            n = len(options)
+        # when there's no option to reach. Tracking options apply whenever we track.
+        n = len(options) + (0 if skip else len(tracking_option_specs(config)))
+        self._options_btn.setVisible(n > 0)
+        if n:
             self._options_btn.setToolTip(f"{n} advanced option{'s' if n != 1 else ''} available.")
 
         reasons: list[str] = []
@@ -109,7 +111,6 @@ class RunController(QObject):
             reasons.append("No output folder set.")
 
         # Hard block: tracking env not ready (only matters when actually tracking)
-        skip = self._csv_radio.isChecked()
         if not skip and not self._env_panel.env_ready():
             env_status = self._env_panel.status()
             if env_status == "installing":
