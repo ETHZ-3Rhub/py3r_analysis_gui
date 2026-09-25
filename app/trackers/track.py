@@ -247,15 +247,21 @@ def track(
     present and written as stable _0/_1/... slots.  If fewer tracks than
     max_instances exist, the remaining slots are all-NaN columns.
 
-    device: "auto" (CUDA if available), "cpu", "cuda", "cuda:0", "mps", etc.
+    device: "auto" (CUDA, else Apple MPS, else CPU), "cpu", "cuda", "cuda:0", "mps", etc.
     progress_cb: optional callable(video_frame_index: int).
     """
     import torch
 
     if device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
 
-    half = device != "cpu"
+    # fp16 only on CUDA: it is unreliable for some ops on MPS.
+    half = device.startswith("cuda")
     output_csv.parent.mkdir(parents=True, exist_ok=True)
 
     cap = cv2.VideoCapture(str(video))

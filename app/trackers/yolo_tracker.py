@@ -68,7 +68,7 @@ def _find_models_dir() -> Path:
         return Path(override)
 
     if getattr(sys, "frozen", False):
-        candidate = Path(sys.executable).parent / "models"
+        candidate = paths.bundled_models_dir()
         if candidate.is_dir():
             return candidate
         raise RuntimeError(f"Bundled model weights not found at {candidate}")

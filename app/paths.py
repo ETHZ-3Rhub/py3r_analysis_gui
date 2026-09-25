@@ -43,6 +43,14 @@ def tracking_env_dir() -> Path:
     return data_dir() / "tracking_env"
 
 
+def bundled_models_dir() -> Path:
+    """Where the build script puts the shipped model weights (read-only)."""
+    exe_dir = Path(sys.executable).parent
+    if sys.platform == "darwin":
+        return exe_dir.parent / "Resources" / "models"  # inside Analys3R.app
+    return exe_dir / "models"
+
+
 def migrate_legacy_user_dir() -> None:
     """Copy a pre-existing ``user/`` folder from next to the executable (the old
     layout) into the data folder, once. The old copy is left in place. The
