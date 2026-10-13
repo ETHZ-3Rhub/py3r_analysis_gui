@@ -60,6 +60,13 @@ The GUI calls `tracking_env/Scripts/python.exe` (Windows) or
 `tracking_env/bin/python` (Unix) as a subprocess to run
 `app/trackers/track.py` — the two environments never share a process.
 
+In a development run, `tracking_env/` and `user/` live in the repo root.
+Packaged builds keep them in the per-user data folder instead
+(`%LOCALAPPDATA%\Analys3R`, `~/Library/Application Support/Analys3R` or
+`~/.local/share/Analys3R`), because the app's own folder may be read-only (a
+signed macOS `.app`) or replaced on update. Set `PY3R_DATA_DIR` to use another
+folder for either; see `app/paths.py`.
+
 ## Running the GUI
 
 ```bash

@@ -20,7 +20,7 @@ Each pipeline row has a **Hide**/**Show** toggle — this only affects whether i
 
 ## Publishing your own source repo
 
-A source repo has the same three top-level folders as the manual `/user/` fallback — `configs/`, `scripts/`, `models/` — see [Configs](configs.md), [Models](models.md), and [Scripts](scripts.md) for their contents. The only difference is that paths inside a config (`entry`, `weights`) resolve relative to the repo's own root, not `/user/`.
+A source repo has the same three top-level folders as the manual fallback in your [user folder](index.md#where-your-files-are-kept) — `configs/`, `scripts/`, `models/` — see [Configs](configs.md), [Models](models.md), and [Scripts](scripts.md) for their contents. The only difference is that paths inside a config (`entry`, `weights`) resolve relative to the repo's own root, not the user folder.
 
 ```
 configs/my_pipeline.toml
@@ -54,4 +54,4 @@ Then attach `my_model.zip` to that GitHub release — a zip of the model folder'
 
 ### Trust and access
 
-The repo must be **public** — there's no private-repo or access-token support. Anything installed this way is untrusted the same as a hand-copied `/user` file; it's the author's job to publish something lab members will actually trust, and the confirm dialog names your repo so they know where it came from.
+The repo must be **public** — there's no private-repo or access-token support. Anything installed this way is untrusted the same as a file hand-copied into the user folder; it's the author's job to publish something lab members will actually trust, and the confirm dialog names your repo so they know where it came from.

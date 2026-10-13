@@ -1,6 +1,6 @@
 # Models
 
-Custom model weights go in a [pipeline source's](sources.md) `models/` folder, or `/user/models/` for the manual fallback. Each model is a named folder.
+Custom model weights go in a [pipeline source's](sources.md) `models/` folder, or `models/` in your [user folder](index.md#where-your-files-are-kept) for the manual fallback. Each model is a named folder.
 
 ## Folder layout
 
