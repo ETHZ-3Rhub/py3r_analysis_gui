@@ -43,4 +43,12 @@ fi
 echo "Copying model weights..."
 python scripts/materialize_models.py "$MODELS_SRC" "$MODELS_DEST"
 
+if [ "$(uname -s)" = "Darwin" ]; then
+    # Adding the models changed the bundle after PyInstaller signed it, which
+    # makes other Macs report the app as "damaged". Re-apply the ad-hoc signature.
+    echo "Re-signing app bundle..."
+    codesign --force --deep --sign - "$OUT"
+    codesign --verify --deep --strict "$OUT"
+fi
+
 echo "Build complete: $OUT"
