@@ -49,7 +49,8 @@ _CONNECTIVITY_HOSTS = ["pypi.org", "download.pytorch.org"]
 def _uv_exe() -> str:
     """Path to the uv binary: bundled copy in a frozen app, else PATH."""
     if getattr(sys, "frozen", False):
-        candidate = Path(sys._MEIPASS) / "vendor" / "uv.exe"
+        name = "uv.exe" if sys.platform == "win32" else "uv"
+        candidate = Path(sys._MEIPASS) / "vendor" / name
         if candidate.exists():
             return str(candidate)
 
@@ -156,6 +157,14 @@ def _python_exe(tracking_env: Path) -> Path:
 
 _CUDA_SMOKE_TEST = """
 import sys, torch
+if torch.backends.mps.is_available():
+    try:
+        torch.zeros(1, device="mps")
+        print("MPS_OK:Apple GPU (MPS)")
+        sys.exit(0)
+    except Exception as e:
+        print(f"CUDA_ERROR:{e}")
+        sys.exit(1)
 if not torch.cuda.is_available():
     print("CUDA_NOT_AVAILABLE")
     sys.exit(1)
@@ -223,6 +232,8 @@ def _verify_cuda(python: str) -> tuple[bool, str, str]:
     for line in r.stdout.splitlines():
         if line.startswith("CUDA_OK:"):
             return True, line[len("CUDA_OK:") :], raw
+        if line.startswith("MPS_OK:"):
+            return True, line[len("MPS_OK:") :], raw
         if line.startswith("CUDA_NOT_AVAILABLE"):
             return False, "CUDA not available", raw
         if line.startswith("CUDA_ERROR:"):

@@ -5,7 +5,12 @@
 #
 # Build with:  pyinstaller py3r_analysis_gui.spec --clean
 
+import sys
+
 from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+IS_WIN = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
 
 # py3r is a namespace package (no __init__.py) - collect_all ensures its
 # submodules, data, and binaries are all bundled and that py3r.behaviour's
@@ -39,12 +44,13 @@ a = Analysis(
     pathex=["."],
     binaries=[
         # uv — used by app.tracking_env_setup to build tracking_env/ on the
-        # target machine, which won't have uv installed.
-        ("vendor/uv.exe", "vendor"),
-        # VC++ Redistributable — silently (re)installed as the first step of
-        # tracking env setup, since torch's CUDA build needs it and many
-        # target machines won't have it. Idempotent if already present.
-        ("vendor/vc_redist.x64.exe", "vendor"),
+        # target machine, which won't have uv installed. Fetched per-OS by
+        # build.bat / build.sh / the release workflow.
+        ("vendor/uv.exe" if IS_WIN else "vendor/uv", "vendor"),
+        # VC++ Redistributable (Windows only) — silently (re)installed as the
+        # first step of tracking env setup, since torch's CUDA build needs it
+        # and many target machines won't have it. Idempotent if already present.
+        *([("vendor/vc_redist.x64.exe", "vendor")] if IS_WIN else []),
         *py3r_binaries,
         *umap_binaries,
         *pycirclize_binaries,
@@ -93,10 +99,10 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=IS_WIN,
     console=False,      # no terminal window — set True temporarily to debug crashes
     disable_windowed_traceback=False,
-    icon="assets/icon.ico",
+    icon="assets/icon.ico" if IS_WIN else "assets/icon.icns",
 )
 
 coll = COLLECT(
@@ -105,7 +111,16 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=IS_WIN,
     upx_exclude=[],
     name="Analys3R",
 )
+
+if IS_MAC:
+    app = BUNDLE(
+        coll,
+        name="Analys3R.app",
+        icon="assets/icon.icns",
+        bundle_identifier="io.github.ethz-3rhub.analys3r",
+        info_plist={"NSHighResolutionCapable": True},
+    )

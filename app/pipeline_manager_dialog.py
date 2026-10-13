@@ -15,7 +15,8 @@ the user act on it.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -174,6 +175,11 @@ class PipelineManagerDialog(QDialog):
         self._populate()
 
     # ── UI ────────────────────────────────────────────────────────────────
+    def _open_user_folder(self) -> None:
+        folder = pipeline_config.user_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 20, 20, 16)
@@ -206,6 +212,11 @@ class PipelineManagerDialog(QDialog):
         outer.addWidget(scroll, stretch=1)
 
         btn_row = QHBoxLayout()
+        folder_btn = QPushButton("Open user folder")
+        folder_btn.setObjectName("dlgBtn")
+        folder_btn.setToolTip(str(pipeline_config.user_dir()))
+        folder_btn.clicked.connect(self._open_user_folder)
+        btn_row.addWidget(folder_btn)
         btn_row.addStretch()
         close_btn = QPushButton("Close")
         close_btn.setObjectName("dlgBtnPrimary")

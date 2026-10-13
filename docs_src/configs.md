@@ -1,6 +1,6 @@
 # Configs
 
-A config is a `.toml` file that defines a complete pipeline — which models to run for tracking, how to load the resulting data, and which analysis script to run. Configs live in a [pipeline source's](sources.md) `configs/` folder, or `/user/configs/` for the manual fallback. The filename stem is the pipeline's ID (e.g. `my_oft.toml` → id `my_oft`).
+A config is a `.toml` file that defines a complete pipeline — which models to run for tracking, how to load the resulting data, and which analysis script to run. Configs live in a [pipeline source's](sources.md) `configs/` folder, or `configs/` in your [user folder](index.md#where-your-files-are-kept) for the manual fallback. The filename stem is the pipeline's ID (e.g. `my_oft.toml` → id `my_oft`).
 
 A config does not need to define all sections. `[models]` is only needed if the pipeline runs tracking. `[loader]` and `[script]` are only needed if it runs analysis — `[loader]` defines how tracking files are loaded for the script to consume. A tracking-only config has `[models]` and no `[script]`; an analysis-only config has `[loader]` + `[script]` and no `[models]`.
 

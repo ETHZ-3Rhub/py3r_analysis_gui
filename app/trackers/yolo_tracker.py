@@ -29,17 +29,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app import paths
 from app.proc_utils import popen_grouped
 
 _TRACK_SCRIPT = Path(__file__).parent / "track.py"
 
 
 def tracking_env_dir() -> Path:
-    """Where tracking_env/ lives (or should be created): <exe_dir>/tracking_env
-    in a packaged app, <repo_root>/tracking_env in development."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "tracking_env"
-    return Path(__file__).parent.parent.parent / "tracking_env"
+    """Where tracking_env/ lives (or should be created): the per-user data
+    folder in a packaged app, <repo_root>/tracking_env in development."""
+    return paths.tracking_env_dir()
 
 
 def _find_python() -> Path:
@@ -69,7 +68,7 @@ def _find_models_dir() -> Path:
         return Path(override)
 
     if getattr(sys, "frozen", False):
-        candidate = Path(sys.executable).parent / "models"
+        candidate = paths.bundled_models_dir()
         if candidate.is_dir():
             return candidate
         raise RuntimeError(f"Bundled model weights not found at {candidate}")

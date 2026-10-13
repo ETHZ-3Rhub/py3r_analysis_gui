@@ -49,6 +49,12 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
             f"GPU (CUDA {cuda_ver})",
             f"Tracking is running on your GPU using CUDA {cuda_ver} — optimal performance.",
         )
+    if result == "mps":
+        return (
+            t.success,
+            "GPU (Apple Silicon)",
+            "Tracking is running on your Apple GPU (Metal) — optimal performance.",
+        )
     if result == "cpu":
         if _gpu_install_failed():
             return (
@@ -86,7 +92,7 @@ def parse_env_result(result: str) -> tuple[str, str, str]:
 
 
 class EnvCheckWorker(QThread):
-    """Emits one of: "cuda:<version>", "cpu", "not_installed", "error"."""
+    """Emits one of: "cuda:<version>", "mps", "cpu", "not_installed", "error"."""
 
     done = Signal(str)
 
@@ -102,7 +108,8 @@ class EnvCheckWorker(QThread):
                     "-c",
                     "import torch; "
                     "print(('cuda:' + (torch.version.cuda or 'unknown')) "
-                    "if torch.cuda.is_available() else 'cpu')",
+                    "if torch.cuda.is_available() else "
+                    "'mps' if torch.backends.mps.is_available() else 'cpu')",
                 ],
                 capture_output=True,
                 text=True,
@@ -163,7 +170,7 @@ class TrackingEnvPanel(QWidget):
         return self._env_status
 
     def env_ready(self) -> bool:
-        return self._env_status == "cpu" or self._env_status.startswith("cuda:")
+        return self._env_status in ("cpu", "mps") or self._env_status.startswith("cuda:")
 
     def is_installing(self) -> bool:
         return self._tracking_install_worker is not None

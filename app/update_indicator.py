@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import webbrowser
 
-from PySide6.QtCore import QThread, QTimer, Signal
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -32,12 +32,6 @@ from app.update_check import ReleaseInfo, check_for_updates
 # asset directly. Keep in sync with the README download link.
 DOWNLOAD_PAGE_URL = "https://ethz-3rhub.github.io/py3r_analysis_gui/"
 
-# Two blinks (on/off pulses), starting 3s and 4s after launch — late enough
-# not to compete with everything else appearing on screen at launch, spaced
-# out so each pulse reads as a distinct blink rather than one fast flicker.
-_BLINK_SCHEDULE_MS = [2000, 2150, 3000, 3150]  # on, off, on, off
-_SETTLE_MS = 3300  # back to the same plain look as Help/Settings
-
 
 class _UpdateCheckWorker(QThread):
     done = Signal(list)  # list[ReleaseInfo]
@@ -51,14 +45,17 @@ class _UpdateCheckWorker(QThread):
 
 
 class UpdateIndicator(QPushButton):
-    """Hidden until a check finds a newer release; click shows release notes."""
+    """Hidden until a check finds a newer release; click shows release notes.
+
+    Shown green (the ``fresh`` property, styled in styles.py) until clicked,
+    then the same grey as Help/Settings for the rest of the session.
+    """
 
     def __init__(self, current_version: str, parent: QWidget | None = None) -> None:
         super().__init__("⬆  Update", parent)
         self._current_version = current_version
         self._releases: list[ReleaseInfo] = []
         self._worker: _UpdateCheckWorker | None = None
-        self._flashing = False
 
         self.setObjectName("settingsButton")
         self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
@@ -74,9 +71,6 @@ class UpdateIndicator(QPushButton):
         self._worker.done.connect(self._on_done)
         self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
-        for delay, on in zip(_BLINK_SCHEDULE_MS, [True, False, True, False], strict=True):
-            QTimer.singleShot(delay, self._apply_flash_style if on else self._apply_off_style)
-        QTimer.singleShot(_SETTLE_MS, self._settle)
 
     def shutdown(self) -> None:
         """Join the checker thread if still running — Qt aborts (SIGABRT) if
@@ -85,14 +79,6 @@ class UpdateIndicator(QPushButton):
         if self._worker is not None and self._worker.isRunning():
             self._worker.wait()
 
-    def refresh_theme(self) -> None:
-        """Only re-applies anything if the flash is still showing — once
-        settled, styling comes entirely from the app-wide QPushButton#
-        settingsButton rule, same as Help/Settings, so there's nothing to
-        redo here on a theme switch."""
-        if self._flashing:
-            self._apply_flash_style()
-
     def _on_done(self, releases: list[ReleaseInfo]) -> None:
         self._worker = None
         self._releases = releases
@@ -100,39 +86,18 @@ class UpdateIndicator(QPushButton):
         if releases:
             tags = ", ".join(r.tag for r in releases)
             self.setToolTip(f"New version available: {tags}\nClick for release notes.")
+            self._set_fresh(True)
 
-    def _apply_flash_style(self) -> None:
-        if self._releases:  # a slow check may not have resolved by 3s/4s yet
-            self._flashing = True
-            self._set_instance_style(_get_theme().success)
-
-    def _apply_off_style(self) -> None:
-        if self._releases:
-            self._set_instance_style(_get_theme().muted)
-
-    def _set_instance_style(self, color: str) -> None:
-        self.setStyleSheet(f"""
-            background: transparent;
-            color: {color};
-            border: none;
-            font-size: 11px;
-            padding: 2px 0;
-            text-align: right;
-        """)
-
-    def _settle(self) -> None:
-        """Drop the instance-level override so hover feedback comes back —
-        an instance stylesheet with no :hover rule of its own silently
-        overrides the app-wide QPushButton#settingsButton:hover rule for as
-        long as it's set, which is why the blink can't just leave it in
-        place at the end."""
-        if self._flashing:
-            self._flashing = False
-            self.setStyleSheet("")
+    def _set_fresh(self, fresh: bool) -> None:
+        self.setProperty("fresh", fresh)
+        # Qt only re-reads property selectors on a re-polish.
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     def _show_dialog(self) -> None:
         if not self._releases:
             return
+        self._set_fresh(False)
         _ReleaseNotesDialog(self._releases, self).exec()
 
 

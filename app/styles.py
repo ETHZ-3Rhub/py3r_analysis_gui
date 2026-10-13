@@ -33,7 +33,7 @@ def base_stylesheet(t) -> str:
             background-color: {t.panel};
             border-radius: 8px;
         }}
-        QWidget#gatedSection, QWidget#groupManifestPanel {{
+        QWidget#gatedSection, QWidget#groupManifestPanel, QWidget#bottomBar {{
             background: transparent;
         }}
         QLabel {{
@@ -194,6 +194,15 @@ def base_stylesheet(t) -> str:
             text-align: right;
         }}
         QPushButton#settingsButton:hover {{ color: {t.panel_text}; }}
+        QPushButton#settingsButton[fresh="true"] {{ color: {t.success}; }}
+        QPushButton#creditButton {{
+            background: transparent;
+            color: {t.muted};
+            border: none;
+            font-size: 10px;
+            padding: 0;
+        }}
+        QPushButton#creditButton:hover {{ color: {t.panel_text}; }}
         QToolTip {{
             background-color: {t.panel};
             color: {t.panel_text};
