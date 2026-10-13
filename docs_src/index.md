@@ -16,7 +16,6 @@ Pipelines you add and the tracking environment the app installs are kept in a fo
 |---------|--------|
 | Windows | `%LOCALAPPDATA%\Analys3R` (usually `C:\Users\<you>\AppData\Local\Analys3R`) |
 | macOS   | `~/Library/Application Support/Analys3R` |
-| Linux   | `~/.local/share/Analys3R` |
 
 Inside it:
 
