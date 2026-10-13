@@ -336,6 +336,14 @@ class MainWindow(QWidget):
         settings_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         settings_btn.clicked.connect(self._open_settings)
         bottom_row.addWidget(settings_btn)
+        bottom_row.addSpacing(12)
+
+        report_btn = QPushButton("!  Problem")
+        report_btn.setObjectName("settingsButton")
+        report_btn.setToolTip("Report a problem")
+        report_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        report_btn.clicked.connect(self._open_report)
+        bottom_row.addWidget(report_btn)
 
         layout.addLayout(bottom_row)
 
@@ -539,6 +547,11 @@ class MainWindow(QWidget):
     def _open_help(self) -> None:
         docs = Path(__file__).parent.parent / "docs" / "index.html"
         webbrowser.open(docs.as_uri())
+
+    def _open_report(self) -> None:
+        from app.report_dialog import ReportProblemDialog
+
+        ReportProblemDialog(self._env_panel.status(), self).exec()
 
     def _open_settings(self) -> None:
         SettingsDialog(self._env_panel, self).exec()
