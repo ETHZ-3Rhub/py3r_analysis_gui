@@ -92,13 +92,25 @@ class RunController(QObject):
         config = self._get_config()
         options = config["script"]["options"] if (config and config["script"]) else {}
         skip = self._csv_radio.isChecked()
-        # Hidden rather than disabled-with-tooltip when there's nothing to configure —
-        # it sits next to the pipeline manage button now and shouldn't clutter that row
-        # when there's no option to reach. Tracking options apply whenever we track.
-        n = len(options) + (0 if skip else len(tracking_option_specs(config)))
-        self._options_btn.setVisible(n > 0)
+        tracking = self._video_radio.isChecked()
+        # Greyed out (with the reason as its tooltip) rather than hidden when there's
+        # nothing to configure. Tracking settings only count when tracking videos.
+        n = len(options) + (len(tracking_option_specs(config)) if tracking else 0)
+        self._options_btn.setEnabled(n > 0)
         if n:
-            self._options_btn.setToolTip(f"{n} advanced option{'s' if n != 1 else ''} available.")
+            tip = f"{n} advanced option{'s' if n != 1 else ''} available."
+        elif config is None:
+            tip = "Select a pipeline first."
+        elif config["models"] and not skip:
+            tip = "Select a source first. Tracking settings appear for video files."
+        elif config["models"]:
+            tip = (
+                "This pipeline has no advanced options for CSV files. Tracking "
+                "settings appear when the source is video files."
+            )
+        else:
+            tip = "This pipeline has no advanced options."
+        self._options_btn.setToolTip(tip)
 
         reasons: list[str] = []
         groups = self._group_panel.groups()

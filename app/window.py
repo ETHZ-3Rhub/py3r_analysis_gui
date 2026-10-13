@@ -263,7 +263,9 @@ class MainWindow(QWidget):
         opts_row.addStretch()
         self._options_btn = QPushButton("Advanced options")
         self._options_btn.setObjectName("settingsButton")
-        self._options_btn.setVisible(False)  # only shown once a pipeline with options is picked
+        self._options_btn.setEnabled(False)  # enabled once a pipeline with options is picked
+        self._options_btn.setToolTip("Select a pipeline first.")
+        self._options_btn.installEventFilter(self._btn_tooltip_filter)
         self._options_btn.clicked.connect(self._open_options)
         opts_row.addWidget(self._options_btn)
         layout.addLayout(opts_row)
@@ -515,15 +517,14 @@ class MainWindow(QWidget):
     def _open_options(self) -> None:
         script = self._resolved["script"] if self._resolved else None
         spec = _options_spec(script["options"]) if script else []
-        show_tracking = not self._csv_radio.isChecked()
-        if show_tracking:
-            spec += tracking_option_specs(self._resolved)
-        if not spec:
+        show_tracking = self._video_radio.isChecked()
+        tracking = tracking_option_specs(self._resolved) if show_tracking else []
+        if not spec and not tracking:
             return
         from PySide6.QtWidgets import QDialog
 
         current = {**self._current_options, **self._tracking_options}
-        dlg = AdvancedOptionsDialog(spec, current, parent=self)
+        dlg = AdvancedOptionsDialog(spec, current, parent=self, tracking=tracking)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             values = dlg.values()
             if CPU_OPTION in values:

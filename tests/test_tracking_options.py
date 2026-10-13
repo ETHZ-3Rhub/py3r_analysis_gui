@@ -37,6 +37,11 @@ def test_specs_show_each_models_default():
     assert specs[-1]["name"] == CPU_OPTION
 
 
+def test_no_tracking_rows_without_models():
+    assert tracking_option_specs(None) == []
+    assert tracking_option_specs({"models": {}}) == []
+
+
 def test_single_model_label_has_no_role():
     cfg = {"models": {"only": {"weights_dir": Path("a"), "instances": [], "batch": 4}}}
     assert tracking_option_specs(cfg)[0]["label"] == "Batch size"

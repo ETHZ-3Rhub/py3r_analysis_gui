@@ -191,7 +191,7 @@ class PipelineRunner(QThread):
         self.log.emit(f"Tracking batch size: {summary}.")
         self.log.emit(
             "If tracking is very slow or your computer lags, try lowering the batch "
-            "size in Advanced Options."
+            "size in Advanced Options → Tracking performance."
         )
 
     def _tracking_model_args(self) -> list[dict]:
