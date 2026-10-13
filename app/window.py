@@ -11,7 +11,8 @@ import os
 import webbrowser
 from pathlib import Path
 
-from PySide6.QtGui import QCloseEvent, QGuiApplication
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -29,11 +30,12 @@ from PySide6.QtWidgets import (
 )
 
 from app import pipeline_config, pipeline_sources
+from app.about_dialog import CREDIT, AboutDialog
 from app.comparisons_panel import ComparisonsPanel
 from app.confirm_dialog import ask, error_with_copy, pipeline_reference_image
 from app.gating import TooltipOnDisabled, build_gated_section, set_gated_enabled
 from app.group_manifest_panel import CSV_EXTS, VIDEO_EXTS, GroupManifestPanel
-from app.options_dialog import AdvancedOptionsDialog
+from app.options_dialog import CPU_OPTION, AdvancedOptionsDialog, tracking_option_specs
 from app.pipeline_manager_dialog import PipelineManagerButton
 from app.run_controller import RunController
 from app.settings_dialog import SettingsDialog, get_version
@@ -41,6 +43,7 @@ from app.styles import base_stylesheet
 from app.theme import get_theme as _get_theme
 from app.tracking_env_panel import TrackingEnvPanel
 from app.update_indicator import UpdateIndicator
+from app.wrapping_bar import WrappingBar
 
 _T = _get_theme()  # cached at import for inline widget-creation calls
 
@@ -86,16 +89,33 @@ class MainWindow(QWidget):
         self._resolved: dict | None = None  # resolved config for the current selection
         self._last_source_is_csv: bool | None = None  # None until a source is first chosen
         self._current_options: dict = {}
+        # The device choice depends on the machine, not the pipeline, so unlike
+        # _current_options (which holds the script options and per-model batch
+        # sizes) it survives switching pipeline.
+        self._tracking_options: dict = {}
 
         # Shared filter so tooltips still show on disabled widgets (gated
         # sections, the Analyse button) — Qt suppresses them by default.
         self._btn_tooltip_filter = TooltipOnDisabled(self)
 
-        root = QHBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
+        # Outer column: the two panels, then a thin credit strip on the bare
+        # window background beneath them — reads as a serial number, not UI.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 3)
+        outer.setSpacing(4)
+        root = QHBoxLayout()
         root.setSpacing(12)
         root.addWidget(self._build_left_panel(), stretch=2)
         root.addWidget(self._build_run_panel(), stretch=3)
+        outer.addLayout(root, stretch=1)
+
+        credit_btn = QPushButton(f"Analys3R v{get_version()} {CREDIT}")
+        credit_btn.setObjectName("creditButton")
+        credit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        credit_btn.setToolTip("About Analys3R")
+        credit_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        credit_btn.clicked.connect(lambda: AboutDialog(self).exec())
+        outer.addWidget(credit_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         self._run_btn.installEventFilter(self._btn_tooltip_filter)
         self._env_panel.status_changed.connect(self._on_env_status_changed)
@@ -114,7 +134,7 @@ class MainWindow(QWidget):
             csv_radio=self._csv_radio,
             env_panel=self._env_panel,
             get_config=lambda: self._resolved,
-            get_options=lambda: self._current_options,
+            get_options=lambda: {**self._current_options, **self._tracking_options},
             on_video_radio_refresh=self._update_video_radio_availability,
             parent=self,
         )
@@ -244,7 +264,9 @@ class MainWindow(QWidget):
         opts_row.addStretch()
         self._options_btn = QPushButton("Advanced options")
         self._options_btn.setObjectName("settingsButton")
-        self._options_btn.setVisible(False)  # only shown once a pipeline with options is picked
+        self._options_btn.setEnabled(False)  # enabled once a pipeline with options is picked
+        self._options_btn.setToolTip("Select a pipeline first.")
+        self._options_btn.installEventFilter(self._btn_tooltip_filter)
         self._options_btn.clicked.connect(self._open_options)
         opts_row.addWidget(self._options_btn)
         layout.addLayout(opts_row)
@@ -287,12 +309,15 @@ class MainWindow(QWidget):
         self._open_btn.clicked.connect(self._open_results)
         layout.addWidget(self._open_btn)
 
-        # ── Bottom bar: tracking status (left) + settings button (right) ──────
-        bottom_row = QHBoxLayout()
-        bottom_row.setSpacing(6)
-
+        # ── Bottom bar: tracking status (left) + buttons (right) ─────────────
+        # The buttons drop onto a second line when the window is too narrow.
         self._env_panel = TrackingEnvPanel()
-        bottom_row.addWidget(self._env_panel)
+
+        buttons = QWidget()
+        buttons.setObjectName("bottomBar")
+        bottom_row = QHBoxLayout(buttons)
+        bottom_row.setContentsMargins(0, 0, 0, 0)
+        bottom_row.setSpacing(6)
 
         # PY3R_FAKE_VERSION lets the update check be exercised locally without
         # a real release (e.g. "0.0.1" to force "an update is available") —
@@ -315,8 +340,16 @@ class MainWindow(QWidget):
         settings_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         settings_btn.clicked.connect(self._open_settings)
         bottom_row.addWidget(settings_btn)
+        bottom_row.addSpacing(12)
 
-        layout.addLayout(bottom_row)
+        report_btn = QPushButton("!  Problem")
+        report_btn.setObjectName("settingsButton")
+        report_btn.setToolTip("Report a problem")
+        report_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        report_btn.clicked.connect(self._open_report)
+        bottom_row.addWidget(report_btn)
+
+        layout.addWidget(WrappingBar(self._env_panel, buttons))
 
         return panel
 
@@ -494,16 +527,22 @@ class MainWindow(QWidget):
         self._run_controller.refresh_run_button()
 
     def _open_options(self) -> None:
-        if self._resolved is None or self._resolved["script"] is None:
-            return
-        options = self._resolved["script"]["options"]
-        if not options:
+        script = self._resolved["script"] if self._resolved else None
+        spec = _options_spec(script["options"]) if script else []
+        show_tracking = self._video_radio.isChecked()
+        tracking = tracking_option_specs(self._resolved) if show_tracking else []
+        if not spec and not tracking:
             return
         from PySide6.QtWidgets import QDialog
 
-        dlg = AdvancedOptionsDialog(_options_spec(options), self._current_options, parent=self)
+        current = {**self._current_options, **self._tracking_options}
+        dlg = AdvancedOptionsDialog(spec, current, parent=self, tracking=tracking)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._current_options = dlg.values()
+            values = dlg.values()
+            if CPU_OPTION in values:
+                self._tracking_options = {CPU_OPTION: values.pop(CPU_OPTION)}
+            # update, not replace: the tracking rows aren't shown for CSV sources
+            self._current_options.update(values)
 
     def _on_env_status_changed(self) -> None:
         self._update_video_radio_availability()
@@ -513,6 +552,11 @@ class MainWindow(QWidget):
         docs = Path(__file__).parent.parent / "docs" / "index.html"
         webbrowser.open(docs.as_uri())
 
+    def _open_report(self) -> None:
+        from app.report_dialog import ReportProblemDialog
+
+        ReportProblemDialog(self._env_panel.status(), self).exec()
+
     def _open_settings(self) -> None:
         SettingsDialog(self._env_panel, self).exec()
         self._apply_stylesheet()
@@ -520,17 +564,7 @@ class MainWindow(QWidget):
     def _open_results(self) -> None:
         if not self._run_controller.last_output:
             return
-        import platform
-        import subprocess
-
-        path = self._run_controller.last_output
-        system = platform.system()
-        if system == "Windows":
-            os.startfile(path)
-        elif system == "Darwin":
-            subprocess.Popen(["open", path])
-        else:
-            subprocess.Popen(["xdg-open", path])
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._run_controller.last_output)))
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _apply_stylesheet(self) -> None:
@@ -543,8 +577,6 @@ class MainWindow(QWidget):
             self._comp_panel.refresh_theme()
         if hasattr(self, "_env_panel"):
             self._env_panel.refresh_theme()
-        if hasattr(self, "_update_indicator"):
-            self._update_indicator.refresh_theme()
         if hasattr(self, "_pipeline_manager_btn"):
             self._pipeline_manager_btn.refresh_theme()
         self.setStyleSheet(base_stylesheet(_T))

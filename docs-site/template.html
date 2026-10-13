@@ -70,6 +70,35 @@
     transition: background 0.15s ease;
   }
   .btn:hover { background: var(--accent-hover); }
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+  }
+  .first-launch {
+    text-align: left;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 0.9rem;
+  }
+  .first-launch summary {
+    cursor: pointer;
+    color: var(--accent);
+    text-align: center;
+  }
+  .first-launch p, .first-launch ol { color: var(--muted); }
+  .first-launch b { color: var(--text); font-weight: 600; }
+  .first-launch pre {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    color: var(--text);
+  }
   .note {
     color: var(--muted);
     font-size: 0.85rem;
@@ -134,7 +163,7 @@
     <header>
       <img src="assets/icon.png" alt="">
       <h1>Analys3R</h1>
-      <p class="tagline">Download the desktop app for Windows.</p>
+      <p class="tagline">Download the desktop app for {{TAGLINE_PLATFORMS}}.</p>
     </header>
 
     <div class="latest">

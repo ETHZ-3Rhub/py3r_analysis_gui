@@ -25,7 +25,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from PySide6.QtCore import QModelIndex, Qt, Signal
+from PySide6.QtCore import QEvent, QModelIndex, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QMouseEvent, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.confirm_dialog import ask
+from app.gating import TooltipOnDisabled
 from app.styles import base_stylesheet
 from app.text_utils import natural_key
 from app.theme import get_theme as _get_theme
@@ -433,11 +434,11 @@ class GroupManifestPanel(QWidget):
         adv_row.setContentsMargins(0, 0, 0, 0)
         adv_btn = QPushButton("Advanced loader")
         adv_btn.setObjectName("settingsButton")
-        adv_btn.setToolTip(
-            "Open the advanced loader — import groups from a metadata CSV\n"
-            "or (coming soon) by walking a directory tree."
-        )
+        self._tooltip_filter = TooltipOnDisabled(self)
+        adv_btn.installEventFilter(self._tooltip_filter)
         adv_btn.clicked.connect(self._open_advanced_loader)
+        self._adv_btn = adv_btn
+        self._refresh_advanced_loader_tip()
         adv_row.addStretch()
         adv_row.addWidget(adv_btn)
         layout.addLayout(adv_row)
@@ -538,6 +539,25 @@ class GroupManifestPanel(QWidget):
         if not paths:
             return
         self._create_group(default_name="Group", paths=paths)
+
+    def changeEvent(self, event: QEvent) -> None:
+        # The panel is disabled along with the Groups section until a source is
+        # picked, so the loader's tooltip has to follow.
+        if event.type() == QEvent.Type.EnabledChange:
+            self._refresh_advanced_loader_tip()
+        super().changeEvent(event)
+
+    def _refresh_advanced_loader_tip(self) -> None:
+        if self.isEnabled():
+            tip = (
+                "Create many groups at once, either from a manifest CSV that lists\n"
+                "each file's group, or from the folders your files are stored in."
+            )
+        else:
+            tip = (
+                "Choose a source above first. It decides which kind of files the loader looks for."
+            )
+        self._adv_btn.setToolTip(tip)
 
     def _open_advanced_loader(self) -> None:
         from app.advanced_loader_dialog import AdvancedLoaderDialog

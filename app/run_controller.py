@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from app.comparisons_panel import ComparisonsPanel
 from app.confirm_dialog import ask
 from app.group_manifest_panel import GroupManifestPanel
+from app.options_dialog import tracking_option_specs
 from app.runner import PipelineRunner
 from app.theme import get_theme as _get_theme
 from app.tracking_env_panel import TrackingEnvPanel
@@ -90,13 +91,26 @@ class RunController(QObject):
     def refresh_run_button(self) -> None:
         config = self._get_config()
         options = config["script"]["options"] if (config and config["script"]) else {}
-        # Hidden rather than disabled-with-tooltip when there's nothing to configure —
-        # it sits next to the pipeline manage button now and shouldn't clutter that row
-        # when there's no per-pipeline option to reach.
-        self._options_btn.setVisible(bool(options))
-        if options:
-            n = len(options)
-            self._options_btn.setToolTip(f"{n} advanced option{'s' if n != 1 else ''} available.")
+        skip = self._csv_radio.isChecked()
+        tracking = self._video_radio.isChecked()
+        # Greyed out (with the reason as its tooltip) rather than hidden when there's
+        # nothing to configure. Tracking settings only count when tracking videos.
+        n = len(options) + (len(tracking_option_specs(config)) if tracking else 0)
+        self._options_btn.setEnabled(n > 0)
+        if n:
+            tip = f"{n} advanced option{'s' if n != 1 else ''} available."
+        elif config is None:
+            tip = "Select a pipeline first."
+        elif config["models"] and not skip:
+            tip = "Select a source first. Tracking settings appear for video files."
+        elif config["models"]:
+            tip = (
+                "This pipeline has no advanced options for CSV files. Tracking "
+                "settings appear when the source is video files."
+            )
+        else:
+            tip = "This pipeline has no advanced options."
+        self._options_btn.setToolTip(tip)
 
         reasons: list[str] = []
         groups = self._group_panel.groups()
@@ -109,7 +123,6 @@ class RunController(QObject):
             reasons.append("No output folder set.")
 
         # Hard block: tracking env not ready (only matters when actually tracking)
-        skip = self._csv_radio.isChecked()
         if not skip and not self._env_panel.env_ready():
             env_status = self._env_panel.status()
             if env_status == "installing":

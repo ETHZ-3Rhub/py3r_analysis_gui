@@ -20,7 +20,39 @@ from pathlib import Path
 
 REPO = "ETHZ-3Rhub/py3r_analysis_gui"
 API_URL = f"https://api.github.com/repos/{REPO}/releases"
-ASSET_RE = re.compile(r"^Analys3R-v.*\.zip$")
+
+# (key, button label, asset filename pattern, note shown under the latest button).
+# Windows assets predate the platform suffix, so it matches any zip without one.
+PLATFORMS = [
+    (
+        "windows",
+        "Windows",
+        re.compile(r"^Analys3R-v(?!.*-(macos|linux)-).*\.zip$"),
+        "Windows 10/11 · ZIP archive, unzip and run — no installer required.",
+    ),
+    (
+        "macos",
+        "macOS",
+        re.compile(r"^Analys3R-v.*-macos-arm64\.zip$"),
+        "Apple Silicon Macs (M1 or later) · unzip and drag Analys3R to Applications. "
+        "See first-launch steps below.",
+    ),
+]
+
+MACOS_FIRST_LAUNCH = """\
+      <details class="first-launch">
+        <summary>Opening on macOS for the first time</summary>
+        <p>Analys3R isn't notarised by Apple yet, so macOS blocks it on first launch.
+        Do this once after installing:</p>
+        <ol>
+          <li>Try to open Analys3R from Applications, then click <b>Done</b> on the warning.</li>
+          <li>Open <b>System Settings → Privacy &amp; Security</b>, scroll down and click
+          <b>Open Anyway</b> next to the Analys3R message.</li>
+        </ol>
+        <p>If macOS says the app is damaged, or there's no Open Anyway button, run this
+        in Terminal instead:</p>
+        <pre>xattr -dr com.apple.quarantine /Applications/Analys3R.app</pre>
+      </details>"""
 
 SITE_DIR = Path(__file__).parent
 TEMPLATE = SITE_DIR / "template.html"
@@ -52,15 +84,29 @@ def fetch_releases() -> list[dict]:
     return published
 
 
-def asset_url(release: dict) -> str | None:
-    for asset in release["assets"]:
-        if ASSET_RE.match(asset["name"]):
-            return asset["browser_download_url"]
-    return None
+def platform_urls(release: dict) -> dict[str, str]:
+    """Download URL per platform key, in PLATFORMS order, for the platforms built."""
+    urls = {}
+    for key, _label, pattern, _note in PLATFORMS:
+        for asset in release["assets"]:
+            if pattern.match(asset["name"]):
+                urls[key] = asset["browser_download_url"]
+                break
+    return urls
+
+
+def _label(key: str) -> str:
+    return next(label for k, label, _p, _n in PLATFORMS if k == key)
 
 
 def fmt_date(iso: str) -> str:
     return datetime.fromisoformat(iso.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+
+
+def _links(release: dict) -> str:
+    return " · ".join(
+        f'<a href="{url}">{_label(key)}</a>' for key, url in platform_urls(release).items()
+    )
 
 
 def _rows(releases: list[dict], empty_message: str) -> str:
@@ -68,7 +114,7 @@ def _rows(releases: list[dict], empty_message: str) -> str:
         f"        <tr>\n"
         f"          <td>{r['tag_name']}</td>\n"
         f"          <td>{fmt_date(r['published_at'])}</td>\n"
-        f'          <td><a href="{asset_url(r)}">{asset_url(r).rsplit("/", 1)[-1]}</a></td>\n'
+        f"          <td>{_links(r)}</td>\n"
         f"        </tr>"
         for r in releases
     )
@@ -76,7 +122,7 @@ def _rows(releases: list[dict], empty_message: str) -> str:
 
 
 def render(releases: list[dict]) -> str:
-    with_assets = [r for r in releases if asset_url(r)]
+    with_assets = [r for r in releases if platform_urls(r)]
     if not with_assets:
         sys.exit("No published release has a matching build asset (Analys3R-v*.zip).")
 
@@ -85,26 +131,36 @@ def render(releases: list[dict]) -> str:
 
     if stable:
         latest, *older_stable = stable
+        urls = platform_urls(latest)
+        buttons = "\n".join(
+            f'        <a class="btn" href="{url}">Download for {_label(key)}</a>'
+            for key, url in urls.items()
+        )
+        notes = "\n".join(
+            f'      <p class="note">{note}</p>' for key, _l, _p, note in PLATFORMS if key in urls
+        )
         latest_block = (
             f'      <p class="version">Latest stable release</p>\n'
             f'      <p style="font-size:1.3rem; font-weight:600; margin:0;">'
             f"{latest['tag_name']}</p>\n"
-            f'      <a class="btn" href="{asset_url(latest)}">\n'
-            f"        Download for Windows\n"
-            f"      </a>\n"
-            f'      <p class="note">Windows 10/11 · ZIP archive, unzip and run '
-            f"— no installer required.</p>"
+            f'      <div class="buttons">\n{buttons}\n      </div>\n'
+            f"{notes}"
         )
+        if "macos" in urls:
+            latest_block += "\n" + MACOS_FIRST_LAUNCH
+        tagline_platforms = " and ".join(_label(key) for key in urls)
     else:
         older_stable = []
         latest_block = (
             '      <p class="no-stable">No stable release yet — '
             "see pre-release / testing builds below.</p>"
         )
+        tagline_platforms = "Windows"
 
     html = TEMPLATE.read_text()
     return (
         html.replace("{{LATEST_BLOCK}}", latest_block)
+        .replace("{{TAGLINE_PLATFORMS}}", tagline_platforms)
         .replace("{{STABLE_OLDER_ROWS}}", _rows(older_stable, "No older stable releases yet."))
         .replace("{{PRERELEASE_ROWS}}", _rows(prereleases, "No pre-release builds."))
     )

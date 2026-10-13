@@ -34,6 +34,13 @@ def main() -> None:
         if _qt_bin.exists():
             os.add_dll_directory(str(_qt_bin))
 
+    from app.paths import migrate_legacy_user_dir
+
+    try:
+        migrate_legacy_user_dir()
+    except OSError:
+        pass  # non-fatal: the user just starts with an empty /user folder
+
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 

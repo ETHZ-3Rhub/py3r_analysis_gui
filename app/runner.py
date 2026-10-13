@@ -23,6 +23,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from app import naming, pipeline_sources
+from app.options_dialog import CPU_OPTION, batch_option_name
 from app.proc_utils import kill_tree, popen_grouped
 from app.trackers import yolo_tracker
 
@@ -91,6 +92,8 @@ class PipelineRunner(QThread):
         csv_files = self._csv_files
         n_groups = len(self._groups)
         model_args = self._tracking_model_args()
+        if not self._skip_tracking:
+            self._log_batch_sizes(model_args)
 
         handles = naming.assign_handles(self._groups)
         handle_iter = iter(handles)
@@ -132,7 +135,12 @@ class PipelineRunner(QThread):
 
                 self.log.emit(f"  Tracking {video.name} ({j + 1}/{n_videos})...")
                 try:
-                    proc = yolo_tracker.track(video, output_csv, models=model_args)
+                    proc = yolo_tracker.track(
+                        video,
+                        output_csv,
+                        models=model_args,
+                        device="cpu" if self._options.get(CPU_OPTION) else "auto",
+                    )
                     self._current_proc = proc
                     self._drain_proc(proc)
                     self._current_proc = None
@@ -171,16 +179,33 @@ class PipelineRunner(QThread):
 
         self.log.emit("Done.")
 
+    def _log_batch_sizes(self, model_args: list[dict]) -> None:
+        """Tell the user what batch size tracking runs at, and what to do if it's
+        too much for their machine (the default assumes roughly 8 GB of GPU memory)."""
+        roles = self._config["models"]
+        sizes = [arg.get("batch", 1) for arg in model_args]
+        if len(roles) == 1:
+            summary = str(sizes[0])
+        else:
+            summary = ", ".join(f"{role} {n}" for role, n in zip(roles, sizes, strict=True))
+        self.log.emit(f"Tracking batch size: {summary}.")
+        self.log.emit(
+            "If tracking is very slow or your computer lags, try lowering the batch "
+            "size in Advanced Options → Tracking performance."
+        )
+
     def _tracking_model_args(self) -> list[dict]:
         """Flatten the resolved config's models (keyed by role) into the list
         track.py wants: ``[{"model": <folder>, "instances", "stride", "batch", "tracker"}]``."""
         args: list[dict] = []
-        for m in self._config["models"].values():
+        for role, m in self._config["models"].items():
             arg = {"model": str(m["weights_dir"]), "instances": m["instances"]}
             if m.get("stride") is not None:
                 arg["stride"] = m["stride"]
             if m.get("batch") is not None:
                 arg["batch"] = m["batch"]
+            if (override := self._options.get(batch_option_name(role))) is not None:
+                arg["batch"] = override  # set in the Advanced Options dialog
             if m.get("tracker") is not None:
                 arg["tracker"] = m["tracker"]
             args.append(arg)

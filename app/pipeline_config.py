@@ -26,10 +26,11 @@ import copy
 import importlib
 import importlib.util
 import re
-import sys
 import tomllib
 from pathlib import Path
 from types import ModuleType
+
+from app import paths
 
 _BUNDLED_CONFIGS = Path(__file__).parent / "configs"
 
@@ -47,10 +48,9 @@ class ConfigError(Exception):
 
 # ── Locations ────────────────────────────────────────────────────────────────
 def user_dir() -> Path:
-    """The ``/user`` folder: next to the exe when frozen, repo root in dev."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "user"
-    return Path(__file__).parent.parent / "user"
+    """The ``/user`` folder: in the per-user data folder when packaged, repo
+    root in dev (see ``app.paths``)."""
+    return paths.user_dir()
 
 
 def user_configs_dir() -> Path:
