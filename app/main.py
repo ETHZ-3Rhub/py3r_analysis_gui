@@ -15,6 +15,16 @@ def _icon_path() -> Path:
 
 
 def main() -> None:
+    # In a packaged app sys.executable is the app itself, so when a library in
+    # the pipeline starts a multiprocessing helper (on macOS e.g. the resource
+    # tracker, created by any lock or semaphore) it relaunches the app. Without
+    # this, that relaunch opens a second GUI window and the pipeline waits for
+    # it to close. freeze_support() spots those relaunches, runs the helper and
+    # exits; it does nothing for a normal launch.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+
     # Checked first and before any PyQt imports — the pipeline subprocess
     # re-invokes this entry point and shouldn't pay PyQt's startup cost.
     if len(sys.argv) > 2 and sys.argv[1] == "--pipeline-worker":
