@@ -10,7 +10,7 @@ from app.theme import get_theme
 from app.tracking_env_setup import get_version
 from app.update_check import REPO
 
-CREDIT = "by Tom Lorimer, 3R Hub  ·  © 2026"
+CREDIT = "by Tom Lorimer @ 3R Hub  ·  © 2026"
 REPO_URL = f"https://github.com/{REPO}"
 
 
@@ -29,7 +29,7 @@ class AboutDialog(QDialog):
         title.setObjectName("aboutTitle")
         layout.addWidget(title)
 
-        credit = "Designed and developed by Tom Lorimer in the 3R Hub, ETH Zurich.<br>© 2026"
+        credit = "Designed and developed by Tom Lorimer at the 3R Hub, ETH Zurich.<br>© 2026"
         layout.addWidget(QLabel(credit))
 
         def link(url: str, text: str) -> str:
