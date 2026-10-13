@@ -43,6 +43,7 @@ from app.styles import base_stylesheet
 from app.theme import get_theme as _get_theme
 from app.tracking_env_panel import TrackingEnvPanel
 from app.update_indicator import UpdateIndicator
+from app.wrapping_bar import WrappingBar
 
 _T = _get_theme()  # cached at import for inline widget-creation calls
 
@@ -308,12 +309,15 @@ class MainWindow(QWidget):
         self._open_btn.clicked.connect(self._open_results)
         layout.addWidget(self._open_btn)
 
-        # ── Bottom bar: tracking status (left) + settings button (right) ──────
-        bottom_row = QHBoxLayout()
-        bottom_row.setSpacing(6)
-
+        # ── Bottom bar: tracking status (left) + buttons (right) ─────────────
+        # The buttons drop onto a second line when the window is too narrow.
         self._env_panel = TrackingEnvPanel()
-        bottom_row.addWidget(self._env_panel)
+
+        buttons = QWidget()
+        buttons.setObjectName("bottomBar")
+        bottom_row = QHBoxLayout(buttons)
+        bottom_row.setContentsMargins(0, 0, 0, 0)
+        bottom_row.setSpacing(6)
 
         # PY3R_FAKE_VERSION lets the update check be exercised locally without
         # a real release (e.g. "0.0.1" to force "an update is available") —
@@ -345,7 +349,7 @@ class MainWindow(QWidget):
         report_btn.clicked.connect(self._open_report)
         bottom_row.addWidget(report_btn)
 
-        layout.addLayout(bottom_row)
+        layout.addWidget(WrappingBar(self._env_panel, buttons))
 
         return panel
 
@@ -573,8 +577,6 @@ class MainWindow(QWidget):
             self._comp_panel.refresh_theme()
         if hasattr(self, "_env_panel"):
             self._env_panel.refresh_theme()
-        if hasattr(self, "_update_indicator"):
-            self._update_indicator.refresh_theme()
         if hasattr(self, "_pipeline_manager_btn"):
             self._pipeline_manager_btn.refresh_theme()
         self.setStyleSheet(base_stylesheet(_T))
