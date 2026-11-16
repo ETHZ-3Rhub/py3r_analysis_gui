@@ -49,4 +49,13 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
+echo Collecting third-party licences...
+python scripts\collect_licences.py "dist\Analys3R\THIRD_PARTY_LICENSES" --scan "dist\Analys3R\_internal"
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo Failed to collect third-party licences.
+    exit /b %ERRORLEVEL%
+)
+
+echo.
 echo Build complete: dist\Analys3R\Analys3R.exe

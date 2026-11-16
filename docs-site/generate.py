@@ -155,7 +155,12 @@ def render(releases: list[dict]) -> str:
             '      <p class="no-stable">No stable release yet — '
             "see pre-release / testing builds below.</p>"
         )
-        tagline_platforms = "Windows"
+        # Only pre-releases exist: name every platform that has a build.
+        tagline_platforms = " and ".join(
+            label
+            for key, label, _pattern, _note in PLATFORMS
+            if any(key in platform_urls(r) for r in with_assets)
+        )
 
     html = TEMPLATE.read_text()
     return (

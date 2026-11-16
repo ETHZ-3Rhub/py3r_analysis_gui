@@ -1,5 +1,10 @@
 """Ultralytics-based pose tracker — writes yolo3r-format CSV.
 
+Licence: this file is MIT-licensed like the rest of the repo, but it imports
+Ultralytics (AGPL-3.0), so in combination with Ultralytics it must be used and
+distributed under the terms of the AGPL-3.0. It runs as a separate process in the
+tracking environment; the rest of the app never imports Ultralytics.
+
 Usage (standalone):
     python track.py <video> <output_csv> \\
         --model '{"model": "/path/to/folder",

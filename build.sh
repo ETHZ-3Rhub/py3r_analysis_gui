@@ -43,6 +43,14 @@ fi
 echo "Copying model weights..."
 python scripts/materialize_models.py "$MODELS_SRC" "$MODELS_DEST"
 
+echo "Collecting third-party licences..."
+if [ "$(uname -s)" = "Darwin" ]; then
+    python scripts/collect_licences.py "$OUT/Contents/Resources/THIRD_PARTY_LICENSES" \
+        --scan "$OUT/Contents/Resources" --scan "$OUT/Contents/Frameworks"
+else
+    python scripts/collect_licences.py "$OUT/THIRD_PARTY_LICENSES" --scan "$OUT/_internal"
+fi
+
 if [ "$(uname -s)" = "Darwin" ]; then
     # Adding the models changed the bundle after PyInstaller signed it, which
     # makes other Macs report the app as "damaged". Re-apply the ad-hoc signature.
