@@ -51,6 +51,17 @@ def bundled_models_dir() -> Path:
     return exe_dir / "models"
 
 
+def bundled_licences_dir() -> Path:
+    """Where the build script puts the third-party licence notices (read-only).
+    Doesn't exist in a development run."""
+    exe_dir = Path(sys.executable).parent
+    if getattr(sys, "frozen", False) and sys.platform == "darwin":
+        return exe_dir.parent / "Resources" / "THIRD_PARTY_LICENSES"  # inside Analys3R.app
+    if getattr(sys, "frozen", False):
+        return exe_dir / "THIRD_PARTY_LICENSES"
+    return Path(__file__).resolve().parent.parent / "THIRD_PARTY_LICENSES"
+
+
 def migrate_legacy_user_dir() -> None:
     """Copy a pre-existing ``user/`` folder from next to the executable (the old
     layout) into the data folder, once. The old copy is left in place. The
