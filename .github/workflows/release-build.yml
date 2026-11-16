@@ -83,6 +83,9 @@ jobs:
       - name: Copy model weights
         run: python scripts/materialize_models.py _pose_models/pose_estimation dist/Analys3R/models
 
+      - name: Collect third-party licences
+        run: python scripts/collect_licences.py dist/Analys3R/THIRD_PARTY_LICENSES --scan dist/Analys3R/_internal
+
       - name: Zip artifact
         shell: powershell
         run: |
