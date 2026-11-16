@@ -128,7 +128,12 @@ def has_gpl_ffmpeg(scan_dirs: list[Path]) -> bool:
     return False
 
 
-def build_readme(rows, gpl_ffmpeg: bool, has_vc_redist: bool) -> str:
+def has_lgpl_ffmpeg_dll(scan_dirs: list[Path]) -> bool:
+    """Windows opencv wheels load an LGPL-only FFmpeg as a separate DLL."""
+    return any(any(d.glob("**/opencv_videoio_ffmpeg*.dll")) for d in scan_dirs)
+
+
+def build_readme(rows, gpl_ffmpeg: bool, lgpl_ffmpeg: bool, has_vc_redist: bool) -> str:
     out = [
         "# Third-party licences",
         "",
@@ -167,8 +172,11 @@ def build_readme(rows, gpl_ffmpeg: bool, has_vc_redist: bool) -> str:
             "libx265, shipped inside the opencv-python macOS wheel. That FFmpeg was "
             "built with `--enable-gpl --enable-version3`, so these libraries are "
             "licensed under the GNU General Public License v3 (`GPL-3.0.txt`). "
-            "They are used unmodified, for reading video frames. The Windows "
-            "release uses an LGPL-only FFmpeg and does not contain them.",
+            "They are used unmodified, for reading video frames. As the GPL "
+            "applies to the combined work, this macOS build as a whole is "
+            "distributed under terms compatible with GPL-3.0; the MIT-licensed "
+            "source files remain MIT. The Windows release uses an LGPL-only FFmpeg "
+            "instead.",
             "",
             "Corresponding source: FFmpeg https://ffmpeg.org/download.html, "
             "x264 https://www.videolan.org/developers/x264.html, "
@@ -179,6 +187,27 @@ def build_readme(rows, gpl_ffmpeg: bool, has_vc_redist: bool) -> str:
             "https://github.com/opencv/opencv-python. For three years from the "
             "date of this release you may also request the corresponding source "
             f"by opening an issue at https://github.com/{REPO}/issues.",
+            "",
+        ]
+    elif lgpl_ffmpeg:
+        out += [
+            "## FFmpeg (LGPL-2.1)",
+            "",
+            "Video reading uses FFmpeg, shipped inside the opencv-python wheel as the "
+            "separate library `cv2/opencv_videoio_ffmpeg*.dll`. It is licensed under "
+            "the GNU Lesser General Public License v2.1 or later (the text is in the "
+            "opencv-python licence files in `packages/`) and was built without GPL "
+            "components, linking libopenh264 and libvpx (both BSD-licensed). It is "
+            "used unmodified and loaded dynamically, so it can be replaced with a "
+            "compatible build of the same library.",
+            "",
+            "Corresponding source: FFmpeg https://ffmpeg.org/download.html; "
+            "opencv-python https://github.com/opencv/opencv-python (build "
+            "configuration for the FFmpeg DLL); libopenh264 "
+            "https://github.com/cisco/openh264; libvpx "
+            "https://chromium.googlesource.com/webm/libvpx. For three years from the "
+            "date of this release you may also request the corresponding source by "
+            f"opening an issue at https://github.com/{REPO}/issues.",
             "",
         ]
     out += [
@@ -235,7 +264,8 @@ def main() -> int:
     gpl_ffmpeg = has_gpl_ffmpeg(scan_dirs)
     has_vc_redist = any((d / "vendor" / "vc_redist.x64.exe").exists() for d in scan_dirs)
     (args.dest / "README.md").write_text(
-        build_readme(rows, gpl_ffmpeg, has_vc_redist), encoding="utf-8"
+        build_readme(rows, gpl_ffmpeg, has_lgpl_ffmpeg_dll(scan_dirs), has_vc_redist),
+        encoding="utf-8",
     )
 
     print(f"Wrote {args.dest}: {len(rows)} packages, GPL FFmpeg: {gpl_ffmpeg}")
