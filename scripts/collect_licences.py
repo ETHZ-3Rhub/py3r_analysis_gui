@@ -9,9 +9,9 @@ PyInstaller, in the same Python environment that built the app, and writes a
   names inside the bundle back to installed distributions),
 * the GPL-3.0 / LGPL-3.0 texts from ``licences/`` (PySide6 ships none of its own),
 * this project's MIT ``LICENSE``,
-* a ``README.md`` explaining the notices that need more than a licence file
-  (Qt, AGPL model weights + Ultralytics, GPL FFmpeg when the bundle contains it,
-  uv, the VC++ redistributable) and an index of every package.
+* a plain-text ``NOTICE.txt`` with the source/replacement statements the licences
+  require (Qt, AGPL weights + Ultralytics, and FFmpeg: GPL or LGPL depending on
+  what the bundle actually contains).
 
 Usage:
     python scripts/collect_licences.py <dest_dir> --scan <dir> [--scan <dir> ...]
@@ -133,109 +133,47 @@ def has_lgpl_ffmpeg_dll(scan_dirs: list[Path]) -> bool:
     return any(any(d.glob("**/opencv_videoio_ffmpeg*.dll")) for d in scan_dirs)
 
 
-def build_readme(rows, gpl_ffmpeg: bool, lgpl_ffmpeg: bool, has_vc_redist: bool) -> str:
+def build_notice(gpl_ffmpeg: bool, lgpl_ffmpeg: bool) -> str:
+    """Plain-text notice holding only what the licences require beyond the texts."""
     out = [
-        "# Third-party licences",
+        "THIRD-PARTY NOTICES",
         "",
-        "Analys3R's own source code is MIT-licensed (`LICENSE-Analys3R-MIT.txt`), "
-        "with one exception: `app/trackers/track.py` imports Ultralytics and is "
-        "AGPL-3.0 when combined with it. This build also contains, or installs on "
-        "request, software under other licences. Licence texts for every bundled "
-        "Python package are in `packages/`; this file covers the notices that need "
-        "more than a licence file.",
+        "Licence texts for bundled components are in this folder (packages/, "
+        "GPL-3.0.txt, LGPL-3.0.txt). Analys3R's own source is MIT-licensed "
+        "(LICENSE-Analys3R-MIT.txt), except app/trackers/track.py, which is "
+        "AGPL-3.0 when combined with Ultralytics.",
         "",
-        "## Qt / PySide6 (LGPL-3.0)",
+        "Qt / PySide6 (LGPL-3.0): used unmodified and linked dynamically; the Qt "
+        "libraries in this bundle can be replaced with a compatible build. Source: "
+        "https://code.qt.io",
         "",
-        "The user interface uses Qt through PySide6, licensed under the GNU Lesser "
-        "General Public License v3 (`LGPL-3.0.txt`, which incorporates `GPL-3.0.txt`). "
-        "Qt is used unmodified and is linked dynamically: its libraries are separate "
-        "shared libraries inside this bundle and can be replaced with a compatible "
-        "build. Source code: https://code.qt.io and https://download.qt.io; PySide6: "
-        "https://code.qt.io/cgit/pyside/pyside-setup.git.",
-        "",
-        "## Model weights and Ultralytics (AGPL-3.0)",
-        "",
-        "The pose-model weights in `models/` are licensed under the GNU Affero "
-        "General Public License v3 (a copy sits in each model folder). Their source "
-        "repository is https://github.com/ETHZ-INS/BohacekLabPoseModels. The "
-        "tracking environment, installed on request, downloads Ultralytics YOLO and "
-        "ultralytics-thop (both AGPL-3.0) from PyPI; "
-        "`app/trackers/track.py` imports Ultralytics.",
+        "Model weights (models/), Ultralytics and ultralytics-thop (AGPL-3.0): "
+        "source at https://github.com/ETHZ-INS/BohacekLabPoseModels and "
+        "https://github.com/ultralytics/ultralytics",
         "",
     ]
     if gpl_ffmpeg:
         out += [
-            "## FFmpeg and codecs (GPL-3.0)",
-            "",
-            "This build bundles FFmpeg shared libraries (`libav*`, `libsw*`, "
-            "`libpostproc`) together with codec libraries including libx264 and "
-            "libx265, shipped inside the opencv-python macOS wheel. That FFmpeg was "
-            "built with `--enable-gpl --enable-version3`, so these libraries are "
-            "licensed under the GNU General Public License v3 (`GPL-3.0.txt`). "
-            "They are used unmodified, for reading video frames. As the GPL "
-            "applies to the combined work, this macOS build as a whole is "
-            "distributed under terms compatible with GPL-3.0; the MIT-licensed "
-            "source files remain MIT. The Windows release uses an LGPL-only FFmpeg "
-            "instead.",
-            "",
-            "Corresponding source: FFmpeg https://ffmpeg.org/download.html, "
-            "x264 https://www.videolan.org/developers/x264.html, "
-            "x265 https://bitbucket.org/multicoreware/x265_git, and the other "
-            "libraries named by the build configuration (see the opencv-python "
-            "licence file in `packages/`) from the Homebrew formulae they were built "
-            "from (https://github.com/Homebrew/homebrew-core). opencv-python: "
-            "https://github.com/opencv/opencv-python. For three years from the "
-            "date of this release you may also request the corresponding source "
-            f"by opening an issue at https://github.com/{REPO}/issues.",
+            "FFmpeg and codecs (GPL-3.0): the libav*, libsw*, libpostproc, libx264 and "
+            "libx265 libraries in this bundle come from the opencv-python wheel and "
+            "are used unmodified. Source: https://ffmpeg.org/download.html, "
+            "https://www.videolan.org/developers/x264.html, "
+            "https://bitbucket.org/multicoreware/x265_git and "
+            "https://github.com/opencv/opencv-python. For three years from the date "
+            "of this release, corresponding source is also available on request at "
+            f"https://github.com/{REPO}/issues",
             "",
         ]
     elif lgpl_ffmpeg:
         out += [
-            "## FFmpeg (LGPL-2.1)",
-            "",
-            "Video reading uses FFmpeg, shipped inside the opencv-python wheel as the "
-            "separate library `cv2/opencv_videoio_ffmpeg*.dll`. It is licensed under "
-            "the GNU Lesser General Public License v2.1 or later (the text is in the "
-            "opencv-python licence files in `packages/`) and was built without GPL "
-            "components, linking libopenh264 and libvpx (both BSD-licensed). It is "
-            "used unmodified and loaded dynamically, so it can be replaced with a "
-            "compatible build of the same library.",
-            "",
-            "Corresponding source: FFmpeg https://ffmpeg.org/download.html; "
-            "opencv-python https://github.com/opencv/opencv-python (build "
-            "configuration for the FFmpeg DLL); libopenh264 "
-            "https://github.com/cisco/openh264; libvpx "
-            "https://chromium.googlesource.com/webm/libvpx. For three years from the "
-            "date of this release you may also request the corresponding source by "
-            f"opening an issue at https://github.com/{REPO}/issues.",
+            "FFmpeg (LGPL-2.1): cv2/opencv_videoio_ffmpeg*.dll, from the opencv-python "
+            "wheel, is used unmodified and loaded dynamically; it can be replaced with "
+            "a compatible build. Source: https://ffmpeg.org/download.html and "
+            "https://github.com/opencv/opencv-python. For three years from the date of "
+            "this release, corresponding source is also available on request at "
+            f"https://github.com/{REPO}/issues",
             "",
         ]
-    out += [
-        "## uv",
-        "",
-        "The bundled `uv` executable (used to build the tracking environment) is "
-        "dual-licensed MIT or Apache-2.0; see `packages/uv-*/`. Source: "
-        "https://github.com/astral-sh/uv.",
-        "",
-    ]
-    if has_vc_redist:
-        out += [
-            "## Microsoft Visual C++ Redistributable",
-            "",
-            "`vendor/vc_redist.x64.exe` is the unmodified Microsoft Visual C++ "
-            "Redistributable, redistributed under Microsoft's redistribution terms "
-            "for Visual Studio.",
-            "",
-        ]
-    out += [
-        "## Python packages",
-        "",
-        "| Package | Version | Licence | Licence files |",
-        "|---|---|---|---|",
-    ]
-    for name, version, label, n in rows:
-        out.append(f"| {name} | {version} | {label.replace('|', '/')} | {n or '-'} |")
-    out.append("")
     return "\n".join(out)
 
 
@@ -262,10 +200,8 @@ def main() -> int:
     shutil.copy2(REPO_ROOT / "LICENSE", args.dest / "LICENSE-Analys3R-MIT.txt")
 
     gpl_ffmpeg = has_gpl_ffmpeg(scan_dirs)
-    has_vc_redist = any((d / "vendor" / "vc_redist.x64.exe").exists() for d in scan_dirs)
-    (args.dest / "README.md").write_text(
-        build_readme(rows, gpl_ffmpeg, has_lgpl_ffmpeg_dll(scan_dirs), has_vc_redist),
-        encoding="utf-8",
+    (args.dest / "NOTICE.txt").write_text(
+        build_notice(gpl_ffmpeg, has_lgpl_ffmpeg_dll(scan_dirs)), encoding="utf-8"
     )
 
     print(f"Wrote {args.dest}: {len(rows)} packages, GPL FFmpeg: {gpl_ffmpeg}")

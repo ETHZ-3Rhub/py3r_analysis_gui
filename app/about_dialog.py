@@ -101,3 +101,8 @@ class AboutDialog(QDialog):
             QLabel#aboutTitle {{ font-size: 18px; font-weight: bold; }}
             """
         )
+
+        # Word-wrapped labels report their height for a different width than the
+        # dialog's, so size to the real width explicitly or the text gets clipped.
+        width = self.minimumWidth()
+        self.resize(width, layout.totalHeightForWidth(width))
