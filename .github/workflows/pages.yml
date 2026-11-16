@@ -1,4 +1,4 @@
-name: Deploy download page
+name: Deploy download page and docs
 
 on:
   release:
@@ -31,6 +31,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python docs-site/generate.py docs-site/_build
+
+      - name: Build documentation
+        run: |
+          pip install "mkdocs<2" "mkdocs-material<10"
+          mkdocs build -d docs-site/_build/docs
 
       - uses: actions/configure-pages@v5
 
