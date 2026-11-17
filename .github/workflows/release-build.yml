@@ -98,7 +98,7 @@ jobs:
         run: gh release upload "${{ inputs.tag }}" "Analys3R-${{ inputs.tag }}.zip" --clobber
 
   build-macos:
-    runs-on: macos-14 # Apple Silicon
+    runs-on: macos-15 # Apple Silicon
     steps:
       - uses: actions/checkout@v4
         with:
